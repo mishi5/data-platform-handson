@@ -1,0 +1,40 @@
+terraform {
+  required_version = ">= 1.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+  }
+
+  # 後でS3バックエンドに切り替え予定(今はローカル)
+}
+
+provider "aws" {
+  region = var.aws_region
+
+  default_tags {
+    tags = {
+      Project   = "data-platform-handson"
+      ManagedBy = "terraform"
+    }
+  }
+}
+
+# S3モジュール
+module "s3" {
+  source = "./modules/s3"
+}
+
+# IAMモジュール
+module "iam" {
+  source = "./modules/iam"
+
+  raw_logs_bucket_arn       = module.s3.raw_logs_bucket_arn
+  processed_logs_bucket_arn = module.s3.processed_logs_bucket_arn
+}
