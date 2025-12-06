@@ -38,3 +38,19 @@ module "iam" {
   raw_logs_bucket_arn       = module.s3.raw_logs_bucket_arn
   processed_logs_bucket_arn = module.s3.processed_logs_bucket_arn
 }
+
+# ECRモジュール
+module "ecr" {
+  source = "./modules/ecr"
+}
+
+# Lambda関数モジュール (最初はコメントアウト)
+module "lambda" {
+  source = "./modules/lambda"
+
+  lambda_role_arn              = module.iam.lambda_role_arn
+  image_uri                    = "${module.ecr.repository_url}:latest"
+  raw_logs_bucket_name         = module.s3.raw_logs_bucket_name
+  raw_logs_bucket_arn          = module.s3.raw_logs_bucket_arn
+  processed_logs_bucket_name   = module.s3.processed_logs_bucket_name
+}

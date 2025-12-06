@@ -50,6 +50,10 @@ resource "aws_s3_bucket_lifecycle_configuration" "raw_logs" {
     id     = "delete-old-logs"
     status = "Enabled"
 
+    filter {
+      prefix = ""
+    }
+
     expiration {
       days = 30
     }
