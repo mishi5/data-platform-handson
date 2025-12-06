@@ -48,9 +48,9 @@ module "ecr" {
 module "lambda" {
   source = "./modules/lambda"
 
-  lambda_role_arn              = module.iam.lambda_role_arn
-  image_uri                    = "${module.ecr.repository_url}:latest"
-  raw_logs_bucket_name         = module.s3.raw_logs_bucket_name
-  raw_logs_bucket_arn          = module.s3.raw_logs_bucket_arn
-  processed_logs_bucket_name   = module.s3.processed_logs_bucket_name
+  lambda_role_arn            = module.iam.lambda_role_arn
+  image_uri                  = "${module.ecr.repository_url}:latest"
+  raw_logs_bucket_name       = module.s3.raw_logs_bucket_name
+  raw_logs_bucket_arn        = module.s3.raw_logs_bucket_arn
+  processed_logs_bucket_name = module.s3.processed_logs_bucket_name
 }
