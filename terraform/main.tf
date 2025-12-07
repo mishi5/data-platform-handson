@@ -14,7 +14,7 @@ terraform {
 
   # S3バックエンド設定
   backend "s3" {
-    bucket         = "terraform-state-data-platform-handson-344085827455"  # 自分のアカウントIDに変更
+    bucket         = "terraform-state-data-platform-handson-344085827455" # 自分のアカウントIDに変更
     key            = "terraform.tfstate"
     region         = "ap-northeast-1"
     encrypt        = true
