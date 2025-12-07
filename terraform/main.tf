@@ -12,7 +12,14 @@ terraform {
     }
   }
 
-  # 後でS3バックエンドに切り替え予定(今はローカル)
+  # S3バックエンド設定
+  backend "s3" {
+    bucket         = "terraform-state-data-platform-handson-344085827455"  # 自分のアカウントIDに変更
+    key            = "terraform.tfstate"
+    region         = "ap-northeast-1"
+    encrypt        = true
+    dynamodb_table = "terraform-state-lock"
+  }
 }
 
 provider "aws" {
