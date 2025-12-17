@@ -24,7 +24,7 @@ terraform {
   # Terraform Cloud設定
   cloud {
     organization = "mishi5"
-    
+
     workspaces {
       name = "data-platform-handson"
     }
