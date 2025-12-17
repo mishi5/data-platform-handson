@@ -12,13 +12,22 @@ terraform {
     }
   }
 
-  # S3バックエンド設定
-  backend "s3" {
-    bucket         = "terraform-state-data-platform-handson-344085827455" # 自分のアカウントIDに変更
-    key            = "terraform.tfstate"
-    region         = "ap-northeast-1"
-    encrypt        = true
-    dynamodb_table = "terraform-state-lock"
+  # S3バックエンド（コメントアウト）
+  # backend "s3" {
+  #   bucket         = "terraform-state-data-platform-handson-344085827455"
+  #   key            = "terraform.tfstate"
+  #   region         = "ap-northeast-1"
+  #   encrypt        = true
+  #   dynamodb_table = "terraform-state-lock"
+  # }
+
+  # Terraform Cloud設定
+  cloud {
+    organization = "mishi5"
+    
+    workspaces {
+      name = "data-platform-handson"
+    }
   }
 }
 
