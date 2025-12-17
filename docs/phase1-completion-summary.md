@@ -114,3 +114,38 @@ Phase 1を通じて、以下のスキルを習得:
 **所要時間:** 約6時間（想定4時間 + トラブルシューティング2時間）
 
 **達成日:** 2025年12月17日
+
+## Phase 1完了後のクリーンアップ
+
+### 学習過程で作成した不要なリソース
+
+Phase 1の学習では、以下の一時的なリソースを作成しました:
+
+**削除済み:**
+- ✅ S3バケット: `terraform-state-data-platform-handson-xxx`
+- ✅ DynamoDBテーブル: `terraform-state-lock`
+
+**Terraform管理下（残存）:**
+- S3: `log-analysis-raw-xxx`, `log-analysis-processed-xxx`
+- Lambda: `log-processor`
+- ECR: `log-processor`
+- IAM: `log-processor-lambda-role`
+
+### 現在のリソース状況
+```bash
+# 確認コマンド
+aws s3 ls
+aws dynamodb list-tables
+aws lambda list-functions --query 'Functions[].FunctionName'
+aws ecr describe-repositories --query 'repositories[].repositoryName'
+```
+
+### すべて削除する場合
+
+Phase 1の学習を完全に終了し、すべてのリソースを削除する場合:
+```bash
+cd ~/dev/data-platform-handson/terraform
+terraform destroy
+```
+
+**月額コスト: $0**（すべて削除後）
