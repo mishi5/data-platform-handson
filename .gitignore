@@ -30,3 +30,7 @@ venv/
 
 # Logs
 *.log
+
+# Generated sample logs and results
+sample-data/*.log
+sample-data/*_summary.json

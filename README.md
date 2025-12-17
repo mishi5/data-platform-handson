@@ -14,3 +14,5 @@ AWSを使ったデータ分析基盤構築のハンズオン
 - CI/CDパイプライン構築
 - ログ分析基盤構築
 - 
+## CI/CD with Terraform Cloud
+This project uses Terraform Cloud for state management and GitHub Actions for automated deployments.
