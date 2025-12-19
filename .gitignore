@@ -34,3 +34,4 @@ venv/
 # Generated sample logs and results
 sample-data/*.log
 sample-data/*_summary.json
+sample-data/*.parquet
