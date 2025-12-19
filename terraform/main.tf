@@ -70,3 +70,11 @@ module "lambda" {
   raw_logs_bucket_arn        = module.s3.raw_logs_bucket_arn
   processed_logs_bucket_name = module.s3.processed_logs_bucket_name
 }
+
+# Glueモジュール
+module "glue" {
+  source = "./modules/glue"
+
+  processed_logs_bucket_name = module.s3.processed_logs_bucket_name
+  processed_logs_bucket_arn  = module.s3.processed_logs_bucket_arn
+}

@@ -22,3 +22,18 @@ output "lambda_function_name" {
   description = "Lambda関数名"
   value       = module.lambda.function_name
 }
+
+output "glue_database_name" {
+  description = "Glue Database名"
+  value       = module.glue.database_name
+}
+
+output "access_crawler_name" {
+  description = "Access Logs Crawler名"
+  value       = module.glue.access_crawler_name
+}
+
+output "app_crawler_name" {
+  description = "App Logs Crawler名"
+  value       = module.glue.app_crawler_name
+}
