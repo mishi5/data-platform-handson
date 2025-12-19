@@ -78,3 +78,42 @@ resource "aws_s3_bucket_public_access_block" "processed_logs" {
   ignore_public_acls      = true
   restrict_public_buckets = true
 }
+
+# Athenaクエリ結果保存用バケット
+resource "aws_s3_bucket" "athena_results" {
+  bucket = "log-analysis-athena-results-${random_id.bucket_suffix.hex}"
+
+  tags = {
+    Name        = "Athena Query Results"
+    Environment = "handson"
+    Purpose     = "athena-results"
+  }
+}
+
+# パブリックアクセスブロック
+resource "aws_s3_bucket_public_access_block" "athena_results" {
+  bucket = aws_s3_bucket.athena_results.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# ライフサイクルルール（クエリ結果は30日後に削除）
+resource "aws_s3_bucket_lifecycle_configuration" "athena_results" {
+  bucket = aws_s3_bucket.athena_results.id
+
+  rule {
+    id     = "delete-old-results"
+    status = "Enabled"
+
+    filter {
+      prefix = ""
+    }
+
+    expiration {
+      days = 30
+    }
+  }
+}

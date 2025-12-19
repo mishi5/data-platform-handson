@@ -78,3 +78,11 @@ module "glue" {
   processed_logs_bucket_name = module.s3.processed_logs_bucket_name
   processed_logs_bucket_arn  = module.s3.processed_logs_bucket_arn
 }
+
+# Athenaモジュール
+module "athena" {
+  source = "./modules/athena"
+
+  athena_results_bucket_name = module.s3.athena_results_bucket_name
+  glue_database_name         = module.glue.database_name
+}

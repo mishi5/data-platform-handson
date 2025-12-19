@@ -37,3 +37,13 @@ output "app_crawler_name" {
   description = "App Logs Crawler名"
   value       = module.glue.app_crawler_name
 }
+
+output "athena_workgroup_name" {
+  description = "Athena Workgroup名"
+  value       = module.athena.workgroup_name
+}
+
+output "athena_results_bucket_name" {
+  description = "Athenaクエリ結果バケット名"
+  value       = module.s3.athena_results_bucket_name
+}
