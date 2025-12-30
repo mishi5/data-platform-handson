@@ -32,6 +32,20 @@ venv/
 *.log
 
 # Generated sample logs and results
-sample-data/*.log
-sample-data/*_summary.json
-sample-data/*.parquet
+*.log
+*_summary.json
+*.parquet
+
+# dbt関連
+dbt_logs_analysis/target/
+dbt_logs_analysis/dbt_packages/
+dbt_logs_analysis/logs/
+
+
+# BigQuery関連
+bigquery-data/
+scripts/
+
+# GCP認証キー（重要！） サービスアカウントキー（~/.dbt/bigquery-key.json）は別ディレクトリにあるため問題ないが念の為。
+*.json
+!dbt_logs_analysis/dbt_project.yml
