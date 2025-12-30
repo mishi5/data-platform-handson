@@ -1,0 +1,49 @@
+version: 2
+
+models:
+  - name: stg_access_logs
+    description: "クレンジング済みのWebアクセスログ"
+    columns:
+      - name: request_timestamp
+        description: "リクエストのタイムスタンプ"
+        tests:
+          - not_null
+      
+      - name: client_ip
+        description: "クライアントIPアドレス"
+        tests:
+          - not_null
+      
+      - name: status_code
+        description: "HTTPステータスコード"
+        tests:
+          - not_null
+          - accepted_values:
+              values: [200, 201, 204, 301, 302, 304, 400, 401, 403, 404, 500, 502, 503]
+              quote: false  # ← これを追加
+      
+      - name: status_category
+        description: "ステータスカテゴリ"
+        tests:
+          - accepted_values:
+              values: ['success', 'redirect', 'client_error', 'server_error', 'unknown']
+      
+      - name: response_time_sec
+        description: "レスポンスタイム（秒）"
+        tests:
+          - not_null
+
+  - name: stg_app_logs
+    description: "クレンジング済みのアプリケーションログ"
+    columns:
+      - name: event_timestamp
+        description: "イベント発生時刻"
+        tests:
+          - not_null
+      
+      - name: log_level
+        description: "ログレベル"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['INFO', 'WARNING', 'ERROR']

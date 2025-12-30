@@ -1,0 +1,29 @@
+version: 2
+
+sources:
+  - name: raw
+    description: "Raw log data from Glue Crawler"
+    database: data-platform-handson-1223  # プロジェクトID
+    schema: logs_database                  # データセット名
+    tables:
+      - name: access
+        description: "Web access logs (Nginx format)"
+        columns:
+          - name: timestamp
+            description: "Request timestamp"
+          - name: ip
+            description: "Client IP address"
+          - name: status
+            description: "HTTP status code"
+          - name: response_time
+            description: "Response time in seconds"
+      
+      - name: app
+        description: "Application logs (JSON format)"
+        columns:
+          - name: timestamp
+            description: "Event timestamp"
+          - name: level
+            description: "Log level (INFO, WARNING, ERROR)"
+          - name: action
+            description: "User action"
