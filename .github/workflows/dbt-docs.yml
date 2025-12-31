@@ -60,12 +60,15 @@ jobs:
       - name: Generate dbt docs
         run: |
           cd dbt_logs_analysis
-          dbt docs generate --no-compile
+          dbt docs generate
       
       - name: Copy docs to deployment directory
         run: |
           mkdir -p gh-pages
-          cp -r dbt_logs_analysis/target/* gh-pages/
+          cp dbt_logs_analysis/target/index.html gh-pages/
+          cp dbt_logs_analysis/target/manifest.json gh-pages/
+          cp dbt_logs_analysis/target/catalog.json gh-pages/
+          cp dbt_logs_analysis/target/graph.gpickle gh-pages/ || true
       
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
