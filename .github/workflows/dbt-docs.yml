@@ -1,0 +1,75 @@
+name: Generate and Deploy dbt Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dbt_logs_analysis/**'
+      - '.github/workflows/dbt-docs.yml'
+
+jobs:
+  generate-docs:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dbt-bigquery
+        run: |
+          pip install dbt-bigquery==1.11.0
+      
+      - name: Create service account key file
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          echo "$GCP_SA_KEY" > /tmp/bigquery-key.json
+      
+      - name: Create dbt profiles directory
+        run: |
+          mkdir -p ~/.dbt
+      
+      - name: Create profiles.yml
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          cat > ~/.dbt/profiles.yml << EOF
+          dbt_logs_analysis:
+            outputs:
+              dev:
+                type: bigquery
+                method: service-account
+                project: ${GCP_PROJECT_ID}
+                dataset: logs_database
+                threads: 4
+                keyfile: /tmp/bigquery-key.json
+                location: asia-northeast1
+            target: dev
+          EOF
+      
+      - name: Install dbt dependencies (if any)
+        run: |
+          cd dbt_logs_analysis
+          dbt deps || true
+      
+      - name: Generate dbt docs
+        run: |
+          cd dbt_logs_analysis
+          dbt docs generate --no-compile
+      
+      - name: Copy docs to deployment directory
+        run: |
+          mkdir -p gh-pages
+          cp -r dbt_logs_analysis/target/* gh-pages/
+      
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./gh-pages
+          publish_branch: gh-pages
