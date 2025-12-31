@@ -1,5 +1,5 @@
 -- Staging: Access Logs
--- BigQuery版（TIMESTAMPパーティション対応）
+-- BigQuery版（Macro使用）
 
 with source as (
     select * from {{ source('raw', 'access') }}
@@ -23,14 +23,8 @@ cleaned as (
         -- ステータスコード
         status as status_code,
         
-        -- ステータスカテゴリ
-        case
-            when status between 200 and 299 then 'success'
-            when status between 300 and 399 then 'redirect'
-            when status between 400 and 499 then 'client_error'
-            when status between 500 and 599 then 'server_error'
-            else 'unknown'
-        end as status_category,
+        -- ステータスカテゴリ（Macroを使用）
+        {{ error_category('status') }} as status_category,
         
         -- レスポンスサイズ（KB）
         cast(size as float64) / 1024 as response_size_kb,
