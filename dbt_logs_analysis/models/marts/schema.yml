@@ -2,7 +2,7 @@ version: 2
 
 models:
   - name: mart_url_performance
-    description: "URL別パフォーマンス分析テーブル"
+    description: "URL別パフォーマンス分析テーブル（自動デプロイテスト）"
     columns:
       - name: url_path
         description: "URLパス"
