@@ -1,38 +1,38 @@
 -- Staging: Access Logs
 -- BigQuery版（Macro使用）
 
-with source as (
-    select * from {{ source('raw', 'access') }}
+WITH source AS (
+    SELECT * FROM {{ source('raw', 'access') }}
 ),
 
-cleaned as (
-    select
+cleaned AS (
+    SELECT
         -- タイムスタンプ（既にTIMESTAMP型）
-        timestamp as request_timestamp,
-        
+        timestamp AS request_timestamp,
+
         -- IPアドレス
-        ip as client_ip,
-        
+        ip AS client_ip,
+
         -- HTTPメソッド
-        upper(method) as http_method,
-        
+        upper(method) AS http_method,
+
         -- URL（クエリパラメータを除く）
-        split(url, '?')[offset(0)] as url_path,
-        url as full_url,
-        
+        split(url, '?')[offset(0)] AS url_path,
+        url AS full_url,
+
         -- ステータスコード
-        status as status_code,
-        
+        status AS status_code,
+
         -- ステータスカテゴリ（Macroを使用）
-        {{ error_category('status') }} as status_category,
-        
+        {{ error_category('status') }} AS status_category,
+
         -- レスポンスサイズ（KB）
-        cast(size as float64) / 1024 as response_size_kb,
-        
+        cast(size AS float64) / 1024 AS response_size_kb,
+
         -- レスポンスタイム（秒）
-        response_time as response_time_sec
-        
-    from source
+        response_time AS response_time_sec
+
+    FROM source
 )
 
-select * from cleaned
+SELECT * FROM cleaned

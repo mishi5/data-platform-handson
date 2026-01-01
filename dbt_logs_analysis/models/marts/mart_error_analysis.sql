@@ -1,10 +1,10 @@
 -- エラー分析
 -- ビジネス用途: 障害対応、品質改善
 
-with app_errors as (
-    select
-        date(event_timestamp) as date,
-        extract(hour from event_timestamp) as hour,
+WITH app_errors AS (
+    SELECT
+        date(event_timestamp) AS date,
+        extract(HOUR FROM event_timestamp) AS hour,
         log_level,
         event_action,
         error_type,
@@ -12,57 +12,59 @@ with app_errors as (
         user_id,
         client_ip,
         endpoint
-    from {{ ref('stg_app_logs') }}
-    where log_level = 'ERROR'
+    FROM {{ ref('stg_app_logs') }}
+    WHERE log_level = 'ERROR'
 ),
 
-access_errors as (
-    select
-        date(request_timestamp) as date,
-        extract(hour from request_timestamp) as hour,
+access_errors AS (
+    SELECT
+        date(request_timestamp) AS date,
+        extract(HOUR FROM request_timestamp) AS hour,
         status_code,
         status_category,
         http_method,
         url_path,
         client_ip
-    from {{ ref('stg_access_logs') }}
-    where status_category in ('client_error', 'server_error')
+    FROM {{ ref('stg_access_logs') }}
+    WHERE status_category IN ('client_error', 'server_error')
 ),
 
-app_error_summary as (
-    select
+app_error_summary AS (
+    SELECT
         date,
         hour,
-        'app_error' as error_source,
-        error_type as error_detail,
-        count(*) as error_count,
-        count(distinct user_id) as affected_users,
-        count(distinct client_ip) as affected_ips
-    from app_errors
-    group by date, hour, error_type
+        'app_error' AS error_source,
+        error_type AS error_detail,
+        count(*) AS error_count,
+        count(DISTINCT user_id) AS affected_users,
+        count(DISTINCT client_ip) AS affected_ips
+    FROM app_errors
+    GROUP BY date, hour, error_type
 ),
 
-access_error_summary as (
-    select
+access_error_summary AS (
+    SELECT
         date,
         hour,
-        'http_error' as error_source,
-        concat('HTTP ', cast(status_code as string)) as error_detail,
-        count(*) as error_count,
-        0 as affected_users,
-        count(distinct client_ip) as affected_ips
-    from access_errors
-    group by date, hour, status_code
+        'http_error' AS error_source,
+        concat('HTTP ', cast(status_code AS string)) AS error_detail,
+        count(*) AS error_count,
+        0 AS affected_users,
+        count(DISTINCT client_ip) AS affected_ips
+    FROM access_errors
+    GROUP BY date, hour, status_code
 ),
 
-combined_errors as (
-    select * from app_error_summary
-    union all
-    select * from access_error_summary
+combined_errors AS (
+    SELECT * FROM app_error_summary
+    UNION ALL
+    SELECT * FROM access_error_summary
 )
 
-select
+SELECT
     *,
-    sum(error_count) over (partition by date order by hour) as cumulative_errors_today
-from combined_errors
-order by date desc, hour desc, error_count desc
+    sum(error_count)
+        OVER (PARTITION BY date ORDER BY hour)
+        AS cumulative_errors_today
+FROM combined_errors
+ORDER BY date DESC, hour DESC, error_count DESC
