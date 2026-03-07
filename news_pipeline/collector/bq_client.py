@@ -1,4 +1,7 @@
+import logging
 from google.cloud import bigquery
+
+logger = logging.getLogger(__name__)
 
 DATASET = "tech_news"
 
@@ -18,10 +21,12 @@ class BQClient:
         table_id = f"{self.project}.{DATASET}.raw_articles"
         errors = self.client.insert_rows_json(table_id, articles)
         if errors:
-            print(f"[bq_client] insert_raw_articles errors: {errors}")
+            logger.error("[bq_client] insert_raw_articles errors: %s", errors)
+            raise RuntimeError(f"BigQuery insert_raw_articles failed: {errors}")
 
     def insert_summaries(self, summaries: list[dict]) -> None:
         table_id = f"{self.project}.{DATASET}.summaries"
         errors = self.client.insert_rows_json(table_id, summaries)
         if errors:
-            print(f"[bq_client] insert_summaries errors: {errors}")
+            logger.error("[bq_client] insert_summaries errors: %s", errors)
+            raise RuntimeError(f"BigQuery insert_summaries failed: {errors}")
