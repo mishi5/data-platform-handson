@@ -5,7 +5,7 @@
 ## アーキテクチャ
 
 ```
-Cloud Scheduler（平日9時 JST）
+Cloud Scheduler（平日7:30 JST）
       │
       ▼
 Cloud Run Job (news-collector)

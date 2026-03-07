@@ -49,10 +49,10 @@ resource "google_cloud_run_v2_job" "news_collector" {
   }
 }
 
-# Cloud Scheduler（平日9時 JST = 0時 UTC）
+# Cloud Scheduler（平日7:30 JST = 22:30 UTC 前日）
 resource "google_cloud_scheduler_job" "news_pipeline_trigger" {
   name      = "news-pipeline-daily"
-  schedule  = "0 0 * * 1-5"
+  schedule  = "30 22 * * 0-4"
   time_zone = "UTC"
   region    = var.region
 
