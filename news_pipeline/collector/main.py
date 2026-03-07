@@ -60,11 +60,15 @@ def run_pipeline():
     # 6. 要約生成
     summaries = []
     for article in relevant:
-        result = summarize_article(
-            title=article["title"],
-            content=article["content"] or "",
-            api_key=ANTHROPIC_API_KEY,
-        )
+        try:
+            result = summarize_article(
+                title=article["title"],
+                content=article["content"] or "",
+                api_key=ANTHROPIC_API_KEY,
+            )
+        except Exception as e:
+            logger.warning("[pipeline] summarize failed for %s: %s", article["url"], e)
+            continue
         if result:
             summaries.append({
                 "article_id": article["article_id"],
@@ -81,9 +85,10 @@ def run_pipeline():
 
     # 8. 通知（importance_score 降順で最大5件）
     top_articles = sorted(summaries, key=lambda x: x.get("importance_score", 0), reverse=True)
-    send_slack_notification(top_articles, webhook_url=SLACK_WEBHOOK_URL)
+    top5 = top_articles[:5]
+    send_slack_notification(top5, webhook_url=SLACK_WEBHOOK_URL)
 
-    return jsonify({"status": "ok", "notified": len(top_articles[:5])})
+    return jsonify({"status": "ok", "notified": len(top5)})
 
 
 if __name__ == "__main__":
