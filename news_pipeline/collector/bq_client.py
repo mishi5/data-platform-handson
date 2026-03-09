@@ -12,8 +12,11 @@ class BQClient:
         self.project = project
 
     def get_existing_urls(self) -> set[str]:
-        """raw_articles に保存済みの URL セットを返す（dedup 用）。"""
-        query = f"SELECT url FROM `{self.project}.{DATASET}.raw_articles`"
+        """summaries に保存済みの URL セットを返す（dedup 用）。
+        summaries = 要約まで正常完了したもののみ。
+        raw_articles にあっても summaries にないものは再処理対象とする。
+        """
+        query = f"SELECT url FROM `{self.project}.{DATASET}.summaries`"
         rows = self.client.query(query).result()
         return {row.url for row in rows}
 

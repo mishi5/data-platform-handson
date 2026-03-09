@@ -12,41 +12,66 @@ provider "google" {
   region  = var.region
 }
 
-# Cloud Run Job
-resource "google_cloud_run_v2_job" "news_collector" {
-  name     = "news-collector"
-  location = var.region
+# Cloud Run Service
+resource "google_cloud_run_v2_service" "news_collector" {
+  name                = "news-collector"
+  location            = var.region
+  ingress             = "INGRESS_TRAFFIC_ALL"
+  deletion_protection = false
 
   template {
-    template {
-      containers {
-        image = "gcr.io/${var.project_id}/news-collector:latest"
+    containers {
+      image = "asia-northeast1-docker.pkg.dev/${var.project_id}/news-collector/news-collector:latest"
 
-        env {
-          name  = "GCP_PROJECT_ID"
-          value = var.project_id
-        }
-        env {
-          name = "ANTHROPIC_API_KEY"
-          value_source {
-            secret_key_ref {
-              secret  = "anthropic-api-key"
-              version = "latest"
-            }
-          }
-        }
-        env {
-          name = "SLACK_WEBHOOK_URL"
-          value_source {
-            secret_key_ref {
-              secret  = "slack-webhook-url"
-              version = "latest"
-            }
+      env {
+        name  = "GCP_PROJECT_ID"
+        value = var.project_id
+      }
+      env {
+        name  = "MAX_ARTICLES"
+        value = "20"
+      }
+      env {
+        name = "ANTHROPIC_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = "anthropic-api-key"
+            version = "latest"
           }
         }
       }
+      env {
+        name = "SLACK_WEBHOOK_URL"
+        value_source {
+          secret_key_ref {
+            secret  = "slack-webhook-url"
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name = "SLACK_SIGNING_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = "slack-signing-secret"
+            version = "latest"
+          }
+        }
+      }
+
+      resources {
+        cpu_idle = false
+      }
     }
   }
+}
+
+# Slack からのリクエストを受け付けるため未認証アクセスを許可
+resource "google_cloud_run_service_iam_member" "allow_unauthenticated" {
+  location = var.region
+  service  = google_cloud_run_v2_service.news_collector.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
 }
 
 # Cloud Scheduler（平日7:30 JST = 22:30 UTC 前日）
@@ -58,9 +83,9 @@ resource "google_cloud_scheduler_job" "news_pipeline_trigger" {
 
   http_target {
     http_method = "POST"
-    uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project_id}/jobs/news-collector:run"
+    uri         = "${google_cloud_run_v2_service.news_collector.uri}/"
 
-    oauth_token {
+    oidc_token {
       service_account_email = google_service_account.scheduler.email
     }
   }
@@ -75,4 +100,15 @@ resource "google_project_iam_member" "scheduler_run_invoker" {
   project = var.project_id
   role    = "roles/run.invoker"
   member  = "serviceAccount:${google_service_account.scheduler.email}"
+}
+
+# Cloud Run のデフォルトSAに Secret Manager アクセス権を付与
+resource "google_project_iam_member" "cloudrun_secret_accessor" {
+  project = var.project_id
+  role    = "roles/secretmanager.secretAccessor"
+  member  = "serviceAccount:${data.google_compute_default_service_account.default.email}"
+}
+
+data "google_compute_default_service_account" "default" {
+  project = var.project_id
 }

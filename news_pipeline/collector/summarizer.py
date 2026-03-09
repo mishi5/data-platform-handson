@@ -8,7 +8,7 @@ SYSTEM_PROMPT = """あなたはデータエンジニアリングの技術ニュ�
 記事を読んで以下の JSON 形式で回答してください。
 
 {
-  "summary": "箇条書きで3〜5項目の技術ポイント（日本語）",
+  "summary": "箇条書きで3〜5項目の技術ポイント（日本語・文字列・改行区切り）",
   "tags": ["タグ1", "タグ2"],
   "importance_score": 0.0〜1.0 (BigQuery/GCP関連なら高め)
 }
@@ -31,7 +31,18 @@ def summarize_article(title: str, content: str, api_key: str) -> dict | None:
                 }
             ],
         )
-        return json.loads(message.content[0].text)
+        text = message.content[0].text.strip()
+        # マークダウンコードブロックを除去（```json ... ``` や ``` ... ```）
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+        result = json.loads(text)
+        # summary がリストで返された場合は文字列に変換（BQ の STRING 型に合わせる）
+        if isinstance(result.get("summary"), list):
+            result["summary"] = "\n".join(result["summary"])
+        return result
     except Exception as e:
         logger.error("[summarizer] failed: %s", e)
         return None

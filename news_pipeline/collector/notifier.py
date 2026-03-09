@@ -9,10 +9,9 @@ MAX_ARTICLES = 5
 def _format_message(articles: list[dict]) -> str:
     lines = ["*本日のデータエンジニアリング技術ニュース*\n"]
     for i, a in enumerate(articles[:MAX_ARTICLES], 1):
-        lines.append(f"*{i}. {a['title']}*")
-        lines.append(f"出典: {a['source']}")
+        lines.append(f"*{i}. <{a['url']}|{a['title']}>*")
         lines.append(a.get("summary", ""))
-        lines.append(f"<{a['url']}|記事を読む>\n")
+        lines.append(f"_出典: {a['source']}_\n")
     return "\n".join(lines)
 
 
@@ -23,6 +22,11 @@ def send_slack_notification(articles: list[dict], webhook_url: str) -> None:
         return
 
     text = _format_message(articles)
-    resp = requests.post(webhook_url, json={"text": text})
-    if resp.status_code != 200:
-        logger.error("[notifier] slack error: %s %s", resp.status_code, resp.text)
+    try:
+        resp = requests.post(webhook_url, json={"text": text}, timeout=10)
+        if resp.status_code != 200:
+            logger.error("[notifier] slack error: %s %s", resp.status_code, resp.text)
+        else:
+            logger.info("[notifier] sent %d articles to slack", len(articles[:MAX_ARTICLES]))
+    except Exception as e:
+        logger.error("[notifier] failed to post to slack: %s", e)
