@@ -1,3 +1,4 @@
+"""BigQuery への読み書きを担当するモジュール。データセット: tech_news。"""
 import logging
 from google.cloud import bigquery
 
@@ -8,6 +9,7 @@ DATASET = "tech_news"
 
 class BQClient:
     def __init__(self, project: str):
+        """BigQuery クライアントを初期化する。"""
         self.client = bigquery.Client(project=project)
         self.project = project
 
@@ -21,6 +23,7 @@ class BQClient:
         return {row.url for row in rows}
 
     def insert_raw_articles(self, articles: list[dict]) -> None:
+        """記事メタデータと本文を raw_articles テーブルに挿入する。"""
         table_id = f"{self.project}.{DATASET}.raw_articles"
         errors = self.client.insert_rows_json(table_id, articles)
         if errors:
@@ -28,6 +31,7 @@ class BQClient:
             raise RuntimeError(f"BigQuery insert_raw_articles failed: {errors}")
 
     def insert_summaries(self, summaries: list[dict]) -> None:
+        """Claude 生成サマリーを summaries テーブルに挿入する。"""
         table_id = f"{self.project}.{DATASET}.summaries"
         errors = self.client.insert_rows_json(table_id, summaries)
         if errors:

@@ -1,6 +1,8 @@
+"""Claude API を使って記事を要約するモジュール。JSON 形式（summary/tags/importance_score）で返す。"""
 import json
 import logging
 import anthropic
+from anthropic.types import TextBlock
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,10 @@ def summarize_article(title: str, content: str, api_key: str) -> dict | None:
                 }
             ],
         )
-        text = message.content[0].text.strip()
+        block = message.content[0]
+        if not isinstance(block, TextBlock):
+            return None
+        text = block.text.strip()
         # マークダウンコードブロックを除去（```json ... ``` や ``` ... ```）
         if text.startswith("```"):
             text = text.split("```")[1]

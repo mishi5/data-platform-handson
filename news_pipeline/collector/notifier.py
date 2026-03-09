@@ -1,3 +1,4 @@
+"""Slack Incoming Webhook でニュースサマリーを通知するモジュール。"""
 import logging
 import requests
 
@@ -7,6 +8,7 @@ MAX_ARTICLES = 5
 
 
 def _format_message(articles: list[dict]) -> str:
+    """記事リストを Slack 投稿用のテキストにフォーマットする。"""
     lines = ["*本日のデータエンジニアリング技術ニュース*\n"]
     for i, a in enumerate(articles[:MAX_ARTICLES], 1):
         lines.append(f"*{i}. <{a['url']}|{a['title']}>*")

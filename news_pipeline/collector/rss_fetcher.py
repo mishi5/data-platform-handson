@@ -1,3 +1,4 @@
+"""RSS フィードから記事メタデータを取得するモジュール。"""
 import hashlib
 import feedparser
 from datetime import datetime, timezone
@@ -14,6 +15,7 @@ FEEDS = {
 
 
 def _parse_published(entry) -> str | None:
+    """RSS エントリの published フィールドを ISO 8601 文字列に変換する。パース失敗時は None。"""
     if hasattr(entry, "published"):
         try:
             dt = parsedate_to_datetime(entry.published)
@@ -24,10 +26,11 @@ def _parse_published(entry) -> str | None:
 
 
 def _make_article_id(url: str) -> str:
+    """URL の SHA-256 ハッシュ先頭16文字を記事 ID として返す。"""
     return hashlib.sha256(url.encode()).hexdigest()[:16]
 
 
-def fetch_articles(feeds: dict[str, str] = None) -> list[dict]:
+def fetch_articles(feeds: dict[str, str] | None = None) -> list[dict]:
     """RSSフィードから記事リストを返す。"""
     if feeds is None:
         feeds = FEEDS
@@ -39,10 +42,11 @@ def fetch_articles(feeds: dict[str, str] = None) -> list[dict]:
             for entry in feed.entries:
                 if not hasattr(entry, "link"):
                     continue
+                url = str(entry.link)
                 results.append({
-                    "article_id": _make_article_id(entry.link),
+                    "article_id": _make_article_id(url),
                     "title": getattr(entry, "title", ""),
-                    "url": entry.link,
+                    "url": url,
                     "source": source_name,
                     "published_at": _parse_published(entry),
                     "collected_at": datetime.now(timezone.utc).isoformat(),
