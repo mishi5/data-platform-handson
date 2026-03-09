@@ -1,0 +1,70 @@
+version: 2
+
+exposures:
+  - name: url_performance_dashboard
+    type: dashboard
+    maturity: high
+    url: https://lookerstudio.google.com/reporting/create  # 仮のURL
+    description: |
+      URL別パフォーマンス監視ダッシュボード
+      
+      **目的:**
+      - レスポンスタイムの監視
+      - エラー率のトラッキング
+      - ボトルネックURLの特定
+      
+      **更新頻度:** 毎日1回（日次バッチ）
+      
+      **利用者:**
+      - SREチーム: パフォーマンス監視
+      - プロダクトチーム: ユーザー体験改善
+    
+    depends_on:
+      - ref('mart_url_performance_incremental')
+    
+    owner:
+      name: Data Engineering Team
+      email: data-eng@example.com
+
+  - name: error_monitoring_alert
+    type: application
+    maturity: medium
+    url: https://example.com/monitoring
+    description: |
+      エラー監視アラートシステム
+      
+      **機能:**
+      - エラー率が5%を超えたらSlack通知
+      - 特定エラータイプの集中検知
+      - 時間帯別エラートレンド分析
+      
+      **SLA:** エラー検知から5分以内に通知
+    
+    depends_on:
+      - ref('mart_error_analysis')
+    
+    owner:
+      name: SRE Team
+      email: sre@example.com
+
+  - name: weekly_performance_report
+    type: notebook
+    maturity: high
+    url: https://colab.research.google.com/  # 仮のURL
+    description: |
+      週次パフォーマンスレポート（Jupyter Notebook）
+      
+      **内容:**
+      - URL別パフォーマンストレンド分析
+      - 前週比較
+      - 改善推奨事項の自動生成
+      
+      **配信先:** 経営層、エンジニアリング責任者
+    
+    depends_on:
+      - ref('mart_url_performance_incremental')
+      - ref('mart_url_performance_v2')
+    
+    owner:
+      name: Data Analytics Team
+      email: analytics@example.com
