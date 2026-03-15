@@ -49,3 +49,15 @@ scripts/
 # GCP認証キー（重要！） サービスアカウントキー（~/.dbt/bigquery-key.json）は別ディレクトリにあるため問題ないが念の為。
 *.json
 !dbt_logs_analysis/dbt_project.yml
+
+# .serena configuration
+.serena/*
+
+# Allow only core configuration and guidelines
+!.serena/project.yml
+!.serena/*.md
+
+# Ignore transient data and logs
+.serena/memories/
+.serena/logs/
+.serena/db/
