@@ -35,16 +35,13 @@ PROJECT_ID = os.environ["GCP_PROJECT_ID"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
-# Slack 通知件数上限（未設定 = 5件）
+# MAX_NOTIFY: importance_scoreフィルタ後に実際に通知する件数の上限（未設定 = 5件）
 MAX_NOTIFY = int(os.environ.get("MAX_NOTIFY", 5))
+# IMPORTANCE_THRESHOLD: このスコア以上の記事のみ summaries に保存・通知対象とする
+IMPORTANCE_THRESHOLD = float(os.environ.get("IMPORTANCE_THRESHOLD", 0.5))
 
-_DEFAULT_MAX_ARTICLES = 10
-
-
-def _is_relevant(title: str, content: str, keywords: list[str]) -> bool:
-    """タイトルと本文にキーワードが含まれるか判定する。"""
-    text = (title + " " + (content or "")).lower()
-    return any(kw in text for kw in keywords)
+# max_summarize: 1実行で要約する記事の最大件数（Google Sheetsのsettingsシートから取得）
+_DEFAULT_MAX_SUMMARIZE = 10
 
 
 def _verify_slack_signature(req) -> bool:
@@ -69,8 +66,7 @@ def _run_pipeline() -> int:
     """パイプライン実行。通知件数を返す。"""
     config = load_config()
     feeds: dict[str, str] = config.get("feeds", {})
-    keywords: list[str] = config.get("keywords", [])
-    max_articles: int = config.get("max_articles", _DEFAULT_MAX_ARTICLES)
+    max_summarize: int = config.get("max_summarize", _DEFAULT_MAX_SUMMARIZE)
 
     bq = BQClient(project=PROJECT_ID)
 
@@ -78,67 +74,83 @@ def _run_pipeline() -> int:
     articles = fetch_articles(feeds)
     logger.info("[pipeline] fetched %d articles from RSS", len(articles))
 
-    # 2. dedup
+    # 2. dedup（raw_articlesベース）
     existing_urls = bq.get_existing_urls()
     new_articles = [a for a in articles if a["url"] not in existing_urls]
     logger.info("[pipeline] %d new articles after dedup", len(new_articles))
 
-    if not new_articles:
-        logger.info("[pipeline] no new articles")
+    if new_articles:
+        # 3. 要約する件数を上限に絞る
+        new_articles = new_articles[:max_summarize]
+        logger.info("[pipeline] limited to %d articles (max_summarize)", max_summarize)
+
+        # 4. 本文取得
+        for article in new_articles:
+            article["content"] = fetch_content(article["url"])
+
+        # 5. raw_articles 保存
+        bq.insert_raw_articles(new_articles)
+        logger.info("[pipeline] saved %d to raw_articles", len(new_articles))
+
+        # 6. 要約生成（全新着記事）
+        summaries = []
+        for article in new_articles:
+            try:
+                result = summarize_article(
+                    title=article["title"],
+                    content=article["content"] or "",
+                    api_key=ANTHROPIC_API_KEY,
+                )
+            except Exception as e:
+                logger.warning("[pipeline] summarize failed for %s: %s", article["url"], e)
+                continue
+            if result:
+                summaries.append(
+                    {
+                        "article_id": article["article_id"],
+                        "title": article["title"],
+                        "url": article["url"],
+                        "source": article["source"],
+                        **result,
+                    }
+                )
+
+        # 7. importance_score によるフィルタリング
+        relevant_summaries = [
+            s for s in summaries if s.get("importance_score", 0) >= IMPORTANCE_THRESHOLD
+        ]
+        logger.info(
+            "[pipeline] %d relevant summaries (importance_score >= %.1f)",
+            len(relevant_summaries),
+            IMPORTANCE_THRESHOLD,
+        )
+
+        # 8. summaries 保存（関連あり記事のみ）
+        if relevant_summaries:
+            bq.insert_summaries(relevant_summaries)
+            logger.info("[pipeline] saved %d summaries", len(relevant_summaries))
+    else:
+        logger.info("[pipeline] no new articles, checking unnotified summaries")
+
+    # 9. 未通知サマリーを取得して通知（新着ありなしに関わらず実施）
+    unnotified = bq.get_unnotified_summaries()
+    logger.info("[pipeline] %d unnotified summaries in BQ", len(unnotified))
+
+    if not unnotified:
         send_no_news_notification(SLACK_WEBHOOK_URL, "新着記事はありませんでした。")
         return 0
 
-    new_articles = new_articles[:max_articles]
-    logger.info("[pipeline] limited to %d articles (max_articles)", max_articles)
-
-    # 3. 本文取得
-    for article in new_articles:
-        article["content"] = fetch_content(article["url"])
-
-    # 4. raw_articles 保存
-    bq.insert_raw_articles(new_articles)
-    logger.info("[pipeline] saved %d to raw_articles", len(new_articles))
-
-    # 5. フィルタリング
-    relevant = [a for a in new_articles if _is_relevant(a["title"], a["content"], keywords)]
-    logger.info("[pipeline] %d relevant articles after filtering", len(relevant))
-
-    # 6. 要約生成
-    summaries = []
-    for article in relevant:
-        try:
-            result = summarize_article(
-                title=article["title"],
-                content=article["content"] or "",
-                api_key=ANTHROPIC_API_KEY,
-            )
-        except Exception as e:
-            logger.warning("[pipeline] summarize failed for %s: %s", article["url"], e)
-            continue
-        if result:
-            summaries.append(
-                {
-                    "article_id": article["article_id"],
-                    "title": article["title"],
-                    "url": article["url"],
-                    "source": article["source"],
-                    **result,
-                }
-            )
-
-    # 7. summaries 保存
-    if summaries:
-        bq.insert_summaries(summaries)
-        logger.info("[pipeline] saved %d summaries", len(summaries))
-
-    # 8. 通知（importance_score 降順で最大 MAX_NOTIFY 件）
-    top = sorted(summaries, key=lambda x: x.get("importance_score", 0), reverse=True)[
+    # 10. importance_score 降順で最大 MAX_NOTIFY 件を通知
+    top = sorted(unnotified, key=lambda x: x.get("importance_score", 0), reverse=True)[
         :MAX_NOTIFY
     ]
-    if top:
-        send_slack_notification(top, webhook_url=SLACK_WEBHOOK_URL)
-    else:
-        send_no_news_notification(SLACK_WEBHOOK_URL, "新着記事はありましたが、関連記事はありませんでした。")
+    send_slack_notification(top, webhook_url=SLACK_WEBHOOK_URL)
+    logger.info("[pipeline] notified %d articles", len(top))
+
+    # 11. 通知済みマーク
+    notified_ids = [a["article_id"] for a in top]
+    bq.mark_summaries_notified(notified_ids)
+    logger.info("[pipeline] marked %d summaries as notified", len(notified_ids))
 
     return len(top)
 
