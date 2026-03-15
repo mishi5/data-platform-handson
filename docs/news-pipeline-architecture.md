@@ -120,6 +120,10 @@ erDiagram
         STRING summary
         ARRAY_STRING tags
         FLOAT64 importance_score
+    }
+
+    notification_log {
+        STRING article_id FK
         TIMESTAMP notified_at
     }
 
@@ -131,6 +135,7 @@ erDiagram
     }
 
     raw_articles ||--o{ summaries : "article_id"
+    summaries ||--o{ notification_log : "article_id"
     raw_articles ||--o{ article_chunks : "article_id (将来)"
 ```
 
@@ -148,8 +153,8 @@ erDiagram
 | LLM 要約（箇条書き 3〜5 項目） | `summarize_article()` / claude-haiku-4-5 | `collector/summarizer.py` |
 | importance_score フィルタ（閾値以上のみ保存） | `IMPORTANCE_THRESHOLD` 環境変数（デフォルト 0.5） | `collector/main.py` |
 | summaries 保存 | `insert_summaries()` | `collector/bq_client.py` |
-| 未通知サマリー取得 | `get_unnotified_summaries()` / notified_at IS NULL | `collector/bq_client.py` |
-| 通知済みマーク | `mark_summaries_notified()` / notified_at 更新 | `collector/bq_client.py` |
+| 未通知サマリー取得 | `get_unnotified_summaries()` / summaries LEFT JOIN notification_log | `collector/bq_client.py` |
+| 通知済みマーク | `mark_summaries_notified()` / notification_log へ INSERT | `collector/bq_client.py` |
 | 通知（平日 1 回・最大 MAX_NOTIFY 件） | `send_slack_notification()` + Scheduler | `collector/notifier.py` / `infra/main.tf` |
 | ネタ切れ時の通知 | `send_no_news_notification()` | `collector/notifier.py` |
 | 記事履歴を BigQuery に保存 | raw_articles / summaries テーブル | `infra/bigquery.tf` |
@@ -168,8 +173,9 @@ graph TD
         DS[dataset: tech_news]
         T1[table: raw_articles]
         T2[table: summaries]
-        T3[table: article_chunks]
-        DS --> T1 & T2 & T3
+        T3[table: notification_log]
+        T4[table: article_chunks]
+        DS --> T1 & T2 & T3 & T4
     end
 
     subgraph gcp["GCP (main.tf)"]

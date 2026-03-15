@@ -12,20 +12,26 @@ Cloud Run Service (news-collector)
       │  POST /          ← スケジューラからの定期実行
       │  POST /slack     ← Slack スラッシュコマンドからの手動実行
       ▼
-RSS Fetch → 本文取得 → BigQuery (raw_articles)
+RSS Fetch → dedup（raw_articles） → 本文取得 → raw_articles 保存
       │
       ▼
-フィルタリング → Claude 要約 → BigQuery (summaries)
+Claude 要約（全新着記事）→ importance_score フィルタ → summaries 保存
       │
       ▼
-Slack 通知（最大5件）
+未通知サマリー取得（notification_log で管理）
+      │
+      ├─ 1件以上 → Slack 通知（最大 MAX_NOTIFY 件）→ notification_log に記録
+      └─ 0件     → ネタ切れ通知
 ```
+
+設定（feeds / keywords / max_summarize）は **Google Sheets** で管理。デプロイ不要で変更可能。
 
 ## 前提条件
 
 - [gcloud CLI](https://cloud.google.com/sdk/docs/install) インストール済み
 - [Terraform](https://developer.hashicorp.com/terraform/install) インストール済み
 - [Docker](https://docs.docker.com/get-docker/) インストール済み
+- [Make](https://www.gnu.org/software/make/) インストール済み
 - GCP プロジェクト作成済み（BigQuery・Cloud Run・Cloud Scheduler が使えること）
 - [Anthropic API キー](https://console.anthropic.com/) 取得済み
 - Slack Incoming Webhook URL 取得済み
@@ -96,6 +102,7 @@ gcloud services enable \
   cloudscheduler.googleapis.com \
   secretmanager.googleapis.com \
   artifactregistry.googleapis.com \
+  sheets.googleapis.com \
   --project=$GCP_PROJECT_ID
 ```
 
@@ -108,20 +115,18 @@ gcloud artifacts repositories create news-collector \
   --project=$GCP_PROJECT_ID
 ```
 
-### 2. イメージをビルド＆プッシュ
+### 2. Google Sheets の設定
 
-> **Apple Silicon Mac の場合は `--platform linux/amd64` が必須。**
-> Cloud Run は x86_64 で動作するため、arm64 イメージはそのまま使えない。
+1. Google スプレッドシートを新規作成し、以下のシートを追加:
 
-```bash
-gcloud auth configure-docker asia-northeast1-docker.pkg.dev
+   | シート名 | 列構成 | 内容 |
+   |---------|-------|------|
+   | `feeds` | A: URL, B: ソース名 | RSS フィード一覧 |
+   | `keywords` | A: キーワード | importance_score 判定の基準語 |
+   | `settings` | A: キー, B: 値 | `max_summarize` などのパラメータ |
 
-docker build --platform linux/amd64 \
-  -t asia-northeast1-docker.pkg.dev/$GCP_PROJECT_ID/news-collector/news-collector:latest \
-  collector/
-
-docker push asia-northeast1-docker.pkg.dev/$GCP_PROJECT_ID/news-collector/news-collector:latest
-```
+2. URL から Spreadsheet ID を取得（`/d/<SHEET_ID>/` の部分）
+3. Cloud Run のデフォルト SA（`<PROJECT_NUMBER>-compute@developer.gserviceaccount.com`）に「閲覧者」として共有
 
 ### 3. Secret Manager に秘密情報を登録
 
@@ -154,22 +159,32 @@ terraform apply -var="project_id=$GCP_PROJECT_ID"
 Terraform が作成・管理するリソース:
 - Cloud Run Service（`/` と `/slack` エンドポイント）
 - Cloud Scheduler（平日7:30 JST に `POST /` を呼び出し）
-- BigQuery Dataset / Tables
+- BigQuery Dataset / Tables（`raw_articles`, `summaries`, `notification_log`, `article_chunks`）
+- Google Sheets API 有効化
 - IAM: Compute Engine デフォルト SA に `secretmanager.secretAccessor` 付与
 
-### 5. イメージ更新時の再デプロイ
+### 5. イメージをビルド＆デプロイ
 
-コードを変更した場合は、イメージを再ビルド・プッシュした後に以下を実行:
+> **Apple Silicon Mac の場合は `--platform linux/amd64` が必須。**
+> Cloud Run は x86_64 で動作するため、arm64 イメージはそのまま使えない。
 
 ```bash
-gcloud run services update news-collector \
-  --image=asia-northeast1-docker.pkg.dev/$GCP_PROJECT_ID/news-collector/news-collector:latest \
-  --region=asia-northeast1 \
-  --project=$GCP_PROJECT_ID
+gcloud auth configure-docker asia-northeast1-docker.pkg.dev
+
+# news_pipeline/ ディレクトリで実行
+make deploy   # build + push + gcloud run services update を一括実行
+```
+
+個別に実行したい場合:
+
+```bash
+make build    # docker build のみ
+make push     # docker push のみ
+make update   # gcloud run services update のみ（設定変更後の再起動など）
 ```
 
 > `terraform apply` では `latest` タグの中身が変わっても新リビジョンを作成しないため、
-> イメージ更新時は `gcloud run services update` を使う。
+> コード変更時は `make deploy` または `make update` を使う。
 
 ### 6. Slack スラッシュコマンドの設定
 
@@ -185,7 +200,7 @@ gcloud run services describe news-collector \
 **Slack App の設定:**
 
 1. [api.slack.com/apps](https://api.slack.com/apps) にアクセス
-2. アプリ名（例: `news_pipline`）をクリックしてアプリ詳細画面を開く
+2. アプリをクリックしてアプリ詳細画面を開く
 3. 左メニュー「Slash Commands」→「Create New Command」
    - Command: `/news-update`（任意）
    - Request URL: `https://<Cloud Run URL>/slack`
@@ -215,8 +230,9 @@ gcloud logging read \
 
 | テーブル | 用途 |
 |---------|------|
-| `tech_news.raw_articles` | 収集した記事の原文 |
-| `tech_news.summaries` | Claude 生成サマリー |
+| `tech_news.raw_articles` | 収集した記事の原文（dedup の基準） |
+| `tech_news.summaries` | Claude 生成サマリー（importance_score 閾値以上のみ） |
+| `tech_news.notification_log` | Slack 通知済み article_id の記録 |
 | `tech_news.article_chunks` | 将来の RAG 検索用（現在は空） |
 
 ## 環境変数
@@ -227,4 +243,14 @@ gcloud logging read \
 | `ANTHROPIC_API_KEY` | Claude API キー | `.env` | Secret Manager |
 | `SLACK_WEBHOOK_URL` | Slack Incoming Webhook URL | `.env` | Secret Manager |
 | `SLACK_SIGNING_SECRET` | Slack App の署名シークレット | `.env`（空でも可） | Secret Manager |
-| `MAX_ARTICLES` | 処理する記事数の上限 | `.env`（推奨: 5） | Terraform で `20` に設定 |
+| `SHEET_ID` | 設定スプレッドシートの ID | `.env` | Terraform で設定 |
+| `MAX_NOTIFY` | フィルタ後に通知する件数の上限 | `.env`（デフォルト: 5） | Terraform で設定 |
+| `IMPORTANCE_THRESHOLD` | 通知対象とする importance_score の閾値 | `.env`（デフォルト: 0.5） | Terraform で設定 |
+
+## Google Sheets で管理する設定
+
+| シート | 内容 | 変更反映 |
+|--------|------|---------|
+| `feeds` | RSS フィード URL とソース名 | 次回実行時（デプロイ不要） |
+| `keywords` | importance_score 判定の基準キーワード | 次回実行時（デプロイ不要） |
+| `settings` | `max_summarize`（要約件数上限、デフォルト 10） | 次回実行時（デプロイ不要） |
