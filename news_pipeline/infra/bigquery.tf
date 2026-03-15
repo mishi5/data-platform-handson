@@ -31,8 +31,18 @@ resource "google_bigquery_table" "summaries" {
     { name = "source",           type = "STRING",  mode = "REQUIRED" },
     { name = "summary",          type = "STRING",  mode = "NULLABLE" },
     { name = "tags",             type = "STRING",  mode = "REPEATED" },
-    { name = "importance_score", type = "FLOAT64",    mode = "NULLABLE" },
-    { name = "notified_at",      type = "TIMESTAMP",  mode = "NULLABLE", description = "Slack通知を送った日時。NULLの場合は未通知。" },
+    { name = "importance_score", type = "FLOAT64", mode = "NULLABLE" },
+  ])
+}
+
+resource "google_bigquery_table" "notification_log" {
+  dataset_id          = google_bigquery_dataset.tech_news.dataset_id
+  table_id            = "notification_log"
+  deletion_protection = false
+
+  schema = jsonencode([
+    { name = "article_id",  type = "STRING",    mode = "REQUIRED" },
+    { name = "notified_at", type = "TIMESTAMP", mode = "REQUIRED" },
   ])
 }
 

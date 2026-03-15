@@ -26,11 +26,11 @@ def test_get_unnotified_summaries_returns_list(mock_bq_class):
     mock_bq_class.return_value = mock_client
 
     mock_row = MagicMock()
-    mock_row.keys.return_value = ["article_id", "title", "url", "source", "summary", "importance_score", "notified_at"]
     _data = {
         "article_id": "abc123", "title": "Test", "url": "https://example.com",
-        "source": "Test Source", "summary": "summary text", "importance_score": 0.8, "notified_at": None,
+        "source": "Test Source", "summary": "summary text", "importance_score": 0.8,
     }
+    mock_row.keys.return_value = list(_data.keys())
     mock_row.__getitem__ = lambda self, key: _data[key]
     mock_client.query.return_value.result.return_value = [mock_row]
 
@@ -39,23 +39,27 @@ def test_get_unnotified_summaries_returns_list(mock_bq_class):
 
     assert isinstance(result, list)
     query_arg = mock_client.query.call_args[0][0]
-    assert "notified_at IS NULL" in query_arg
+    assert "notification_log" in query_arg
     assert "summaries" in query_arg
+    assert "LEFT JOIN" in query_arg
 
 
 @patch("collector.bq_client.bigquery.Client")
-def test_mark_summaries_notified_runs_update(mock_bq_class):
+def test_mark_summaries_notified_inserts_to_log(mock_bq_class):
     mock_client = MagicMock()
     mock_bq_class.return_value = mock_client
-    mock_client.query.return_value.result.return_value = []
+    mock_client.insert_rows_json.return_value = []
 
     bq = BQClient(project="test-project")
     bq.mark_summaries_notified(["id1", "id2"])
 
-    query_arg = mock_client.query.call_args[0][0]
-    assert "UPDATE" in query_arg
-    assert "notified_at" in query_arg
-    assert "id1" in query_arg
+    mock_client.insert_rows_json.assert_called_once()
+    call_args = mock_client.insert_rows_json.call_args
+    assert "notification_log" in call_args[0][0]
+    rows = call_args[0][1]
+    assert len(rows) == 2
+    assert rows[0]["article_id"] == "id1"
+    assert "notified_at" in rows[0]
 
 
 @patch("collector.bq_client.bigquery.Client")
@@ -66,7 +70,7 @@ def test_mark_summaries_notified_skips_empty(mock_bq_class):
     bq = BQClient(project="test-project")
     bq.mark_summaries_notified([])
 
-    mock_client.query.assert_not_called()
+    mock_client.insert_rows_json.assert_not_called()
 
 
 @patch("collector.bq_client.bigquery.Client")

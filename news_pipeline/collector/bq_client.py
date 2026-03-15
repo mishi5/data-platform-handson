@@ -20,26 +20,29 @@ class BQClient:
         return {row.url for row in rows}
 
     def get_unnotified_summaries(self) -> list[dict]:
-        """notified_at IS NULL のサマリーを返す（未通知分）。"""
+        """notification_log に記録されていないサマリーを返す（未通知分）。"""
         query = (
-            f"SELECT * FROM `{self.project}.{DATASET}.summaries`"
-            " WHERE notified_at IS NULL"
-            " ORDER BY importance_score DESC"
+            f"SELECT s.* FROM `{self.project}.{DATASET}.summaries` s"
+            f" LEFT JOIN `{self.project}.{DATASET}.notification_log` n"
+            f" ON s.article_id = n.article_id"
+            f" WHERE n.article_id IS NULL"
+            f" ORDER BY s.importance_score DESC"
         )
         rows = self.client.query(query).result()
         return [dict(row) for row in rows]
 
     def mark_summaries_notified(self, article_ids: list[str]) -> None:
-        """指定した article_id の notified_at を現在時刻に更新する。"""
+        """通知済み article_id を notification_log にストリーミング挿入する。"""
         if not article_ids:
             return
-        ids_str = ", ".join(f"'{aid}'" for aid in article_ids)
-        query = (
-            f"UPDATE `{self.project}.{DATASET}.summaries`"
-            f" SET notified_at = CURRENT_TIMESTAMP()"
-            f" WHERE article_id IN ({ids_str})"
-        )
-        self.client.query(query).result()
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows = [{"article_id": aid, "notified_at": now} for aid in article_ids]
+        table_id = f"{self.project}.{DATASET}.notification_log"
+        errors = self.client.insert_rows_json(table_id, rows)
+        if errors:
+            logger.error("[bq_client] mark_summaries_notified errors: %s", errors)
+            raise RuntimeError(f"BigQuery notification_log insert failed: {errors}")
 
     def insert_raw_articles(self, articles: list[dict]) -> None:
         """記事メタデータと本文を raw_articles テーブルに挿入する。"""
