@@ -13,7 +13,8 @@ def test_summarize_article_returns_dict(mock_anthropic_class):
         "tags": ["bigquery", "performance"],
         "importance_score": 0.85,
     })
-    mock_client.messages.create.return_value.content = [MagicMock(text=response_text)]
+    from anthropic.types import TextBlock
+    mock_client.messages.create.return_value.content = [MagicMock(spec=TextBlock, text=response_text)]
 
     result = summarize_article(
         title="BigQuery update",
