@@ -66,6 +66,7 @@ def _run_pipeline() -> int:
     """パイプライン実行。通知件数を返す。"""
     config = load_config()
     feeds: dict[str, str] = config.get("feeds", {})
+    keywords: list[str] = config.get("keywords", [])
     max_summarize: int = config.get("max_summarize", _DEFAULT_MAX_SUMMARIZE)
 
     bq = BQClient(project=PROJECT_ID)
@@ -100,6 +101,7 @@ def _run_pipeline() -> int:
                     title=article["title"],
                     content=article["content"] or "",
                     api_key=ANTHROPIC_API_KEY,
+                    keywords=keywords,
                 )
             except Exception as e:
                 logger.warning("[pipeline] summarize failed for %s: %s", article["url"], e)

@@ -6,26 +6,41 @@ from anthropic.types import TextBlock
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """あなたはデータエンジニアリングの技術ニュースを要約するアシスタントです。
+_SYSTEM_PROMPT_TEMPLATE = """あなたはデータエンジニアリングの技術ニュースを要約するアシスタントです。
 記事を読んで以下の JSON 形式で回答してください。
 
-{
+{{
   "summary": "箇条書きで3〜5項目の技術ポイント（日本語・文字列・改行区切り）",
   "tags": ["タグ1", "タグ2"],
-  "importance_score": 0.0〜1.0 (BigQuery/GCP関連なら高め)
-}
+  "importance_score": 0.0〜1.0
+}}
+
+importance_score の判定基準：
+- 以下のキーワードに関連する内容であるほど高いスコアを付ける
+{keywords_list}
+- 複数のキーワードに関連するほど高くする
+- 全く関連しない場合は 0.1 以下にする
 
 JSON のみを返してください。説明文は不要です。"""
 
 
-def summarize_article(title: str, content: str, api_key: str) -> dict | None:
-    """Claude で記事を要約する。失敗時は None。"""
+def _build_system_prompt(keywords: list[str]) -> str:
+    if keywords:
+        items = "\n".join(f"  - {kw}" for kw in keywords)
+    else:
+        items = "  （キーワード未設定のため、データエンジニアリング全般を対象とする）"
+    return _SYSTEM_PROMPT_TEMPLATE.format(keywords_list=items)
+
+
+def summarize_article(title: str, content: str, api_key: str, keywords: list[str] | None = None) -> dict | None:
+    """Claude で記事を要約する。失敗時は None。keywords に基づいて importance_score を判定する。"""
+    system_prompt = _build_system_prompt(keywords or [])
     try:
         client = anthropic.Anthropic(api_key=api_key)
         message = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=512,
-            system=SYSTEM_PROMPT,
+            system=system_prompt,
             messages=[
                 {
                     "role": "user",
