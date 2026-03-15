@@ -17,9 +17,10 @@ import time
 
 from article_parser import fetch_content
 from bq_client import BQClient
+from config_loader import load_config
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
-from notifier import send_slack_notification
+from notifier import send_no_news_notification, send_slack_notification
 from rss_fetcher import fetch_articles
 from summarizer import summarize_article
 
@@ -34,41 +35,16 @@ PROJECT_ID = os.environ["GCP_PROJECT_ID"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
-# ローカルテスト時に件数を絞る（未設定 = 無制限）
-MAX_ARTICLES = int(os.environ.get("MAX_ARTICLES", 0)) or None
+# Slack 通知件数上限（未設定 = 5件）
+MAX_NOTIFY = int(os.environ.get("MAX_NOTIFY", 5))
 
-HIGH_PRIORITY_KEYWORDS = [
-    "bigquery",
-    "dataform",
-    "data catalog",
-    "data lineage",
-    "data governance",
-    "data modeling",
-    "data pipeline",
-    "data warehouse",
-    "data lake",
-    "dbt",
-    "apache spark",
-    "apache iceberg",
-    "data mesh",
-    "analytics engineering",
-    "data quality",
-    "data platform",
-    "metadata",
-    "data discovery",
-    "looker",
-    "tableau",
-    "metabase",
-    "bi tool",
-    "business intelligence",
-    "data observability",
-]
+_DEFAULT_MAX_ARTICLES = 10
 
 
-def _is_relevant(title: str, content: str) -> bool:
-    """タイトルと本文に HIGH_PRIORITY_KEYWORDS が含まれるか判定する。"""
+def _is_relevant(title: str, content: str, keywords: list[str]) -> bool:
+    """タイトルと本文にキーワードが含まれるか判定する。"""
     text = (title + " " + (content or "")).lower()
-    return any(kw in text for kw in HIGH_PRIORITY_KEYWORDS)
+    return any(kw in text for kw in keywords)
 
 
 def _verify_slack_signature(req) -> bool:
@@ -91,10 +67,15 @@ def _verify_slack_signature(req) -> bool:
 
 def _run_pipeline() -> int:
     """パイプライン実行。通知件数を返す。"""
+    config = load_config()
+    feeds: dict[str, str] = config.get("feeds", {})
+    keywords: list[str] = config.get("keywords", [])
+    max_articles: int = config.get("max_articles", _DEFAULT_MAX_ARTICLES)
+
     bq = BQClient(project=PROJECT_ID)
 
     # 1. RSS 取得
-    articles = fetch_articles()
+    articles = fetch_articles(feeds)
     logger.info("[pipeline] fetched %d articles from RSS", len(articles))
 
     # 2. dedup
@@ -104,11 +85,11 @@ def _run_pipeline() -> int:
 
     if not new_articles:
         logger.info("[pipeline] no new articles")
+        send_no_news_notification(SLACK_WEBHOOK_URL, "新着記事はありませんでした。")
         return 0
 
-    if MAX_ARTICLES:
-        new_articles = new_articles[:MAX_ARTICLES]
-        logger.info("[pipeline] limited to %d articles (MAX_ARTICLES)", MAX_ARTICLES)
+    new_articles = new_articles[:max_articles]
+    logger.info("[pipeline] limited to %d articles (max_articles)", max_articles)
 
     # 3. 本文取得
     for article in new_articles:
@@ -119,7 +100,7 @@ def _run_pipeline() -> int:
     logger.info("[pipeline] saved %d to raw_articles", len(new_articles))
 
     # 5. フィルタリング
-    relevant = [a for a in new_articles if _is_relevant(a["title"], a["content"])]
+    relevant = [a for a in new_articles if _is_relevant(a["title"], a["content"], keywords)]
     logger.info("[pipeline] %d relevant articles after filtering", len(relevant))
 
     # 6. 要約生成
@@ -150,13 +131,16 @@ def _run_pipeline() -> int:
         bq.insert_summaries(summaries)
         logger.info("[pipeline] saved %d summaries", len(summaries))
 
-    # 8. 通知（importance_score 降順で最大5件）
-    top5 = sorted(summaries, key=lambda x: x.get("importance_score", 0), reverse=True)[
-        :5
+    # 8. 通知（importance_score 降順で最大 MAX_NOTIFY 件）
+    top = sorted(summaries, key=lambda x: x.get("importance_score", 0), reverse=True)[
+        :MAX_NOTIFY
     ]
-    send_slack_notification(top5, webhook_url=SLACK_WEBHOOK_URL)
+    if top:
+        send_slack_notification(top, webhook_url=SLACK_WEBHOOK_URL)
+    else:
+        send_no_news_notification(SLACK_WEBHOOK_URL, "新着記事はありましたが、関連記事はありませんでした。")
 
-    return len(top5)
+    return len(top)
 
 
 @app.route("/", methods=["POST"])

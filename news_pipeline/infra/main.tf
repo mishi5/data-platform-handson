@@ -12,6 +12,13 @@ provider "google" {
   region  = var.region
 }
 
+# Google Sheets API を有効化
+resource "google_project_service" "sheets_api" {
+  project            = var.project_id
+  service            = "sheets.googleapis.com"
+  disable_on_destroy = false
+}
+
 # Cloud Run Service
 resource "google_cloud_run_v2_service" "news_collector" {
   name                = "news-collector"
@@ -28,8 +35,9 @@ resource "google_cloud_run_v2_service" "news_collector" {
         value = var.project_id
       }
       env {
-        name  = "MAX_ARTICLES"
-        value = "20"
+        name  = "SHEET_ID"
+        # see https://docs.google.com/spreadsheets/d/1VH-1bIiimIqNo5MD3JGjpRYw4W8VxOhqvIBVlaeuyWM/edit#gid=0
+        value = "1VH-1bIiimIqNo5MD3JGjpRYw4W8VxOhqvIBVlaeuyWM"
       }
       env {
         name = "ANTHROPIC_API_KEY"

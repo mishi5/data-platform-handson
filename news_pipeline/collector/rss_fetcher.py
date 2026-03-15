@@ -4,15 +4,6 @@ import feedparser
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
-FEEDS = {
-    "https://cloud.google.com/feeds/bigquery-release-notes.xml": "Google Cloud BigQuery",
-    "https://www.getdbt.com/blog/rss.xml": "dbt Blog",
-    "https://www.databricks.com/feed": "Databricks Blog",
-    "https://www.snowflake.com/blog/feed/": "Snowflake Blog",
-    "https://www.infoq.com/data-engineering/rss/": "InfoQ Data Engineering",
-    "https://zenn.dev/topics/bigquery/feed": "Zenn BigQuery",
-}
-
 
 def _parse_published(entry) -> str | None:
     """RSS エントリの published フィールドを ISO 8601 文字列に変換する。パース失敗時は None。"""
@@ -30,10 +21,11 @@ def _make_article_id(url: str) -> str:
     return hashlib.sha256(url.encode()).hexdigest()[:16]
 
 
-def fetch_articles(feeds: dict[str, str] | None = None) -> list[dict]:
-    """RSSフィードから記事リストを返す。"""
-    if feeds is None:
-        feeds = FEEDS
+def fetch_articles(feeds: dict[str, str]) -> list[dict]:
+    """RSSフィードから記事リストを返す。feeds が空の場合は空リストを返す。"""
+    if not feeds:
+        print("[rss_fetcher] feeds is empty")
+        return []
 
     results = []
     for feed_url, source_name in feeds.items():

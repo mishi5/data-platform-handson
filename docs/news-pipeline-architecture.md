@@ -5,9 +5,11 @@
 ```mermaid
 graph TD
     CS[Cloud Scheduler<br/>平日 7:30 JST<br/>30 22 * * 0-4 UTC]
-    CR[Cloud Run Job<br/>news-collector]
-    SM[Secret Manager<br/>anthropic-api-key<br/>slack-webhook-url]
-    RSS[(RSS Feeds<br/>7 ソース)]
+    SLACK_CMD[Slack スラッシュコマンド<br/>/news-update]
+    CR[Cloud Run Service<br/>news-collector<br/>Flask]
+    SM[Secret Manager<br/>anthropic-api-key<br/>slack-webhook-url<br/>slack-signing-secret]
+    GS[Google Sheets<br/>news-pipeline-config<br/>feeds / keywords / settings]
+    RSS[(RSS Feeds<br/>6 ソース)]
     WEB[(記事サイト)]
     BQ_RAW[(BigQuery<br/>tech_news.raw_articles)]
     BQ_SUM[(BigQuery<br/>tech_news.summaries)]
@@ -16,7 +18,9 @@ graph TD
     SLACK[Slack<br/>Incoming Webhook]
 
     CS -->|HTTP POST + OAuth| CR
+    SLACK_CMD -->|HTTP POST| CR
     SM -->|シークレット注入| CR
+    GS -->|gspread / ADC| CR
     CR -->|feedparser| RSS
     CR -->|trafilatura| WEB
     CR -->|insert_rows_json| BQ_RAW
@@ -32,20 +36,26 @@ graph TD
 
 ```mermaid
 flowchart TD
-    START([Scheduler 起動]) --> FETCH[RSS フィード取得<br/>rss_fetcher.fetch_articles]
+    START([Scheduler / /slack 起動]) --> CONFIG[設定読み込み<br/>config_loader.load_config<br/>Google Sheets から feeds/keywords/max_articles]
+    CONFIG --> FETCH[RSS フィード取得<br/>rss_fetcher.fetch_articles]
     FETCH --> DEDUP{BigQuery で<br/>URL 重複チェック<br/>bq_client.get_existing_urls}
     DEDUP -->|既存 URL| SKIP([スキップ])
-    DEDUP -->|新規 URL| PARSE[記事本文取得<br/>article_parser.fetch_content<br/>trafilatura]
+    DEDUP -->|新規 URL なし| NO_NEWS1[send_no_news_notification<br/>新着記事なし]
+    DEDUP -->|新規 URL あり| LIMIT[max_articles 件に絞り込み<br/>デフォルト 10 件]
+    LIMIT --> PARSE[記事本文取得<br/>article_parser.fetch_content<br/>trafilatura]
     PARSE --> SAVE_RAW[raw_articles 保存<br/>bq_client.insert_raw_articles]
-    SAVE_RAW --> FILTER{キーワードフィルタ<br/>HIGH_PRIORITY_KEYWORDS}
+    SAVE_RAW --> FILTER{キーワードフィルタ<br/>Google Sheets keywords}
     FILTER -->|非関連| DROP([破棄])
     FILTER -->|関連| SUMMARIZE[LLM 要約<br/>summarizer.summarize_article<br/>claude-haiku-4-5]
     SUMMARIZE -->|失敗| WARN([warning ログ & スキップ])
     SUMMARIZE -->|成功| SAVE_SUM[summaries 保存<br/>bq_client.insert_summaries]
     SAVE_SUM --> SORT[importance_score 降順でソート]
-    SORT --> TOP5[上位 5 件を選択]
-    TOP5 --> NOTIFY[Slack 通知<br/>notifier.send_slack_notification]
+    SORT --> TOPN[上位 MAX_NOTIFY 件を選択<br/>環境変数・デフォルト 5 件]
+    TOPN -->|0 件| NO_NEWS2[send_no_news_notification<br/>関連記事なし]
+    TOPN -->|1 件以上| NOTIFY[Slack 通知<br/>notifier.send_slack_notification]
     NOTIFY --> END([完了 / JSON レスポンス])
+    NO_NEWS1 --> END
+    NO_NEWS2 --> END
 ```
 
 ---
@@ -55,7 +65,8 @@ flowchart TD
 ```mermaid
 graph LR
     subgraph collector["collector/ (Cloud Run コンテナ)"]
-        MAIN[main.py<br/>Flask エントリポイント]
+        MAIN[main.py<br/>Flask エントリポイント<br/>/ と /slack]
+        CFG[config_loader.py<br/>Google Sheets 設定読み込み]
         RSS_F[rss_fetcher.py]
         ART_P[article_parser.py]
         BQ_C[bq_client.py]
@@ -65,7 +76,7 @@ graph LR
 
     subgraph infra["infra/ (Terraform)"]
         TF_BQ[bigquery.tf<br/>3 テーブル定義]
-        TF_MAIN[main.tf<br/>Cloud Run + Scheduler + IAM]
+        TF_MAIN[main.tf<br/>Cloud Run + Scheduler + IAM<br/>Sheets API 有効化]
         TF_VAR[variables.tf]
     end
 
@@ -77,6 +88,7 @@ graph LR
         T5[test_notifier.py 3件]
     end
 
+    MAIN --> CFG
     MAIN --> RSS_F
     MAIN --> ART_P
     MAIN --> BQ_C
@@ -125,20 +137,23 @@ erDiagram
 
 ## 5. 設計要件と実装の対応表
 
-| 設計要件（requirements doc） | 実装 | ファイル |
-|-------------------------------|------|---------|
+| 設計要件 | 実装 | ファイル |
+|---------|------|---------|
 | RSS フィードから記事収集 | `fetch_articles()` / feedparser | `collector/rss_fetcher.py` |
+| フィード一覧の外部管理 | Google Sheets feeds シート | `collector/config_loader.py` |
 | 重複排除（URL 完全一致） | `get_existing_urls()` → set 差分 | `collector/bq_client.py` |
 | 記事本文取得 | `fetch_content()` / trafilatura | `collector/article_parser.py` |
 | raw_articles 保存（content 必須） | `insert_raw_articles()` | `collector/bq_client.py` |
-| キーワードフィルタ（高優先度） | `_is_relevant()` / HIGH_PRIORITY_KEYWORDS | `collector/main.py` |
+| キーワードフィルタ | `_is_relevant()` / Google Sheets keywords | `collector/main.py` |
 | LLM 要約（箇条書き 3〜5 項目） | `summarize_article()` / claude-haiku-4-5 | `collector/summarizer.py` |
 | summaries 保存 | `insert_summaries()` | `collector/bq_client.py` |
-| 通知（平日 1 回・最大 5 件） | `send_slack_notification()` + Scheduler | `collector/notifier.py` / `infra/main.tf` |
+| 通知（平日 1 回・最大 MAX_NOTIFY 件） | `send_slack_notification()` + Scheduler | `collector/notifier.py` / `infra/main.tf` |
+| ネタ切れ時の通知 | `send_no_news_notification()` | `collector/notifier.py` |
 | 記事履歴を BigQuery に保存 | raw_articles / summaries テーブル | `infra/bigquery.tf` |
 | RAG 対応（将来） | article_chunks テーブル（空） | `infra/bigquery.tf` |
-| 低コスト運用 | Cloud Run Job（起動時のみ課金） + haiku | — |
+| 低コスト運用 | Cloud Run Service（cpu_idle=false） + haiku | — |
 | Secret 管理 | Secret Manager 経由で ENV 注入 | `infra/main.tf` |
+| 手動実行 | Slack スラッシュコマンド `/news-update` | `collector/main.py` |
 
 ---
 
@@ -155,18 +170,37 @@ graph TD
     end
 
     subgraph gcp["GCP (main.tf)"]
-        JOB[Cloud Run V2 Job<br/>news-collector]
+        API[google_project_service<br/>sheets.googleapis.com]
+        SVC[Cloud Run V2 Service<br/>news-collector]
         SCH[Cloud Scheduler<br/>30 22 * * 0-4 UTC]
         SA[Service Account<br/>news-pipeline-scheduler]
-        IAM[IAM: roles/run.invoker]
-        SCH -->|HTTP POST + OAuth| JOB
-        SA --> IAM --> JOB
+        IAM1[IAM: roles/run.invoker<br/>scheduler SA]
+        IAM2[IAM: roles/run.invoker<br/>allUsers]
+        IAM3[IAM: roles/secretmanager.secretAccessor<br/>Compute default SA]
+        SCH -->|HTTP POST + OAuth| SVC
+        SA --> IAM1 --> SVC
+        IAM2 --> SVC
+        IAM3 --> SVC
     end
 ```
 
 ---
 
-## 7. 将来の RAG 化パス
+## 7. 設定管理（Google Sheets）
+
+| シート | 内容 | 変更反映タイミング |
+|--------|------|-----------------|
+| feeds | RSS フィード URL / ソース名 | 次回パイプライン実行時 |
+| keywords | フィルタキーワード一覧 | 次回パイプライン実行時 |
+| settings | max_articles（デフォルト 10） | 次回パイプライン実行時 |
+
+変更手順：Google Sheets アプリでセルを編集するだけ。デプロイ不要。
+
+環境変数で管理するもの（変更頻度低い）：`MAX_NOTIFY`（デフォルト 5）
+
+---
+
+## 8. 将来の RAG 化パス
 
 ```mermaid
 flowchart LR
@@ -185,16 +219,5 @@ flowchart LR
     style SEARCH fill:#fff3cd
 ```
 
-> **緑 = Phase 1 で実装済み**（`content` カラムにデータが蓄積される）
+> **緑 = 実装済み**（`content` カラムにデータが蓄積される）
 > **黄 = Phase 3 で追加予定**
-
----
-
-## 8. フィルタキーワード一覧
-
-`main.py:21` の `HIGH_PRIORITY_KEYWORDS` で判定。
-
-| 優先度 | キーワード |
-|--------|-----------|
-| 高（実装済み） | bigquery, dataform, data catalog, data lineage, data governance, google cloud, data modeling |
-| 中（Phase 2 追加予定） | dbt, databricks, snowflake, ELT/ETL, データパイプライン, セマンティックレイヤー |
