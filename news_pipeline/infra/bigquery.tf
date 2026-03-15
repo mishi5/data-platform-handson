@@ -31,7 +31,8 @@ resource "google_bigquery_table" "summaries" {
     { name = "source",           type = "STRING",  mode = "REQUIRED" },
     { name = "summary",          type = "STRING",  mode = "NULLABLE" },
     { name = "tags",             type = "STRING",  mode = "REPEATED" },
-    { name = "importance_score", type = "FLOAT64", mode = "NULLABLE" },
+    { name = "importance_score", type = "FLOAT64",    mode = "NULLABLE" },
+    { name = "notified_at",      type = "TIMESTAMP",  mode = "NULLABLE", description = "Slack通知を送った日時。NULLの場合は未通知。" },
   ])
 }
 
