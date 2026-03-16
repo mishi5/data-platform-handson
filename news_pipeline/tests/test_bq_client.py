@@ -105,6 +105,36 @@ def test_insert_raw_articles_calls_insert_rows(mock_bq_class):
 
 
 @patch("collector.bq_client.bigquery.Client")
+def test_insert_pipeline_log_calls_insert_rows(mock_bq_class):
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+    mock_client.insert_rows_json.return_value = []
+
+    bq = BQClient(project="test-project")
+    log = {
+        "run_id": "run-1",
+        "triggered_by": "scheduler",
+        "started_at": "2026-03-16T10:00:00Z",
+        "finished_at": "2026-03-16T10:01:00Z",
+        "articles_fetched": 10,
+        "new_articles": 5,
+        "summaries_generated": 3,
+        "notified_count": 3,
+        "error_count": 0,
+        "status": "success",
+        "error_message": None,
+        "keywords": ["dbt", "BigQuery"],
+    }
+    bq.insert_pipeline_log(log)
+
+    mock_client.insert_rows_json.assert_called_once()
+    call_args = mock_client.insert_rows_json.call_args
+    assert "pipeline_logs" in call_args[0][0]
+    assert call_args[0][1][0]["run_id"] == "run-1"
+    assert call_args[0][1][0]["keywords"] == ["dbt", "BigQuery"]
+
+
+@patch("collector.bq_client.bigquery.Client")
 def test_insert_summaries_calls_insert_rows(mock_bq_class):
     mock_client = MagicMock()
     mock_bq_class.return_value = mock_client

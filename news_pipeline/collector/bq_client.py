@@ -59,3 +59,11 @@ class BQClient:
         if errors:
             logger.error("[bq_client] insert_summaries errors: %s", errors)
             raise RuntimeError(f"BigQuery insert_summaries failed: {errors}")
+
+    def insert_pipeline_log(self, log: dict) -> None:
+        """パイプライン実行ログを pipeline_logs テーブルに挿入する。"""
+        table_id = f"{self.project}.{DATASET}.pipeline_logs"
+        errors = self.client.insert_rows_json(table_id, [log])
+        if errors:
+            logger.error("[bq_client] insert_pipeline_log errors: %s", errors)
+            raise RuntimeError(f"BigQuery pipeline_logs insert failed: {errors}")
