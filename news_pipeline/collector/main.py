@@ -1,9 +1,10 @@
 """
 news_pipeline メインモジュール。
 
-Flask サーバーとして起動し、以下の2エンドポイントを提供する:
-  POST /       - Cloud Scheduler からの定期実行トリガー
-  POST /slack  - Slack スラッシュコマンド（/news-update）からの手動実行トリガー
+Flask サーバーとして起動し、以下の3エンドポイントを提供する:
+  POST /              - Cloud Scheduler からの定期実行トリガー
+  POST /slack         - Slack スラッシュコマンド（/news-update）からの手動実行トリガー
+  POST /slack/deepdive - Slack スラッシュコマンド（/news-deepdive）からの深堀りトリガー
 
 パイプライン処理は _run_pipeline() に集約されており、
 Slack エンドポイントではタイムアウト対策としてバックグラウンドスレッドで実行する。
@@ -18,6 +19,7 @@ import time
 from article_parser import fetch_content
 from bq_client import BQClient
 from config_loader import load_config
+from deepdiver import deepdive_article
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from notifier import send_no_news_notification, send_slack_notification
@@ -42,6 +44,19 @@ IMPORTANCE_THRESHOLD = float(os.environ.get("IMPORTANCE_THRESHOLD", 0.5))
 
 # max_summarize: 1実行で要約する記事の最大件数（Google Sheetsのsettingsシートから取得）
 _DEFAULT_MAX_SUMMARIZE = 10
+
+
+def _post_to_response_url(response_url: str, text: str) -> None:
+    """Slack の response_url に遅延応答を POST する。"""
+    import requests as _requests
+    try:
+        _requests.post(
+            response_url,
+            json={"response_type": "in_channel", "text": text},
+            timeout=10,
+        )
+    except Exception as e:
+        logger.error("[deepdive] failed to post to response_url: %s", e)
 
 
 def _verify_slack_signature(req) -> bool:
@@ -198,6 +213,55 @@ def _run_pipeline(triggered_by: str = "scheduler") -> int:
             logger.error("[pipeline] failed to save pipeline log: %s", e)
 
 
+def _run_deepdive(article_id_prefix: str, response_url: str) -> None:
+    """深堀り処理。完了後に response_url へ結果を POST する。"""
+    bq = BQClient(project=PROJECT_ID)
+
+    # 1. 対象記事を取得
+    if article_id_prefix:
+        article = bq.get_article_by_id(article_id_prefix)
+        if not article:
+            _post_to_response_url(response_url, f"ID `{article_id_prefix}` の記事が見つかりませんでした。")
+            return
+    else:
+        article = bq.get_top_undived_article()
+        if not article:
+            _post_to_response_url(response_url, "深堀り対象の記事がありません。")
+            return
+
+    title = article["title"]
+    url = article["url"]
+    article_id = article["article_id"]
+
+    # 2. キャッシュ確認
+    cached = bq.get_deepdive(article_id)
+    if cached:
+        logger.info("[deepdive] cache hit for %s", article_id)
+        _post_to_response_url(response_url, f"*[深堀り] {title}*\n\n{cached}\n\n🔗 <{url}|元記事を読む>")
+        return
+
+    # 3. 深堀り生成
+    logger.info("[deepdive] generating for %s", article_id)
+    text = deepdive_article(
+        title=title,
+        content=article.get("content") or "",
+        api_key=ANTHROPIC_API_KEY,
+    )
+    if not text:
+        _post_to_response_url(response_url, "深堀り生成に失敗しました。しばらく経ってから再試行してください。")
+        return
+
+    # 4. キャッシュ保存
+    try:
+        bq.insert_deepdive(article_id, text)
+    except Exception as e:
+        logger.error("[deepdive] failed to cache deepdive: %s", e)
+
+    # 5. 結果を送信
+    _post_to_response_url(response_url, f"*[深堀り] {title}*\n\n{text}\n\n🔗 <{url}|元記事を読む>")
+    logger.info("[deepdive] completed for %s", article_id)
+
+
 @app.route("/", methods=["POST"])
 def run_pipeline():
     """Cloud Scheduler からの定期実行エンドポイント。パイプラインを同期実行する。"""
@@ -221,6 +285,27 @@ def slack_command():
             "text": ":hourglass: ニュースを収集中です。しばらくお待ちください...",
         }
     )
+
+
+@app.route("/slack/deepdive", methods=["POST"])
+def slack_deepdive():
+    """Slack スラッシュコマンド（/news-deepdive）のエンドポイント。"""
+    if SLACK_SIGNING_SECRET and not _verify_slack_signature(request):
+        logger.warning("[slack] invalid signature")
+        return jsonify({"error": "invalid signature"}), 403
+
+    article_id_prefix = request.form.get("text", "").strip()
+    response_url = request.form.get("response_url", "")
+
+    # Slack は 3 秒以内のレスポンスを要求するため、バックグラウンドで実行
+    threading.Thread(
+        target=_run_deepdive,
+        args=(article_id_prefix, response_url),
+        daemon=True,
+    ).start()
+
+    msg = f"ID `{article_id_prefix}` の記事を深堀り中です..." if article_id_prefix else "最新記事を深堀り中です..."
+    return jsonify({"response_type": "in_channel", "text": f":mag: {msg}"})
 
 
 if __name__ == "__main__":
