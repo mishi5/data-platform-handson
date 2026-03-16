@@ -8,9 +8,13 @@ def _format_message(articles: list[dict]) -> str:
     """記事リストを Slack 投稿用のテキストにフォーマットする。"""
     lines = ["*本日のデータエンジニアリング技術ニュース*\n"]
     for i, a in enumerate(articles, 1):
-        lines.append(f"*{i}. <{a['url']}|{a['title']}>*")
+        article_id_short = a.get("article_id", "")[:8]
+        lines.append(f"*{i}. {a['title']}*")
         lines.append(a.get("summary", ""))
-        lines.append(f"_出典: {a['source']}_\n")
+        lines.append(
+            f"_出典: {a['source']}_ | ID: `{article_id_short}` | <{a['url']}|リンクを開く>"
+        )
+        lines.append(f"`{a['url']}`\n")
     return "\n".join(lines)
 
 

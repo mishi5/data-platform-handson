@@ -28,6 +28,28 @@ def test_send_notification_no_articles_skips_post(mock_post):
 
 
 @patch("collector.notifier.requests.post")
+def test_format_includes_article_id_and_url(mock_post):
+    mock_post.return_value.status_code = 200
+
+    articles = [
+        {
+            "article_id": "abc12345xyz",
+            "title": "BigQuery update",
+            "url": "https://cloud.google.com/blog/1",
+            "source": "Google Cloud Blog",
+            "summary": "- Feature A\n- Feature B",
+        }
+    ]
+    send_slack_notification(articles, webhook_url="https://hooks.slack.com/test")
+
+    call_json = mock_post.call_args.kwargs["json"]
+    text = call_json["text"]
+    assert "BigQuery update" in text
+    assert "abc12345" in text  # article_id先頭8文字
+    assert "https://cloud.google.com/blog/1" in text  # コピー用URL
+
+
+@patch("collector.notifier.requests.post")
 def test_send_no_news_notification_posts_to_webhook(mock_post):
     mock_post.return_value.status_code = 200
 
