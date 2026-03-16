@@ -46,6 +46,27 @@ resource "google_bigquery_table" "notification_log" {
   ])
 }
 
+resource "google_bigquery_table" "pipeline_logs" {
+  dataset_id          = google_bigquery_dataset.tech_news.dataset_id
+  table_id            = "pipeline_logs"
+  deletion_protection = false
+
+  schema = jsonencode([
+    { name = "run_id",              type = "STRING",    mode = "REQUIRED" },
+    { name = "triggered_by",        type = "STRING",    mode = "REQUIRED" },
+    { name = "started_at",          type = "TIMESTAMP", mode = "REQUIRED" },
+    { name = "finished_at",         type = "TIMESTAMP", mode = "NULLABLE" },
+    { name = "articles_fetched",    type = "INT64",     mode = "NULLABLE" },
+    { name = "new_articles",        type = "INT64",     mode = "NULLABLE" },
+    { name = "summaries_generated", type = "INT64",     mode = "NULLABLE" },
+    { name = "notified_count",      type = "INT64",     mode = "NULLABLE" },
+    { name = "error_count",         type = "INT64",     mode = "NULLABLE" },
+    { name = "status",              type = "STRING",    mode = "REQUIRED" },
+    { name = "error_message",       type = "STRING",    mode = "NULLABLE" },
+    { name = "keywords",            type = "STRING",    mode = "REPEATED" },
+  ])
+}
+
 resource "google_bigquery_table" "article_chunks" {
   dataset_id          = google_bigquery_dataset.tech_news.dataset_id
   table_id            = "article_chunks"
