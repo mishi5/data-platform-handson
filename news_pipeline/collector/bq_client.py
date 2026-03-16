@@ -60,6 +60,60 @@ class BQClient:
             logger.error("[bq_client] insert_summaries errors: %s", errors)
             raise RuntimeError(f"BigQuery insert_summaries failed: {errors}")
 
+    def get_deepdive(self, article_id: str) -> str | None:
+        """既存の深堀り結果を取得。なければ None。"""
+        query = (
+            f"SELECT deepdive_text FROM `{self.project}.{DATASET}.deepdives`"
+            f" WHERE article_id = '{article_id}'"
+            f" LIMIT 1"
+        )
+        rows = list(self.client.query(query).result())
+        if not rows:
+            return None
+        return rows[0].deepdive_text
+
+    def insert_deepdive(self, article_id: str, text: str) -> None:
+        """深堀り結果を deepdives テーブルに保存する。"""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        table_id = f"{self.project}.{DATASET}.deepdives"
+        errors = self.client.insert_rows_json(
+            table_id, [{"article_id": article_id, "deepdive_text": text, "created_at": now}]
+        )
+        if errors:
+            logger.error("[bq_client] insert_deepdive errors: %s", errors)
+            raise RuntimeError(f"BigQuery deepdives insert failed: {errors}")
+
+    def get_article_by_id(self, article_id_prefix: str) -> dict | None:
+        """先頭8文字のIDプレフィックスで記事を取得。summaries + raw_articles を JOIN。"""
+        query = (
+            f"SELECT s.article_id, s.title, s.url, r.content"
+            f" FROM `{self.project}.{DATASET}.summaries` s"
+            f" JOIN `{self.project}.{DATASET}.raw_articles` r ON s.article_id = r.article_id"
+            f" WHERE s.article_id LIKE '{article_id_prefix}%'"
+            f" LIMIT 1"
+        )
+        rows = list(self.client.query(query).result())
+        if not rows:
+            return None
+        return dict(rows[0])
+
+    def get_top_undived_article(self) -> dict | None:
+        """深堀り未実施の記事の中でimportance_score最上位のものを返す。"""
+        query = (
+            f"SELECT s.article_id, s.title, s.url, r.content"
+            f" FROM `{self.project}.{DATASET}.summaries` s"
+            f" JOIN `{self.project}.{DATASET}.raw_articles` r ON s.article_id = r.article_id"
+            f" LEFT JOIN `{self.project}.{DATASET}.deepdives` d ON s.article_id = d.article_id"
+            f" WHERE d.article_id IS NULL"
+            f" ORDER BY s.importance_score DESC"
+            f" LIMIT 1"
+        )
+        rows = list(self.client.query(query).result())
+        if not rows:
+            return None
+        return dict(rows[0])
+
     def insert_pipeline_log(self, log: dict) -> None:
         """パイプライン実行ログを pipeline_logs テーブルに挿入する。"""
         table_id = f"{self.project}.{DATASET}.pipeline_logs"

@@ -135,6 +135,131 @@ def test_insert_pipeline_log_calls_insert_rows(mock_bq_class):
 
 
 @patch("collector.bq_client.bigquery.Client")
+def test_get_deepdive_returns_text_when_found(mock_bq_class):
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+
+    mock_row = MagicMock()
+    mock_row.deepdive_text = "📌 背景...\n🔍 技術的なポイント..."
+    mock_client.query.return_value.result.return_value = [mock_row]
+
+    bq = BQClient(project="test-project")
+    result = bq.get_deepdive("abc12345")
+
+    assert result == "📌 背景...\n🔍 技術的なポイント..."
+    query_arg = mock_client.query.call_args[0][0]
+    assert "deepdives" in query_arg
+    assert "abc12345" in query_arg
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_get_deepdive_returns_none_when_not_found(mock_bq_class):
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+    mock_client.query.return_value.result.return_value = []
+
+    bq = BQClient(project="test-project")
+    result = bq.get_deepdive("notfound")
+
+    assert result is None
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_insert_deepdive_calls_insert_rows(mock_bq_class):
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+    mock_client.insert_rows_json.return_value = []
+
+    bq = BQClient(project="test-project")
+    bq.insert_deepdive("abc123full", "深堀りテキスト")
+
+    mock_client.insert_rows_json.assert_called_once()
+    call_args = mock_client.insert_rows_json.call_args
+    assert "deepdives" in call_args[0][0]
+    row = call_args[0][1][0]
+    assert row["article_id"] == "abc123full"
+    assert row["deepdive_text"] == "深堀りテキスト"
+    assert "created_at" in row
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_get_article_by_id_returns_dict_when_found(mock_bq_class):
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+
+    mock_row = MagicMock()
+    _data = {
+        "article_id": "abc12345xyz",
+        "title": "BigQuery update",
+        "url": "https://example.com",
+        "content": "article body",
+    }
+    mock_row.keys.return_value = list(_data.keys())
+    mock_row.__getitem__ = lambda self, key: _data[key]
+    mock_client.query.return_value.result.return_value = [mock_row]
+
+    bq = BQClient(project="test-project")
+    result = bq.get_article_by_id("abc12345")
+
+    assert result is not None
+    assert result["article_id"] == "abc12345xyz"
+    query_arg = mock_client.query.call_args[0][0]
+    assert "abc12345" in query_arg
+    assert "raw_articles" in query_arg
+    assert "summaries" in query_arg
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_get_article_by_id_returns_none_when_not_found(mock_bq_class):
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+    mock_client.query.return_value.result.return_value = []
+
+    bq = BQClient(project="test-project")
+    result = bq.get_article_by_id("notfound")
+
+    assert result is None
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_get_top_undived_article_returns_dict(mock_bq_class):
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+
+    mock_row = MagicMock()
+    _data = {
+        "article_id": "top123",
+        "title": "Top article",
+        "url": "https://example.com/top",
+        "content": "top content",
+    }
+    mock_row.keys.return_value = list(_data.keys())
+    mock_row.__getitem__ = lambda self, key: _data[key]
+    mock_client.query.return_value.result.return_value = [mock_row]
+
+    bq = BQClient(project="test-project")
+    result = bq.get_top_undived_article()
+
+    assert result is not None
+    assert result["article_id"] == "top123"
+    query_arg = mock_client.query.call_args[0][0]
+    assert "deepdives" in query_arg
+    assert "importance_score" in query_arg
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_get_top_undived_article_returns_none_when_all_dived(mock_bq_class):
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+    mock_client.query.return_value.result.return_value = []
+
+    bq = BQClient(project="test-project")
+    result = bq.get_top_undived_article()
+
+    assert result is None
+
+
+@patch("collector.bq_client.bigquery.Client")
 def test_insert_summaries_calls_insert_rows(mock_bq_class):
     mock_client = MagicMock()
     mock_bq_class.return_value = mock_client
