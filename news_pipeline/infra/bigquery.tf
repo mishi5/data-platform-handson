@@ -67,6 +67,18 @@ resource "google_bigquery_table" "pipeline_logs" {
   ])
 }
 
+resource "google_bigquery_table" "deepdives" {
+  dataset_id          = google_bigquery_dataset.tech_news.dataset_id
+  table_id            = "deepdives"
+  deletion_protection = false
+
+  schema = jsonencode([
+    { name = "article_id",    type = "STRING",    mode = "REQUIRED" },
+    { name = "deepdive_text", type = "STRING",    mode = "REQUIRED" },
+    { name = "created_at",    type = "TIMESTAMP", mode = "REQUIRED" },
+  ])
+}
+
 resource "google_bigquery_table" "article_chunks" {
   dataset_id          = google_bigquery_dataset.tech_news.dataset_id
   table_id            = "article_chunks"
