@@ -1,19 +1,19 @@
 """
 news_pipeline メインモジュール。
 
-Flask サーバーとして起動し、以下の3エンドポイントを提供する:
+FastAPI サーバーとして起動し、以下の3エンドポイントを提供する:
   POST /              - Cloud Scheduler からの定期実行トリガー
   POST /slack         - Slack スラッシュコマンド（/news-update）からの手動実行トリガー
   POST /slack/deepdive - Slack スラッシュコマンド（/news-deepdive）からの深堀りトリガー
 
 パイプライン処理は _run_pipeline() に集約されており、
-Slack エンドポイントではタイムアウト対策としてバックグラウンドスレッドで実行する。
+Slack エンドポイントではタイムアウト対策として BackgroundTasks で実行する。
 """
+import asyncio
 import hashlib
 import hmac
 import logging
 import os
-import threading
 import time
 
 from article_parser import fetch_content
@@ -21,8 +21,9 @@ from bq_client import BQClient
 from config_loader import load_config
 from deepdiver import deepdive_article
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
 from notifier import send_no_news_notification, send_slack_notification
+from pydantic import BaseModel
 from rss_fetcher import fetch_articles
 from summarizer import summarize_article
 
@@ -31,7 +32,7 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
+app = FastAPI()
 
 PROJECT_ID = os.environ["GCP_PROJECT_ID"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
@@ -44,6 +45,16 @@ IMPORTANCE_THRESHOLD = float(os.environ.get("IMPORTANCE_THRESHOLD", 0.5))
 
 # max_summarize: 1実行で要約する記事の最大件数（Google Sheetsのsettingsシートから取得）
 _DEFAULT_MAX_SUMMARIZE = 10
+
+
+class PipelineResponse(BaseModel):
+    status: str
+    notified: int
+
+
+class SlackResponse(BaseModel):
+    response_type: str
+    text: str
 
 
 def _post_to_response_url(response_url: str, text: str) -> None:
@@ -59,22 +70,26 @@ def _post_to_response_url(response_url: str, text: str) -> None:
         logger.error("[deepdive] failed to post to response_url: %s", e)
 
 
-def _verify_slack_signature(req) -> bool:
-    """Slack からのリクエストを署名で検証する。"""
-    timestamp = req.headers.get("X-Slack-Request-Timestamp", "")
+async def verify_slack(request: Request) -> None:
+    """Slack署名を検証するDependency。失敗時は HTTPException(403)。"""
+    if not SLACK_SIGNING_SECRET:
+        return
+    timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
     try:
         if abs(time.time() - int(timestamp)) > 300:
-            return False
+            raise HTTPException(status_code=403, detail="invalid signature")
     except ValueError:
-        return False
-    sig_basestring = f"v0:{timestamp}:{req.get_data(as_text=True)}"
+        raise HTTPException(status_code=403, detail="invalid signature")
+    body = await request.body()
+    sig_basestring = f"v0:{timestamp}:{body.decode()}"
     expected = (
         "v0="
         + hmac.new(
             SLACK_SIGNING_SECRET.encode(), sig_basestring.encode(), hashlib.sha256
         ).hexdigest()
     )
-    return hmac.compare_digest(expected, req.headers.get("X-Slack-Signature", ""))
+    if not hmac.compare_digest(expected, request.headers.get("X-Slack-Signature", "")):
+        raise HTTPException(status_code=403, detail="invalid signature")
 
 
 def _run_pipeline(triggered_by: str = "scheduler") -> int:
@@ -262,51 +277,40 @@ def _run_deepdive(article_id_prefix: str, response_url: str) -> None:
     logger.info("[deepdive] completed for %s", article_id)
 
 
-@app.route("/", methods=["POST"])
-def run_pipeline():
+@app.post("/", response_model=PipelineResponse)
+async def run_pipeline():
     """Cloud Scheduler からの定期実行エンドポイント。パイプラインを同期実行する。"""
-    notified = _run_pipeline()
-    return jsonify({"status": "ok", "notified": notified})
+    notified = await asyncio.to_thread(_run_pipeline)
+    return PipelineResponse(status="ok", notified=notified)
 
 
-@app.route("/slack", methods=["POST"])
-def slack_command():
+@app.post("/slack", response_model=SlackResponse)
+async def slack_command(
+    background_tasks: BackgroundTasks,
+    _: None = Depends(verify_slack),
+):
     """Slack スラッシュコマンド（/news-update）のエンドポイント。"""
-    if SLACK_SIGNING_SECRET and not _verify_slack_signature(request):
-        logger.warning("[slack] invalid signature")
-        return jsonify({"error": "invalid signature"}), 403
-
-    # Slack は 3 秒以内のレスポンスを要求するため、バックグラウンドで実行
-    threading.Thread(target=_run_pipeline, args=("slack_command",), daemon=True).start()
-
-    return jsonify(
-        {
-            "response_type": "in_channel",
-            "text": ":hourglass: ニュースを収集中です。しばらくお待ちください...",
-        }
+    background_tasks.add_task(_run_pipeline, "slack_command")
+    return SlackResponse(
+        response_type="in_channel",
+        text=":hourglass: ニュースを収集中です。しばらくお待ちください...",
     )
 
 
-@app.route("/slack/deepdive", methods=["POST"])
-def slack_deepdive():
+@app.post("/slack/deepdive", response_model=SlackResponse)
+async def slack_deepdive(
+    background_tasks: BackgroundTasks,
+    text: str = Form(default=""),
+    response_url: str = Form(default=""),
+    _: None = Depends(verify_slack),
+):
     """Slack スラッシュコマンド（/news-deepdive）のエンドポイント。"""
-    if SLACK_SIGNING_SECRET and not _verify_slack_signature(request):
-        logger.warning("[slack] invalid signature")
-        return jsonify({"error": "invalid signature"}), 403
-
-    article_id_prefix = request.form.get("text", "").strip()
-    response_url = request.form.get("response_url", "")
-
-    # Slack は 3 秒以内のレスポンスを要求するため、バックグラウンドで実行
-    threading.Thread(
-        target=_run_deepdive,
-        args=(article_id_prefix, response_url),
-        daemon=True,
-    ).start()
-
+    article_id_prefix = text.strip()
+    background_tasks.add_task(_run_deepdive, article_id_prefix, response_url)
     msg = f"ID `{article_id_prefix}` の記事を深堀り中です..." if article_id_prefix else "最新記事を深堀り中です..."
-    return jsonify({"response_type": "in_channel", "text": f":mag: {msg}"})
+    return SlackResponse(response_type="in_channel", text=f":mag: {msg}")
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8080)
