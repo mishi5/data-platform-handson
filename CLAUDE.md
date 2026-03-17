@@ -113,13 +113,10 @@ cd news_pipeline/collector
 python main.py
 
 # テスト（BigQuery不要・モック完結）
-cd news_pipeline
-python -m pytest tests/ -v
+cd news_pipeline && uv run pytest tests/ -v
 
 # 本番デプロイ（Apple Silicon MacはPlatform指定必須）
-docker build --platform linux/amd64 \
-  -t asia-northeast1-docker.pkg.dev/$GCP_PROJECT_ID/news-collector/news-collector:latest \
-  news_pipeline/collector/
+docker build --platform linux/amd64 -f news_pipeline/collector/Dockerfile -t asia-northeast1-docker.pkg.dev/$GCP_PROJECT_ID/news-collector/news-collector:latest news_pipeline/
 docker push asia-northeast1-docker.pkg.dev/$GCP_PROJECT_ID/news-collector/news-collector:latest
 
 # Terraform（BigQuery + Cloud Run + Scheduler）
