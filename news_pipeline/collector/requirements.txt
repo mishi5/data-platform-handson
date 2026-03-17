@@ -6,4 +6,5 @@ anthropic==0.43.0
 requests==2.32.3
 fastapi
 uvicorn[standard]
+python-multipart
 python-dotenv==1.0.1
