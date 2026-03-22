@@ -42,6 +42,9 @@ dbt_logs_analysis/dbt_packages/
 dbt_logs_analysis/logs/
 
 
+# news_pipeline作業メモ（ローカル専用）
+news_pipeline/memo/
+
 # BigQuery関連
 bigquery-data/
 scripts/
