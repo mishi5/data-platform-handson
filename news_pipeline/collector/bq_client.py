@@ -19,17 +19,27 @@ class BQClient:
         rows = self.client.query(query).result()
         return {row.url for row in rows}
 
+    def get_existing_summary_ids(self) -> set[str]:
+        """summaries に保存済みの article_id セットを返す（dedup 用）。"""
+        query = f"SELECT DISTINCT article_id FROM `{self.project}.{DATASET}.summaries`"
+        rows = self.client.query(query).result()
+        return {row.article_id for row in rows}
+
     def get_unnotified_summaries(self) -> list[dict]:
-        """notification_log に記録されていないサマリーを返す（未通知分）。"""
+        """notification_log に記録されていないサマリーを返す（未通知分）。article_id 重複は最高スコアの1件に絞る。"""
         query = (
-            f"SELECT s.* FROM `{self.project}.{DATASET}.summaries` s"
+            f"SELECT s.* FROM ("
+            f"  SELECT *, ROW_NUMBER() OVER (PARTITION BY article_id ORDER BY importance_score DESC) AS _rn"
+            f"  FROM `{self.project}.{DATASET}.summaries`"
+            f") s"
             f" LEFT JOIN `{self.project}.{DATASET}.notification_log` n"
             f" ON s.article_id = n.article_id"
-            f" WHERE n.article_id IS NULL"
+            f" WHERE n.article_id IS NULL AND s._rn = 1"
             f" ORDER BY s.importance_score DESC"
         )
         rows = self.client.query(query).result()
-        return [dict(row) for row in rows]
+        # _rn は内部用カラムなので除外
+        return [{k: v for k, v in dict(row).items() if k != "_rn"} for row in rows]
 
     def mark_summaries_notified(self, article_ids: list[str]) -> None:
         """通知済み article_id を notification_log にストリーミング挿入する。"""

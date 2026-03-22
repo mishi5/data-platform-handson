@@ -183,7 +183,12 @@ def _run_pipeline(triggered_by: str = "scheduler") -> int:
                 IMPORTANCE_THRESHOLD,
             )
 
-            # 8. summaries 保存（関連あり記事のみ）
+            # 8. summaries 保存（関連あり記事のみ・article_id 重複を排除）
+            if relevant_summaries:
+                existing_summary_ids = bq.get_existing_summary_ids()
+                relevant_summaries = [
+                    s for s in relevant_summaries if s["article_id"] not in existing_summary_ids
+                ]
             if relevant_summaries:
                 bq.insert_summaries(relevant_summaries)
                 logger.info("[pipeline] saved %d summaries", len(relevant_summaries))
