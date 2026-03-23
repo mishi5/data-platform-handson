@@ -36,6 +36,12 @@ def _format_blocks(articles: list[dict]) -> list:
                     },
                     {
                         "type": "button",
+                        "text": {"type": "plain_text", "text": "🔍 深堀り"},
+                        "action_id": "deepdive_article",
+                        "value": article_id,
+                    },
+                    {
+                        "type": "button",
                         "text": {"type": "plain_text", "text": "🔗 記事を読む"},
                         "action_id": "open_article",
                         "url": a["url"],

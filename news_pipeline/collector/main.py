@@ -307,6 +307,7 @@ async def slack_command(
 @app.post("/slack/actions")
 async def slack_actions(
     request: Request,
+    background_tasks: BackgroundTasks,
     _: None = Depends(verify_slack),
 ):
     """Slack インタラクティブコンポーネント（ボタン押下など）のエンドポイント。"""
@@ -337,6 +338,12 @@ async def slack_actions(
         bq.delete_favorite(article_id)
         logger.info("[favorite] removed article_id=%s", article_id)
         return {"response_type": "ephemeral", "text": "🗑️ お気に入りから削除しました。"}
+
+    if action_id == "deepdive_article":
+        article_id = action.get("value", "")
+        response_url = data.get("response_url", "")
+        background_tasks.add_task(_run_deepdive, article_id, response_url)
+        return {"response_type": "ephemeral", "text": f":mag: 深堀り中です。しばらくお待ちください..."}
 
     return {}
 
