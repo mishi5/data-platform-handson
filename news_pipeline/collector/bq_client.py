@@ -124,6 +124,46 @@ class BQClient:
             return None
         return dict(rows[0])
 
+    def get_favorites(self) -> list[dict]:
+        """お気に入り記事一覧を返す（summariesと結合）。"""
+        query = (
+            f"SELECT f.article_id, f.favorited_at, s.title, s.url, s.source"
+            f" FROM `{self.project}.{DATASET}.favorites` f"
+            f" LEFT JOIN `{self.project}.{DATASET}.summaries` s ON f.article_id = s.article_id"
+            f" ORDER BY f.favorited_at DESC"
+        )
+        rows = list(self.client.query(query).result())
+        return [dict(row) for row in rows]
+
+    def delete_favorite(self, article_id: str) -> None:
+        """お気に入りから記事を削除する。"""
+        query = (
+            f"DELETE FROM `{self.project}.{DATASET}.favorites`"
+            f" WHERE article_id = '{article_id}'"
+        )
+        self.client.query(query).result()
+        logger.info("[bq_client] deleted favorite article_id=%s", article_id)
+
+    def insert_favorite(self, article_id: str) -> None:
+        """記事をお気に入りテーブルに追加する。"""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        table_id = f"{self.project}.{DATASET}.favorites"
+        errors = self.client.insert_rows_json(table_id, [{"article_id": article_id, "favorited_at": now}])
+        if errors:
+            logger.error("[bq_client] insert_favorite errors: %s", errors)
+            raise RuntimeError(f"BigQuery favorites insert failed: {errors}")
+
+    def is_favorited(self, article_id: str) -> bool:
+        """記事がすでにお気に入り済みか確認する。"""
+        query = (
+            f"SELECT 1 FROM `{self.project}.{DATASET}.favorites`"
+            f" WHERE article_id = '{article_id}'"
+            f" LIMIT 1"
+        )
+        rows = list(self.client.query(query).result())
+        return len(rows) > 0
+
     def insert_pipeline_log(self, log: dict) -> None:
         """パイプライン実行ログを pipeline_logs テーブルに挿入する。"""
         table_id = f"{self.project}.{DATASET}.pipeline_logs"

@@ -9,8 +9,9 @@ deploy: build push update
 
 build:
 	docker build --platform linux/amd64 \
+	  -f collector/Dockerfile \
 	  -t $(IMAGE) \
-	  collector
+	  .
 
 push:
 	docker push $(IMAGE)

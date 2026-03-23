@@ -12,9 +12,11 @@ Slack エンドポイントではタイムアウト対策として BackgroundTas
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 import os
 import time
+import urllib.parse
 
 from article_parser import fetch_content
 from bq_client import BQClient
@@ -22,7 +24,7 @@ from config_loader import load_config
 from deepdiver import deepdive_article
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
-from notifier import send_no_news_notification, send_slack_notification
+from notifier import format_favorites_blocks, send_no_news_notification, send_slack_notification
 from pydantic import BaseModel
 from rss_fetcher import fetch_articles
 from summarizer import summarize_article
@@ -302,15 +304,87 @@ async def slack_command(
     )
 
 
+@app.post("/slack/actions")
+async def slack_actions(
+    request: Request,
+    _: None = Depends(verify_slack),
+):
+    """Slack インタラクティブコンポーネント（ボタン押下など）のエンドポイント。"""
+    # Form(...)を使わず手動パース（verify_slackがbodyを先に読んでキャッシュするため）
+    body = await request.body()
+    form_data = urllib.parse.parse_qs(body.decode())
+    payload_str = form_data.get("payload", [""])[0]
+    data = json.loads(payload_str)
+    actions = data.get("actions", [])
+    if not actions:
+        return {}
+
+    action = actions[0]
+    action_id = action.get("action_id", "")
+
+    if action_id == "add_favorite":
+        article_id = action.get("value", "")
+        bq = BQClient(project=PROJECT_ID)
+        if bq.is_favorited(article_id):
+            return {"response_type": "ephemeral", "text": "すでにお気に入り済みです。"}
+        bq.insert_favorite(article_id)
+        logger.info("[favorite] added article_id=%s", article_id)
+        return {"response_type": "ephemeral", "text": "⭐ お気に入りに追加しました！"}
+
+    if action_id == "remove_favorite":
+        article_id = action.get("value", "")
+        bq = BQClient(project=PROJECT_ID)
+        bq.delete_favorite(article_id)
+        logger.info("[favorite] removed article_id=%s", article_id)
+        return {"response_type": "ephemeral", "text": "🗑️ お気に入りから削除しました。"}
+
+    return {}
+
+
+def _run_show_favorites(response_url: str) -> None:
+    """お気に入り一覧を取得して response_url に POST する。"""
+    import requests as _requests
+    bq = BQClient(project=PROJECT_ID)
+    favorites = bq.get_favorites()
+    if not favorites:
+        _post_to_response_url(response_url, "お気に入り記事はありません。")
+        return
+    blocks = format_favorites_blocks(favorites)
+    try:
+        _requests.post(
+            response_url,
+            json={"response_type": "ephemeral", "blocks": blocks},
+            timeout=10,
+        )
+    except Exception as e:
+        logger.error("[favorites] failed to post to response_url: %s", e)
+
+
+@app.post("/slack/favorites", response_model=SlackResponse)
+async def slack_favorites(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    _: None = Depends(verify_slack),
+):
+    """Slack スラッシュコマンド（/news-favorites）のエンドポイント。"""
+    body = await request.body()
+    form_data = urllib.parse.parse_qs(body.decode())
+    response_url = form_data.get("response_url", [""])[0]
+    background_tasks.add_task(_run_show_favorites, response_url)
+    return SlackResponse(response_type="ephemeral", text=":hourglass: お気に入り一覧を取得中...")
+
+
 @app.post("/slack/deepdive", response_model=SlackResponse)
 async def slack_deepdive(
+    request: Request,
     background_tasks: BackgroundTasks,
-    text: str = Form(default=""),
-    response_url: str = Form(default=""),
     _: None = Depends(verify_slack),
 ):
     """Slack スラッシュコマンド（/news-deepdive）のエンドポイント。"""
-    article_id_prefix = text.strip()
+    body = await request.body()
+    form_data = urllib.parse.parse_qs(body.decode())
+    article_id_prefix = form_data.get("text", [""])[0].strip()
+    response_url = form_data.get("response_url", [""])[0]
     background_tasks.add_task(_run_deepdive, article_id_prefix, response_url)
     msg = f"ID `{article_id_prefix}` の記事を深堀り中です..." if article_id_prefix else "最新記事を深堀り中です..."
     return SlackResponse(response_type="in_channel", text=f":mag: {msg}")

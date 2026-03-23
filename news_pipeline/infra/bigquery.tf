@@ -79,6 +79,17 @@ resource "google_bigquery_table" "deepdives" {
   ])
 }
 
+resource "google_bigquery_table" "favorites" {
+  dataset_id          = google_bigquery_dataset.tech_news.dataset_id
+  table_id            = "favorites"
+  deletion_protection = false
+
+  schema = jsonencode([
+    { name = "article_id",   type = "STRING",    mode = "REQUIRED" },
+    { name = "favorited_at", type = "TIMESTAMP", mode = "REQUIRED" },
+  ])
+}
+
 resource "google_bigquery_table" "article_chunks" {
   dataset_id          = google_bigquery_dataset.tech_news.dataset_id
   table_id            = "article_chunks"

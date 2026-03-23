@@ -18,7 +18,8 @@ def test_send_notification_posts_to_webhook(mock_post):
 
     mock_post.assert_called_once()
     call_json = mock_post.call_args.kwargs["json"]
-    assert "BigQuery update" in call_json["text"]
+    blocks_str = str(call_json["blocks"])
+    assert "BigQuery update" in blocks_str
 
 
 @patch("collector.notifier.requests.post")
@@ -43,10 +44,10 @@ def test_format_includes_article_id_and_url(mock_post):
     send_slack_notification(articles, webhook_url="https://hooks.slack.com/test")
 
     call_json = mock_post.call_args.kwargs["json"]
-    text = call_json["text"]
-    assert "BigQuery update" in text
-    assert "abc12345" in text  # article_id先頭8文字
-    assert "https://cloud.google.com/blog/1" in text  # コピー用URL
+    blocks_str = str(call_json["blocks"])
+    assert "BigQuery update" in blocks_str
+    assert "abc12345xyz" in blocks_str  # article_id（ボタンのvalue）
+    assert "https://cloud.google.com/blog/1" in blocks_str  # ボタンのurl
 
 
 @patch("collector.notifier.requests.post")
