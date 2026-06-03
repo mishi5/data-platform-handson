@@ -1,16 +1,17 @@
 """Slack Incoming Webhook でニュースサマリーを通知するモジュール。"""
+
 import logging
 import requests
 
 logger = logging.getLogger(__name__)
 
 
-def _format_blocks(articles: list[dict]) -> list:
+def _format_blocks(articles: list[dict], header_text: str) -> list:
     """記事リストを Slack Block Kit 形式に変換する。"""
     blocks: list[dict] = [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": "本日のデータエンジニアリング技術ニュース"},
+            "text": {"type": "plain_text", "text": header_text},
         }
     ]
     for i, a in enumerate(articles, 1):
@@ -58,7 +59,10 @@ def format_favorites_blocks(favorites: list[dict]) -> list:
     blocks: list[dict] = [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": f"⭐ お気に入り記事 ({len(favorites)}件)"},
+            "text": {
+                "type": "plain_text",
+                "text": f"⭐ お気に入り記事 ({len(favorites)}件)",
+            },
         }
     ]
     for i, f in enumerate(favorites, 1):
@@ -91,7 +95,10 @@ def format_favorites_blocks(favorites: list[dict]) -> list:
                 "style": "danger",
                 "confirm": {
                     "title": {"type": "plain_text", "text": "削除の確認"},
-                    "text": {"type": "mrkdwn", "text": f"*{title}* をお気に入りから削除しますか？"},
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*{title}* をお気に入りから削除しますか？",
+                    },
                     "confirm": {"type": "plain_text", "text": "削除"},
                     "deny": {"type": "plain_text", "text": "キャンセル"},
                 },
@@ -115,19 +122,25 @@ def send_no_news_notification(webhook_url: str, reason: str) -> None:
         logger.error("[notifier] failed to post to slack: %s", e)
 
 
-def send_slack_notification(articles: list[dict], webhook_url: str) -> None:
-    """summaries リストを Slack に通知する。"""
+def send_slack_notification(
+    articles: list[dict],
+    webhook_url: str,
+    header: str = "本日のデータエンジニアリング技術ニュース",
+) -> None:
+    """summaries リストを Slack に通知する。header はメッセージ見出し。"""
     if not articles:
         logger.info("[notifier] no articles to notify")
         return
 
-    blocks = _format_blocks(articles)
-    payload = {"text": "本日のデータエンジニアリング技術ニュース", "blocks": blocks}
+    blocks = _format_blocks(articles, header)
+    payload = {"text": header, "blocks": blocks}
     try:
         resp = requests.post(webhook_url, json=payload, timeout=10)
         if resp.status_code != 200:
             logger.error("[notifier] slack error: %s %s", resp.status_code, resp.text)
         else:
-            logger.info("[notifier] sent %d articles to slack", len(articles))
+            logger.info(
+                "[notifier] sent %d articles to slack (%s)", len(articles), header
+            )
     except Exception as e:
         logger.error("[notifier] failed to post to slack: %s", e)

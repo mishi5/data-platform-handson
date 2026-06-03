@@ -62,3 +62,28 @@ def test_send_no_news_notification_posts_to_webhook(mock_post):
     mock_post.assert_called_once()
     call_json = mock_post.call_args.kwargs["json"]
     assert "新着記事はありませんでした。" in call_json["text"]
+
+
+@patch("collector.notifier.requests.post")
+def test_send_notification_uses_custom_header(mock_post):
+    mock_post.return_value.status_code = 200
+
+    articles = [
+        {
+            "article_id": "id1",
+            "title": "Some article",
+            "url": "https://example.com/1",
+            "source": "Example Blog",
+            "summary": "- point",
+        }
+    ]
+    send_slack_notification(
+        articles, webhook_url="https://hooks.slack.com/test", header="📢 公式ブログ"
+    )
+
+    call_json = mock_post.call_args.kwargs["json"]
+    assert call_json["text"] == "📢 公式ブログ"
+    # ヘッダーブロックにラベルが入っている
+    header_block = call_json["blocks"][0]
+    assert header_block["type"] == "header"
+    assert header_block["text"]["text"] == "📢 公式ブログ"
