@@ -1,4 +1,5 @@
 """Google Sheets から設定を読み込むモジュール。"""
+
 import logging
 import os
 
@@ -25,16 +26,26 @@ def load_config() -> dict:
         spreadsheet = gc.open_by_key(SHEET_ID)
         feeds = _load_feeds(spreadsheet)
         keywords = _load_keywords(spreadsheet)
+        feed_categories = _load_feed_categories(spreadsheet)
         settings = _load_settings(spreadsheet)
         logger.info(
-            "[config_loader] loaded %d feeds, %d keywords, settings=%s from Sheets",
+            "[config_loader] loaded %d feeds, %d keywords, %d setting groups from Sheets",
             len(feeds),
             len(keywords),
-            settings,
+            len(settings),
         )
-        return {"feeds": feeds, "keywords": keywords, **settings}
+        return {
+            "feeds": feeds,
+            "keywords": keywords,
+            "feed_categories": feed_categories,
+            "settings": settings,
+        }
     except Exception as e:
-        logger.error("[config_loader] failed to load from Google Sheets: (%s) %s", type(e).__name__, e)
+        logger.error(
+            "[config_loader] failed to load from Google Sheets: (%s) %s",
+            type(e).__name__,
+            e,
+        )
         return {}
 
 
@@ -46,6 +57,23 @@ def _load_feeds(spreadsheet) -> dict[str, str]:
         return {row[0]: row[1] for row in rows if len(row) >= 2 and row[0]}
     except Exception as e:
         logger.warning("[config_loader] failed to load feeds sheet: %s", e)
+        return {}
+
+
+def _load_feed_categories(spreadsheet) -> dict[str, str]:
+    """feeds シートを {Source Name: category} の dict で返す。category 列が無ければ空文字。"""
+    try:
+        ws = spreadsheet.worksheet("feeds")
+        rows = ws.get_all_values()[1:]  # 1行目はヘッダー
+        result: dict[str, str] = {}
+        for row in rows:
+            if len(row) >= 2 and row[1]:
+                source = row[1]
+                category = row[2] if len(row) >= 3 else ""
+                result[source] = category
+        return result
+    except Exception as e:
+        logger.warning("[config_loader] failed to load feed categories: %s", e)
         return {}
 
 
@@ -61,18 +89,23 @@ def _load_keywords(spreadsheet) -> list[str]:
 
 
 def _load_settings(spreadsheet) -> dict:
-    """settings シートを {key: value} の dict で返す。数値は int 変換。"""
+    """settings シートを {group: {key: value}} のネスト dict で返す。
+
+    シートは group | key | value の3列。value は int 変換可能なら int 化する。
+    group の出現順を保持する（通知順の決定に使う）。
+    """
     try:
         ws = spreadsheet.worksheet("settings")
         rows = ws.get_all_values()[1:]  # 1行目はヘッダー
-        result = {}
+        result: dict = {}
         for row in rows:
-            if len(row) >= 2 and row[0]:
-                key, val = row[0], row[1]
+            if len(row) >= 3 and row[0] and row[1]:
+                group, key, val = row[0], row[1], row[2]
                 try:
-                    result[key] = int(val)
+                    typed = int(val)
                 except ValueError:
-                    result[key] = val
+                    typed = val
+                result.setdefault(group, {})[key] = typed
         return result
     except Exception as e:
         logger.warning("[config_loader] failed to load settings sheet: %s", e)
