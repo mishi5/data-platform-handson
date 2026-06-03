@@ -20,11 +20,13 @@ Claude 要約（全新着記事）→ importance_score フィルタ → summarie
       ▼
 未通知サマリー取得（notification_log で管理）
       │
-      ├─ 1件以上 → Slack 通知（最大 MAX_NOTIFY 件）→ notification_log に記録
+      ├─ 1件以上 → category 別にグルーピング → カテゴリごとに Slack 通知
+      │            （各カテゴリ最大 max_notify 件）→ notification_log に記録
       └─ 0件     → ネタ切れ通知
 ```
 
-設定（feeds / keywords / max_summarize）は **Google Sheets** で管理。デプロイ不要で変更可能。
+設定（feeds / category / keywords / settings）は **Google Sheets** で管理。デプロイ不要で変更可能。
+通知は feeds の `category` ごとに独立した Slack メッセージとして送られる。
 
 ## 前提条件
 
@@ -121,9 +123,9 @@ gcloud artifacts repositories create news-collector \
 
    | シート名 | 列構成 | 内容 |
    |---------|-------|------|
-   | `feeds` | A: URL, B: ソース名 | RSS フィード一覧 |
+   | `feeds` | A: URL, B: ソース名, C: category | RSS フィード一覧（category で通知を分割） |
    | `keywords` | A: キーワード | importance_score 判定の基準語 |
-   | `settings` | A: キー, B: 値 | `max_summarize` などのパラメータ |
+   | `settings` | A: group, B: key, C: value | `general/max_summarize`、`<category>/max_notify`、`<category>/label` などのパラメータ |
 
 2. URL から Spreadsheet ID を取得（`/d/<SHEET_ID>/` の部分）
 3. Cloud Run のデフォルト SA（`<PROJECT_NUMBER>-compute@developer.gserviceaccount.com`）に「閲覧者」として共有
@@ -244,13 +246,14 @@ gcloud logging read \
 | `SLACK_WEBHOOK_URL` | Slack Incoming Webhook URL | `.env` | Secret Manager |
 | `SLACK_SIGNING_SECRET` | Slack App の署名シークレット | `.env`（空でも可） | Secret Manager |
 | `SHEET_ID` | 設定スプレッドシートの ID | `.env` | Terraform で設定 |
-| `MAX_NOTIFY` | フィルタ後に通知する件数の上限 | `.env`（デフォルト: 5） | Terraform で設定 |
 | `IMPORTANCE_THRESHOLD` | 通知対象とする importance_score の閾値 | `.env`（デフォルト: 0.5） | Terraform で設定 |
+
+通知件数の上限は `settings` シートの `<category>/max_notify`（デフォルト 5）で管理する。
 
 ## Google Sheets で管理する設定
 
 | シート | 内容 | 変更反映 |
 |--------|------|---------|
-| `feeds` | RSS フィード URL とソース名 | 次回実行時（デプロイ不要） |
+| `feeds` | RSS フィード URL・ソース名・category（通知の分類） | 次回実行時（デプロイ不要） |
 | `keywords` | importance_score 判定の基準キーワード | 次回実行時（デプロイ不要） |
-| `settings` | `max_summarize`（要約件数上限、デフォルト 10） | 次回実行時（デプロイ不要） |
+| `settings` | `general/max_summarize`（要約件数上限、デフォルト 10）、`<category>/max_notify`（カテゴリ別通知上限、デフォルト 5）、`<category>/label`（Slack ヘッダー表示名） | 次回実行時（デプロイ不要） |
