@@ -46,7 +46,7 @@ def category_limit(category: str, settings: dict[str, dict]) -> int:
         return DEFAULT_MAX_NOTIFY
 
 
-def order_categories(present, settings: dict[str, dict]) -> list[str]:
+def order_categories(present: list[str], settings: dict[str, dict]) -> list[str]:
     """通知順を決める。settings の group 出現順を優先し、未定義カテゴリは後ろにアルファベット順。"""
     present_set = set(present)
     ordered = [g for g in settings.keys() if g in present_set]
