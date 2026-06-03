@@ -9,6 +9,7 @@ FastAPI サーバーとして起動し、以下の3エンドポイントを提�
 パイプライン処理は _run_pipeline() に集約されており、
 Slack エンドポイントではタイムアウト対策として BackgroundTasks で実行する。
 """
+
 import asyncio
 import hashlib
 import hmac
@@ -20,11 +21,21 @@ import urllib.parse
 
 from article_parser import fetch_content
 from bq_client import BQClient
+from categorizer import (
+    category_label,
+    category_limit,
+    group_by_category,
+    order_categories,
+)
 from config_loader import load_config
 from deepdiver import deepdive_article
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
-from notifier import format_favorites_blocks, send_no_news_notification, send_slack_notification
+from notifier import (
+    format_favorites_blocks,
+    send_no_news_notification,
+    send_slack_notification,
+)
 from pydantic import BaseModel
 from rss_fetcher import fetch_articles
 from summarizer import summarize_article
@@ -40,8 +51,6 @@ PROJECT_ID = os.environ["GCP_PROJECT_ID"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
-# MAX_NOTIFY: importance_scoreフィルタ後に実際に通知する件数の上限（未設定 = 5件）
-MAX_NOTIFY = int(os.environ.get("MAX_NOTIFY", 5))
 # IMPORTANCE_THRESHOLD: このスコア以上の記事のみ summaries に保存・通知対象とする
 IMPORTANCE_THRESHOLD = float(os.environ.get("IMPORTANCE_THRESHOLD", 0.5))
 
@@ -62,6 +71,7 @@ class SlackResponse(BaseModel):
 def _post_to_response_url(response_url: str, text: str) -> None:
     """Slack の response_url に遅延応答を POST する。"""
     import requests as _requests
+
     try:
         _requests.post(
             response_url,
@@ -119,7 +129,11 @@ def _run_pipeline(triggered_by: str = "scheduler") -> int:
     config = load_config()
     feeds: dict[str, str] = config.get("feeds", {})
     keywords: list[str] = config.get("keywords", [])
-    max_summarize: int = config.get("max_summarize", _DEFAULT_MAX_SUMMARIZE)
+    settings: dict = config.get("settings", {})
+    feed_categories: dict[str, str] = config.get("feed_categories", {})
+    max_summarize: int = settings.get("general", {}).get(
+        "max_summarize", _DEFAULT_MAX_SUMMARIZE
+    )
     log["keywords"] = keywords
 
     bq = BQClient(project=PROJECT_ID)
@@ -139,7 +153,9 @@ def _run_pipeline(triggered_by: str = "scheduler") -> int:
         if new_articles:
             # 3. 要約する件数を上限に絞る
             new_articles = new_articles[:max_summarize]
-            logger.info("[pipeline] limited to %d articles (max_summarize)", max_summarize)
+            logger.info(
+                "[pipeline] limited to %d articles (max_summarize)", max_summarize
+            )
 
             # 4. 本文取得
             for article in new_articles:
@@ -160,7 +176,9 @@ def _run_pipeline(triggered_by: str = "scheduler") -> int:
                         keywords=keywords,
                     )
                 except Exception as e:
-                    logger.warning("[pipeline] summarize failed for %s: %s", article["url"], e)
+                    logger.warning(
+                        "[pipeline] summarize failed for %s: %s", article["url"], e
+                    )
                     log["error_count"] += 1
                     continue
                 if result:
@@ -176,7 +194,9 @@ def _run_pipeline(triggered_by: str = "scheduler") -> int:
 
             # 7. importance_score によるフィルタリング
             relevant_summaries = [
-                s for s in summaries if s.get("importance_score", 0) >= IMPORTANCE_THRESHOLD
+                s
+                for s in summaries
+                if s.get("importance_score", 0) >= IMPORTANCE_THRESHOLD
             ]
             log["summaries_generated"] = len(relevant_summaries)
             logger.info(
@@ -189,7 +209,9 @@ def _run_pipeline(triggered_by: str = "scheduler") -> int:
             if relevant_summaries:
                 existing_summary_ids = bq.get_existing_summary_ids()
                 relevant_summaries = [
-                    s for s in relevant_summaries if s["article_id"] not in existing_summary_ids
+                    s
+                    for s in relevant_summaries
+                    if s["article_id"] not in existing_summary_ids
                 ]
             if relevant_summaries:
                 bq.insert_summaries(relevant_summaries)
@@ -205,20 +227,36 @@ def _run_pipeline(triggered_by: str = "scheduler") -> int:
             send_no_news_notification(SLACK_WEBHOOK_URL, "新着記事はありませんでした。")
             return 0
 
-        # 10. importance_score 降順で最大 MAX_NOTIFY 件を通知
-        top = sorted(unnotified, key=lambda x: x.get("importance_score", 0), reverse=True)[
-            :MAX_NOTIFY
-        ]
-        send_slack_notification(top, webhook_url=SLACK_WEBHOOK_URL)
-        logger.info("[pipeline] notified %d articles", len(top))
+        # 10. カテゴリ別にグルーピングし、カテゴリごとに通知
+        groups = group_by_category(unnotified, feed_categories)
+        notified_ids: list[str] = []
+        for category in order_categories(list(groups.keys()), settings):
+            items = sorted(
+                groups[category],
+                key=lambda x: x.get("importance_score", 0),
+                reverse=True,
+            )
+            top = items[: category_limit(category, settings)]
+            if not top:
+                continue
+            send_slack_notification(
+                top, SLACK_WEBHOOK_URL, header=category_label(category, settings)
+            )
+            notified_ids.extend(a["article_id"] for a in top)
+            logger.info(
+                "[pipeline] notified %d articles in category '%s'", len(top), category
+            )
 
-        # 11. 通知済みマーク
-        notified_ids = [a["article_id"] for a in top]
+        if not notified_ids:
+            send_no_news_notification(SLACK_WEBHOOK_URL, "新着記事はありませんでした。")
+            return 0
+
+        # 11. 通知済みマーク（全カテゴリの和集合）
         bq.mark_summaries_notified(notified_ids)
         logger.info("[pipeline] marked %d summaries as notified", len(notified_ids))
 
-        log["notified_count"] = len(top)
-        return len(top)
+        log["notified_count"] = len(notified_ids)
+        return len(notified_ids)
 
     except Exception as e:
         log["status"] = "error"
@@ -243,7 +281,9 @@ def _run_deepdive(article_id_prefix: str, response_url: str) -> None:
     if article_id_prefix:
         article = bq.get_article_by_id(article_id_prefix)
         if not article:
-            _post_to_response_url(response_url, f"ID `{article_id_prefix}` の記事が見つかりませんでした。")
+            _post_to_response_url(
+                response_url, f"ID `{article_id_prefix}` の記事が見つかりませんでした。"
+            )
             return
     else:
         article = bq.get_top_undived_article()
@@ -259,7 +299,9 @@ def _run_deepdive(article_id_prefix: str, response_url: str) -> None:
     cached = bq.get_deepdive(article_id)
     if cached:
         logger.info("[deepdive] cache hit for %s", article_id)
-        _post_to_response_url(response_url, f"*[深堀り] {title}*\n\n{cached}\n\n🔗 <{url}|元記事を読む>")
+        _post_to_response_url(
+            response_url, f"*[深堀り] {title}*\n\n{cached}\n\n🔗 <{url}|元記事を読む>"
+        )
         return
 
     # 3. 深堀り生成
@@ -270,7 +312,10 @@ def _run_deepdive(article_id_prefix: str, response_url: str) -> None:
         api_key=ANTHROPIC_API_KEY,
     )
     if not text:
-        _post_to_response_url(response_url, "深堀り生成に失敗しました。しばらく経ってから再試行してください。")
+        _post_to_response_url(
+            response_url,
+            "深堀り生成に失敗しました。しばらく経ってから再試行してください。",
+        )
         return
 
     # 4. キャッシュ保存
@@ -280,7 +325,9 @@ def _run_deepdive(article_id_prefix: str, response_url: str) -> None:
         logger.error("[deepdive] failed to cache deepdive: %s", e)
 
     # 5. 結果を送信
-    _post_to_response_url(response_url, f"*[深堀り] {title}*\n\n{text}\n\n🔗 <{url}|元記事を読む>")
+    _post_to_response_url(
+        response_url, f"*[深堀り] {title}*\n\n{text}\n\n🔗 <{url}|元記事を読む>"
+    )
     logger.info("[deepdive] completed for %s", article_id)
 
 
@@ -343,7 +390,10 @@ async def slack_actions(
         article_id = action.get("value", "")
         response_url = data.get("response_url", "")
         background_tasks.add_task(_run_deepdive, article_id, response_url)
-        return {"response_type": "ephemeral", "text": f":mag: 深堀り中です。しばらくお待ちください..."}
+        return {
+            "response_type": "ephemeral",
+            "text": f":mag: 深堀り中です。しばらくお待ちください...",
+        }
 
     return {}
 
@@ -351,6 +401,7 @@ async def slack_actions(
 def _run_show_favorites(response_url: str) -> None:
     """お気に入り一覧を取得して response_url に POST する。"""
     import requests as _requests
+
     bq = BQClient(project=PROJECT_ID)
     favorites = bq.get_favorites()
     if not favorites:
@@ -378,7 +429,9 @@ async def slack_favorites(
     form_data = urllib.parse.parse_qs(body.decode())
     response_url = form_data.get("response_url", [""])[0]
     background_tasks.add_task(_run_show_favorites, response_url)
-    return SlackResponse(response_type="ephemeral", text=":hourglass: お気に入り一覧を取得中...")
+    return SlackResponse(
+        response_type="ephemeral", text=":hourglass: お気に入り一覧を取得中..."
+    )
 
 
 @app.post("/slack/deepdive", response_model=SlackResponse)
@@ -393,10 +446,15 @@ async def slack_deepdive(
     article_id_prefix = form_data.get("text", [""])[0].strip()
     response_url = form_data.get("response_url", [""])[0]
     background_tasks.add_task(_run_deepdive, article_id_prefix, response_url)
-    msg = f"ID `{article_id_prefix}` の記事を深堀り中です..." if article_id_prefix else "最新記事を深堀り中です..."
+    msg = (
+        f"ID `{article_id_prefix}` の記事を深堀り中です..."
+        if article_id_prefix
+        else "最新記事を深堀り中です..."
+    )
     return SlackResponse(response_type="in_channel", text=f":mag: {msg}")
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8080)
