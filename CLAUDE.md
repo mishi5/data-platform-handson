@@ -162,3 +162,15 @@ news_pipeline/
 | `SLACK_WEBHOOK_URL` | Slack Incoming Webhook URL |
 | `SLACK_SIGNING_SECRET` | Slash command署名検証（空でも可） |
 | `MAX_ARTICLES` | 処理記事数上限（ローカル推奨: 5、本番: 20） |
+
+### Google Sheets 設定（news-pipeline-config）
+
+通知の分類・件数上限・表示名は Google Sheets で動的に管理する（コード変更不要）。
+
+- **feeds シート**: `URL | source | category` の3列。`category` 列でニュースの分類を指定（任意の文字列）。空欄は `other` 扱い。
+- **settings シート**: `group | key | value` の3列（namespace 方式）。`group` の出現順が通知順になる。
+  - `general / max_summarize`: 1実行で要約する最大件数
+  - `<category> / max_notify`: そのカテゴリの通知件数上限（未設定は5）
+  - `<category> / label`: Slack 通知のヘッダー表示名（未設定はカテゴリ名、`other` は `📰 その他`）
+
+通知は feeds の `category` ごとに独立した Slack メッセージとして送られる。カテゴリの追加・削除・件数変更は feeds/settings シートの編集だけで完結する。
