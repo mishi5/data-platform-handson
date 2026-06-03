@@ -88,7 +88,7 @@ def _load_keywords(spreadsheet) -> list[str]:
         return []
 
 
-def _load_settings(spreadsheet) -> dict:
+def _load_settings(spreadsheet) -> dict[str, dict]:
     """settings シートを {group: {key: value}} のネスト dict で返す。
 
     シートは group | key | value の3列。value は int 変換可能なら int 化する。

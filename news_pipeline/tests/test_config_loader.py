@@ -4,11 +4,21 @@ from collector.config_loader import _load_feed_categories, _load_settings
 
 
 def _spreadsheet_with(sheet_name, values):
-    """worksheet(sheet_name).get_all_values() が values を返す擬似 spreadsheet。"""
+    """worksheet(sheet_name).get_all_values() が values を返す擬似 spreadsheet。
+
+    想定外のシート名で呼ばれた場合は KeyError を投げ、対象関数が
+    正しいシートを参照していることをテストで担保する。
+    """
     ws = MagicMock()
     ws.get_all_values.return_value = values
+
+    def _worksheet(name):
+        if name != sheet_name:
+            raise KeyError(name)
+        return ws
+
     ss = MagicMock()
-    ss.worksheet.return_value = ws
+    ss.worksheet.side_effect = _worksheet
     return ss
 
 
