@@ -82,16 +82,33 @@ resource "google_cloud_run_service_iam_member" "allow_unauthenticated" {
   member   = "allUsers"
 }
 
-# Cloud Scheduler（平日7:30 JST = 22:30 UTC 前日）
-resource "google_cloud_scheduler_job" "news_pipeline_trigger" {
-  name      = "news-pipeline-daily"
-  schedule  = "30 22 * * 0-4"
+# Cloud Scheduler（収集: 毎日 6:00 JST = 21:00 UTC 前日）
+resource "google_cloud_scheduler_job" "news_pipeline_collect" {
+  name      = "news-pipeline-collect"
+  schedule  = "0 21 * * *"
   time_zone = "UTC"
   region    = var.region
 
   http_target {
     http_method = "POST"
-    uri         = "${google_cloud_run_v2_service.news_collector.uri}/"
+    uri         = "${google_cloud_run_v2_service.news_collector.uri}/collect"
+
+    oidc_token {
+      service_account_email = google_service_account.scheduler.email
+    }
+  }
+}
+
+# Cloud Scheduler（通知: 毎日 6:30 JST = 21:30 UTC 前日）
+resource "google_cloud_scheduler_job" "news_pipeline_notify" {
+  name      = "news-pipeline-notify"
+  schedule  = "30 21 * * *"
+  time_zone = "UTC"
+  region    = var.region
+
+  http_target {
+    http_method = "POST"
+    uri         = "${google_cloud_run_v2_service.news_collector.uri}/notify"
 
     oidc_token {
       service_account_email = google_service_account.scheduler.email
