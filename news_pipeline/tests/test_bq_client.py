@@ -27,8 +27,12 @@ def test_get_unnotified_summaries_returns_list(mock_bq_class):
 
     mock_row = MagicMock()
     _data = {
-        "article_id": "abc123", "title": "Test", "url": "https://example.com",
-        "source": "Test Source", "summary": "summary text", "importance_score": 0.8,
+        "article_id": "abc123",
+        "title": "Test",
+        "url": "https://example.com",
+        "source": "Test Source",
+        "summary": "summary text",
+        "importance_score": 0.8,
     }
     mock_row.keys.return_value = list(_data.keys())
     mock_row.__getitem__ = lambda self, key: _data[key]
@@ -97,8 +101,17 @@ def test_insert_raw_articles_calls_insert_rows(mock_bq_class):
     mock_client.insert_rows_json.return_value = []  # no errors
 
     bq = BQClient(project="test-project")
-    articles = [{"article_id": "abc", "title": "T", "url": "https://x.com", "source": "s",
-                 "published_at": None, "collected_at": "2026-03-08T10:00:00Z", "content": "body"}]
+    articles = [
+        {
+            "article_id": "abc",
+            "title": "T",
+            "url": "https://x.com",
+            "source": "s",
+            "published_at": None,
+            "collected_at": "2026-03-08T10:00:00Z",
+            "content": "body",
+        }
+    ]
     bq.insert_raw_articles(articles)
 
     mock_client.insert_rows_json.assert_called_once()
@@ -266,8 +279,73 @@ def test_insert_summaries_calls_insert_rows(mock_bq_class):
     mock_client.insert_rows_json.return_value = []
 
     bq = BQClient(project="test-project")
-    summaries = [{"article_id": "abc", "title": "T", "url": "u", "source": "s",
-                  "summary": "sum", "tags": ["bigquery"], "importance_score": 0.9}]
+    summaries = [
+        {
+            "article_id": "abc",
+            "title": "T",
+            "url": "u",
+            "source": "s",
+            "summary": "sum",
+            "tags": ["bigquery"],
+            "importance_score": 0.9,
+        }
+    ]
     bq.insert_summaries(summaries)
 
     mock_client.insert_rows_json.assert_called_once()
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_get_pending_articles_filters_pending_and_retry(mock_bq_class):
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+
+    _data = {
+        "article_id": "p1",
+        "url": "https://example.com/p1",
+        "title": "Pending",
+        "source": "Src",
+        "retry_count": 1,
+    }
+    mock_row = MagicMock()
+    mock_row.keys.return_value = list(_data.keys())
+    mock_row.__getitem__ = lambda self, key: _data[key]
+    mock_client.query.return_value.result.return_value = [mock_row]
+
+    bq = BQClient(project="test-project")
+    result = bq.get_pending_articles(max_retries=3)
+
+    assert isinstance(result, list)
+    assert result[0]["article_id"] == "p1"
+    query_arg = mock_client.query.call_args[0][0]
+    assert "raw_articles" in query_arg
+    assert "content_status" in query_arg
+    assert "pending" in query_arg
+    assert "retry_count" in query_arg
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_update_article_content_runs_update_dml(mock_bq_class):
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+
+    bq = BQClient(project="test-project")
+    bq.update_article_content("p1", "body text", "ok", 1)
+
+    query_arg = mock_client.query.call_args[0][0]
+    assert "UPDATE" in query_arg
+    assert "raw_articles" in query_arg
+    assert "content_status" in query_arg
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_update_article_content_swallows_streaming_buffer_error(mock_bq_class):
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+    mock_client.query.return_value.result.side_effect = Exception(
+        "UPDATE or DELETE statement over table would affect rows in the streaming buffer"
+    )
+
+    bq = BQClient(project="test-project")
+    # 例外を送出せず黙って握りつぶす（pending のまま次回に回す）
+    bq.update_article_content("p1", "body text", "ok", 1)

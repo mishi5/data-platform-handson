@@ -1,4 +1,5 @@
 """BigQuery への読み書きを担当するモジュール。データセット: tech_news。"""
+
 import logging
 from google.cloud import bigquery
 
@@ -46,6 +47,7 @@ class BQClient:
         if not article_ids:
             return
         from datetime import datetime, timezone
+
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         rows = [{"article_id": aid, "notified_at": now} for aid in article_ids]
         table_id = f"{self.project}.{DATASET}.notification_log"
@@ -61,6 +63,53 @@ class BQClient:
         if errors:
             logger.error("[bq_client] insert_raw_articles errors: %s", errors)
             raise RuntimeError(f"BigQuery insert_raw_articles failed: {errors}")
+
+    def get_pending_articles(self, max_retries: int) -> list[dict]:
+        """本文未取得（content_status='pending'）かつリトライ上限未満の記事を返す。"""
+        query = (
+            f"SELECT article_id, url, title, source, retry_count"
+            f" FROM `{self.project}.{DATASET}.raw_articles`"
+            f" WHERE content_status = 'pending' AND retry_count < @max_retries"
+        )
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("max_retries", "INT64", max_retries)
+            ]
+        )
+        rows = self.client.query(query, job_config=job_config).result()
+        return [dict(row) for row in rows]
+
+    def update_article_content(
+        self,
+        article_id: str,
+        content: str | None,
+        content_status: str,
+        retry_count: int,
+    ) -> None:
+        """pending 記事の本文・ステータス・retry_count を DML UPDATE で更新する。
+
+        streaming buffer 制約等で UPDATE が失敗しても送出せずログのみ。
+        その記事は pending のまま残り、次回実行（buffer flush 後）で再試行される。
+        """
+        query = (
+            f"UPDATE `{self.project}.{DATASET}.raw_articles`"
+            f" SET content = @content, content_status = @status, retry_count = @retry"
+            f" WHERE article_id = @aid"
+        )
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("content", "STRING", content),
+                bigquery.ScalarQueryParameter("status", "STRING", content_status),
+                bigquery.ScalarQueryParameter("retry", "INT64", retry_count),
+                bigquery.ScalarQueryParameter("aid", "STRING", article_id),
+            ]
+        )
+        try:
+            self.client.query(query, job_config=job_config).result()
+        except Exception as e:
+            logger.warning(
+                "[bq_client] update_article_content skipped for %s: %s", article_id, e
+            )
 
     def insert_summaries(self, summaries: list[dict]) -> None:
         """Claude 生成サマリーを summaries テーブルに挿入する。"""
@@ -85,10 +134,12 @@ class BQClient:
     def insert_deepdive(self, article_id: str, text: str) -> None:
         """深堀り結果を deepdives テーブルに保存する。"""
         from datetime import datetime, timezone
+
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         table_id = f"{self.project}.{DATASET}.deepdives"
         errors = self.client.insert_rows_json(
-            table_id, [{"article_id": article_id, "deepdive_text": text, "created_at": now}]
+            table_id,
+            [{"article_id": article_id, "deepdive_text": text, "created_at": now}],
         )
         if errors:
             logger.error("[bq_client] insert_deepdive errors: %s", errors)
@@ -147,9 +198,12 @@ class BQClient:
     def insert_favorite(self, article_id: str) -> None:
         """記事をお気に入りテーブルに追加する。"""
         from datetime import datetime, timezone
+
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         table_id = f"{self.project}.{DATASET}.favorites"
-        errors = self.client.insert_rows_json(table_id, [{"article_id": article_id, "favorited_at": now}])
+        errors = self.client.insert_rows_json(
+            table_id, [{"article_id": article_id, "favorited_at": now}]
+        )
         if errors:
             logger.error("[bq_client] insert_favorite errors: %s", errors)
             raise RuntimeError(f"BigQuery favorites insert failed: {errors}")
