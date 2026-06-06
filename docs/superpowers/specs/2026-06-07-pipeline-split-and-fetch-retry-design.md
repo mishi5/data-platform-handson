@@ -151,7 +151,9 @@ raw_articles の schema に NULLABLE 列を2つ追加（既存行は NULL = 処�
 ## エラー処理 / エッジケース
 
 - **既存 raw_articles 行（content_status=NULL）**: `get_pending_articles` は `content_status='pending'` 条件なので対象外。再取得も要約もされず現状維持（既に処理済みのため正しい）。
-- **streaming buffer 制約**: 挿入直後の行は数分 DML UPDATE 不可。pending の更新は次回実行（数時間後）なので抵触しない。
+- **streaming buffer 制約**: 挿入直後の行は数分 DML UPDATE 不可。通常運用では pending の更新は次回実行（翌日）なので抵触しない。ただし手動で `/collect` を短時間に連続実行すると、前回 INSERT した pending 行が buffer に残ったまま UPDATE しようとして `UPDATE or DELETE ... would affect rows in the streaming buffer` エラーになり得る。
+  - **対処**: `update_article_content` を try/except で囲い、エラー時はログを出して**当該記事を pending のまま残す**（retry_count を進めない）。buffer が flush された次回実行で自然に成功する＝自己修復。再取得に成功していた本文はその回では破棄され次回再取得されるが、正しさは保たれる。
+  - `get_pending_articles` は SELECT のため buffer 行も問題なく読める。制約に掛かるのは DML UPDATE のみ。
 - **DML クォータ**: pending 件数は失敗分のみで小さいため、1行ずつの UPDATE でも問題ない想定。多数同時更新が必要になれば MERGE に変更可。
 - **collect と notify の時間差**: notify(6:30) は collect(6:00) の要約完了後に走る前提。collect が30分以上かかった場合、その日の新着は翌日の notify で配信される（バックログとして残るだけで欠落はしない）。
 - **片方のスケジューラ失敗**: collect 失敗時は当日の新着が無いだけ。notify 失敗時は未通知が翌日に繰り越し。いずれも欠落しない。
@@ -159,7 +161,7 @@ raw_articles の schema に NULLABLE 列を2つ追加（既存行は NULL = 処�
 ## テスト
 
 - `article_parser`: UA 付与、(text, ok) の戻り（成功/HTTPエラー/本文空）の分岐
-- `bq_client`: `get_pending_articles` のクエリ条件、`update_article_content` の DML 生成、`insert_raw_articles` が新列を含むこと（MagicMock でクエリ/挿入引数を検証）
+- `bq_client`: `get_pending_articles` のクエリ条件、`update_article_content` の DML 生成、`insert_raw_articles` が新列を含むこと（MagicMock でクエリ/挿入引数を検証）。`update_article_content` が UPDATE 例外時に送出せずログのみで握りつぶすこと（buffer 制約フォールバック）
 - collect の要約対象選定（新着ok + pending→ok）と pending リトライの状態遷移（pending→ok / pending→pending / pending→failed）を純粋ロジックとして切り出せる部分はユニットテスト
 - 既存テストの追従（`_run_pipeline` 分割に伴うシグネチャ変更、`fetch_content` 戻り値変更）
 
