@@ -15,7 +15,9 @@ resource "google_bigquery_table" "raw_articles" {
     { name = "source",       type = "STRING",    mode = "REQUIRED" },
     { name = "published_at", type = "TIMESTAMP", mode = "NULLABLE" },
     { name = "collected_at", type = "TIMESTAMP", mode = "REQUIRED" },
-    { name = "content",      type = "STRING",    mode = "NULLABLE" },
+    { name = "content",        type = "STRING",    mode = "NULLABLE" },
+    { name = "content_status", type = "STRING",    mode = "NULLABLE" },
+    { name = "retry_count",    type = "INT64",     mode = "NULLABLE" },
   ])
 }
 
