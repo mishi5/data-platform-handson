@@ -1,12 +1,13 @@
 """
 news_pipeline メインモジュール。
 
-FastAPI サーバーとして起動し、以下の3エンドポイントを提供する:
-  POST /              - Cloud Scheduler からの定期実行トリガー
-  POST /slack         - Slack スラッシュコマンド（/news-update）からの手動実行トリガー
+FastAPI サーバーとして起動し、以下のエンドポイントを提供する:
+  POST /collect       - Cloud Scheduler からの収集トリガー（RSS取得〜要約〜保存）
+  POST /notify        - Cloud Scheduler からの通知トリガー（未通知サマリーを通知）
+  POST /slack         - Slack スラッシュコマンド（/news-update）からの手動通知トリガー
   POST /slack/deepdive - Slack スラッシュコマンド（/news-deepdive）からの深堀りトリガー
 
-パイプライン処理は _run_pipeline() に集約されており、
+収集処理は _run_collect()、通知処理は _run_notify() に分離されており、
 Slack エンドポイントではタイムアウト対策として BackgroundTasks で実行する。
 """
 
@@ -31,6 +32,7 @@ from config_loader import load_config
 from deepdiver import deepdive_article
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
+from fetch_retry import next_fetch_state
 from notifier import (
     format_favorites_blocks,
     send_no_news_notification,
@@ -51,11 +53,12 @@ PROJECT_ID = os.environ["GCP_PROJECT_ID"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
-# IMPORTANCE_THRESHOLD: このスコア以上の記事のみ summaries に保存・通知対象とする
-IMPORTANCE_THRESHOLD = float(os.environ.get("IMPORTANCE_THRESHOLD", 0.5))
 
 # max_summarize: 1実行で要約する記事の最大件数（Google Sheetsのsettingsシートから取得）
 _DEFAULT_MAX_SUMMARIZE = 10
+# settings シートの general から取得するデフォルト値
+_DEFAULT_IMPORTANCE_THRESHOLD = 0.65
+_DEFAULT_MAX_CONTENT_RETRIES = 3
 
 
 class PipelineResponse(BaseModel):
@@ -104,8 +107,8 @@ async def verify_slack(request: Request) -> None:
         raise HTTPException(status_code=403, detail="invalid signature")
 
 
-def _run_pipeline(triggered_by: str = "scheduler") -> int:
-    """パイプライン実行。通知件数を返す。"""
+def _run_collect(triggered_by: str = "scheduler") -> int:
+    """収集パイプライン。RSS取得〜要約〜summaries保存。新着要約件数を返す。"""
     import uuid
     from datetime import datetime, timezone
 
@@ -130,9 +133,13 @@ def _run_pipeline(triggered_by: str = "scheduler") -> int:
     feeds: dict[str, str] = config.get("feeds", {})
     keywords: list[str] = config.get("keywords", [])
     settings: dict = config.get("settings", {})
-    feed_categories: dict[str, str] = config.get("feed_categories", {})
-    max_summarize: int = settings.get("general", {}).get(
-        "max_summarize", _DEFAULT_MAX_SUMMARIZE
+    general: dict = settings.get("general", {})
+    max_summarize: int = int(general.get("max_summarize", _DEFAULT_MAX_SUMMARIZE))
+    importance_threshold: float = float(
+        general.get("importance_threshold", _DEFAULT_IMPORTANCE_THRESHOLD)
+    )
+    max_content_retries: int = int(
+        general.get("max_content_retries", _DEFAULT_MAX_CONTENT_RETRIES)
     )
     log["keywords"] = keywords
 
@@ -142,86 +149,156 @@ def _run_pipeline(triggered_by: str = "scheduler") -> int:
         # 1. RSS 取得
         articles = fetch_articles(feeds)
         log["articles_fetched"] = len(articles)
-        logger.info("[pipeline] fetched %d articles from RSS", len(articles))
+        logger.info("[collect] fetched %d articles from RSS", len(articles))
 
-        # 2. dedup（raw_articlesベース）
+        # 2. dedup（raw_articles ベース）→ 要約上限で絞る
         existing_urls = bq.get_existing_urls()
         new_articles = [a for a in articles if a["url"] not in existing_urls]
         log["new_articles"] = len(new_articles)
-        logger.info("[pipeline] %d new articles after dedup", len(new_articles))
+        new_articles = new_articles[:max_summarize]
+        logger.info(
+            "[collect] %d new articles (limited to %d)",
+            log["new_articles"],
+            len(new_articles),
+        )
 
+        # to_summarize: この実行で本文取得に成功した記事（新着 + pending→ok）
+        to_summarize: list[dict] = []
+
+        # 3. 新着の本文取得（UA付き・1回）
+        for article in new_articles:
+            text, ok = fetch_content(article["url"])
+            status, retry = next_fetch_state(ok, 0, max_content_retries)
+            article["content"] = text
+            article["content_status"] = status
+            article["retry_count"] = retry
+            if status == "ok" and text:
+                to_summarize.append(article)
+
+        # 4. raw_articles 保存（content_status / retry_count 込み）
         if new_articles:
-            # 3. 要約する件数を上限に絞る
-            new_articles = new_articles[:max_summarize]
-            logger.info(
-                "[pipeline] limited to %d articles (max_summarize)", max_summarize
-            )
-
-            # 4. 本文取得
-            for article in new_articles:
-                article["content"] = fetch_content(article["url"])
-
-            # 5. raw_articles 保存
             bq.insert_raw_articles(new_articles)
-            logger.info("[pipeline] saved %d to raw_articles", len(new_articles))
+            logger.info("[collect] saved %d to raw_articles", len(new_articles))
 
-            # 6. 要約生成（全新着記事）
-            summaries = []
-            for article in new_articles:
-                try:
-                    result = summarize_article(
-                        title=article["title"],
-                        content=article["content"] or "",
-                        api_key=ANTHROPIC_API_KEY,
-                        keywords=keywords,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "[pipeline] summarize failed for %s: %s", article["url"], e
-                    )
-                    log["error_count"] += 1
-                    continue
-                if result:
-                    summaries.append(
-                        {
-                            "article_id": article["article_id"],
-                            "title": article["title"],
-                            "url": article["url"],
-                            "source": article["source"],
-                            **result,
-                        }
-                    )
+        # 5. pending 記事の再取得（次回繰り越し分）
+        pending = bq.get_pending_articles(max_content_retries)
+        logger.info("[collect] %d pending articles to retry", len(pending))
+        for p in pending:
+            text, ok = fetch_content(p["url"])
+            status, retry = next_fetch_state(
+                ok, int(p.get("retry_count", 0)), max_content_retries
+            )
+            bq.update_article_content(p["article_id"], text, status, retry)
+            if status == "ok" and text:
+                to_summarize.append(
+                    {
+                        "article_id": p["article_id"],
+                        "title": p["title"],
+                        "url": p["url"],
+                        "source": p["source"],
+                        "content": text,
+                    }
+                )
 
-            # 7. importance_score によるフィルタリング
+        # 6. 要約生成（本文取得に成功した記事のみ）
+        summaries = []
+        for article in to_summarize:
+            try:
+                result = summarize_article(
+                    title=article["title"],
+                    content=article["content"] or "",
+                    api_key=ANTHROPIC_API_KEY,
+                    keywords=keywords,
+                )
+            except Exception as e:
+                logger.warning(
+                    "[collect] summarize failed for %s: %s", article["url"], e
+                )
+                log["error_count"] += 1
+                continue
+            if result:
+                summaries.append(
+                    {
+                        "article_id": article["article_id"],
+                        "title": article["title"],
+                        "url": article["url"],
+                        "source": article["source"],
+                        **result,
+                    }
+                )
+
+        # 7. importance_threshold フィルタ
+        relevant_summaries = [
+            s for s in summaries if s.get("importance_score", 0) >= importance_threshold
+        ]
+        log["summaries_generated"] = len(relevant_summaries)
+        logger.info(
+            "[collect] %d relevant summaries (importance_score >= %.2f)",
+            len(relevant_summaries),
+            importance_threshold,
+        )
+
+        # 8. summaries 保存（article_id 重複を排除）
+        if relevant_summaries:
+            existing_summary_ids = bq.get_existing_summary_ids()
             relevant_summaries = [
                 s
-                for s in summaries
-                if s.get("importance_score", 0) >= IMPORTANCE_THRESHOLD
+                for s in relevant_summaries
+                if s["article_id"] not in existing_summary_ids
             ]
-            log["summaries_generated"] = len(relevant_summaries)
-            logger.info(
-                "[pipeline] %d relevant summaries (importance_score >= %.1f)",
-                len(relevant_summaries),
-                IMPORTANCE_THRESHOLD,
-            )
+        if relevant_summaries:
+            bq.insert_summaries(relevant_summaries)
+            logger.info("[collect] saved %d summaries", len(relevant_summaries))
 
-            # 8. summaries 保存（関連あり記事のみ・article_id 重複を排除）
-            if relevant_summaries:
-                existing_summary_ids = bq.get_existing_summary_ids()
-                relevant_summaries = [
-                    s
-                    for s in relevant_summaries
-                    if s["article_id"] not in existing_summary_ids
-                ]
-            if relevant_summaries:
-                bq.insert_summaries(relevant_summaries)
-                logger.info("[pipeline] saved %d summaries", len(relevant_summaries))
-        else:
-            logger.info("[pipeline] no new articles, checking unnotified summaries")
+        return log["summaries_generated"]
 
-        # 9. 未通知サマリーを取得して通知（新着ありなしに関わらず実施）
+    except Exception as e:
+        log["status"] = "error"
+        log["error_message"] = str(e)
+        logger.error("[collect] pipeline error: %s", e)
+        raise
+
+    finally:
+        log["finished_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            bq.insert_pipeline_log(log)
+            logger.info("[collect] saved pipeline log run_id=%s", run_id)
+        except Exception as e:
+            logger.error("[collect] failed to save pipeline log: %s", e)
+
+
+def _run_notify(triggered_by: str = "scheduler") -> int:
+    """通知パイプライン。未通知サマリーをカテゴリ別に Slack 通知。通知件数を返す。"""
+    import uuid
+    from datetime import datetime, timezone
+
+    run_id = str(uuid.uuid4())
+    started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    log: dict = {
+        "run_id": run_id,
+        "triggered_by": triggered_by,
+        "started_at": started_at,
+        "finished_at": None,
+        "articles_fetched": 0,
+        "new_articles": 0,
+        "summaries_generated": 0,
+        "notified_count": 0,
+        "error_count": 0,
+        "status": "success",
+        "error_message": None,
+        "keywords": [],
+    }
+
+    config = load_config()
+    settings: dict = config.get("settings", {})
+    feed_categories: dict[str, str] = config.get("feed_categories", {})
+
+    bq = BQClient(project=PROJECT_ID)
+
+    try:
+        # 9. 未通知サマリーを取得
         unnotified = bq.get_unnotified_summaries()
-        logger.info("[pipeline] %d unnotified summaries in BQ", len(unnotified))
+        logger.info("[notify] %d unnotified summaries in BQ", len(unnotified))
 
         if not unnotified:
             send_no_news_notification(SLACK_WEBHOOK_URL, "新着記事はありませんでした。")
@@ -244,7 +321,7 @@ def _run_pipeline(triggered_by: str = "scheduler") -> int:
             )
             notified_ids.extend(a["article_id"] for a in top)
             logger.info(
-                "[pipeline] notified %d articles in category '%s'", len(top), category
+                "[notify] notified %d articles in category '%s'", len(top), category
             )
 
         if not notified_ids:
@@ -253,7 +330,7 @@ def _run_pipeline(triggered_by: str = "scheduler") -> int:
 
         # 11. 通知済みマーク（全カテゴリの和集合）
         bq.mark_summaries_notified(notified_ids)
-        logger.info("[pipeline] marked %d summaries as notified", len(notified_ids))
+        logger.info("[notify] marked %d summaries as notified", len(notified_ids))
 
         log["notified_count"] = len(notified_ids)
         return len(notified_ids)
@@ -261,16 +338,16 @@ def _run_pipeline(triggered_by: str = "scheduler") -> int:
     except Exception as e:
         log["status"] = "error"
         log["error_message"] = str(e)
-        logger.error("[pipeline] pipeline error: %s", e)
+        logger.error("[notify] pipeline error: %s", e)
         raise
 
     finally:
         log["finished_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         try:
             bq.insert_pipeline_log(log)
-            logger.info("[pipeline] saved pipeline log run_id=%s", run_id)
+            logger.info("[notify] saved pipeline log run_id=%s", run_id)
         except Exception as e:
-            logger.error("[pipeline] failed to save pipeline log: %s", e)
+            logger.error("[notify] failed to save pipeline log: %s", e)
 
 
 def _run_deepdive(article_id_prefix: str, response_url: str) -> None:
@@ -331,10 +408,17 @@ def _run_deepdive(article_id_prefix: str, response_url: str) -> None:
     logger.info("[deepdive] completed for %s", article_id)
 
 
-@app.post("/", response_model=PipelineResponse)
-async def run_pipeline():
-    """Cloud Scheduler からの定期実行エンドポイント。パイプラインを同期実行する。"""
-    notified = await asyncio.to_thread(_run_pipeline)
+@app.post("/collect", response_model=PipelineResponse)
+async def collect():
+    """Cloud Scheduler からの収集トリガー。収集〜要約を同期実行する。"""
+    summarized = await asyncio.to_thread(_run_collect)
+    return PipelineResponse(status="ok", notified=summarized)
+
+
+@app.post("/notify", response_model=PipelineResponse)
+async def notify():
+    """Cloud Scheduler からの通知トリガー。未通知サマリーを通知する。"""
+    notified = await asyncio.to_thread(_run_notify)
     return PipelineResponse(status="ok", notified=notified)
 
 
@@ -344,10 +428,10 @@ async def slack_command(
     _: None = Depends(verify_slack),
 ):
     """Slack スラッシュコマンド（/news-update）のエンドポイント。"""
-    background_tasks.add_task(_run_pipeline, "slack_command")
+    background_tasks.add_task(_run_notify, "slack_command")
     return SlackResponse(
         response_type="in_channel",
-        text=":hourglass: ニュースを収集中です。しばらくお待ちください...",
+        text=":hourglass: 未通知ニュースを送信中です...",
     )
 
 
