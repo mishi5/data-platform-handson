@@ -369,6 +369,8 @@ def test_get_outdated_summaries_filters_version(mock_bq_class):
     assert "summaries" in q
     assert "raw_articles" in q
     assert "scoring_version" in q
+    assert "LEFT JOIN" in q
+    assert "LIMIT" in q
 
 
 @patch("collector.bq_client.bigquery.Client")
