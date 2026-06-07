@@ -6,9 +6,10 @@
 
 ```
 Cloud Run Service (news-collector)
-  POST /collect  ← スケジューラ（毎日6:00 JST）: 収集〜要約
-  POST /notify   ← スケジューラ（毎日6:30 JST）: 通知
-  POST /slack    ← Slack スラッシュコマンド（/news-update）: 通知のみ
+  POST /collect     ← スケジューラ（毎日6:00 JST）: 収集〜要約
+  POST /notify      ← スケジューラ（毎日6:30 JST）: 通知
+  POST /recalculate ← 手動: importance_score を現行ロジックで再採点（scoring_version 差分）
+  POST /slack       ← Slack スラッシュコマンド（/news-update）: 通知のみ
 
 【/collect】
 RSS Fetch → dedup（raw_articles） → 本文取得（失敗は pending で次回再取得）→ raw_articles 保存
@@ -232,7 +233,7 @@ gcloud logging read \
 | テーブル | 用途 |
 |---------|------|
 | `tech_news.raw_articles` | 収集した記事の原文（dedup の基準）。`content_status`（ok/pending/failed）と `retry_count` で本文取得リトライを管理 |
-| `tech_news.summaries` | Claude 生成サマリー（importance_score 閾値以上のみ） |
+| `tech_news.summaries` | Claude 生成サマリー（importance_score 閾値以上のみ）。`scoring_version` でスコアロジックの版を管理（/recalculate で再採点） |
 | `tech_news.notification_log` | Slack 通知済み article_id の記録 |
 | `tech_news.article_chunks` | 将来の RAG 検索用（現在は空） |
 
@@ -254,4 +255,4 @@ importance_score の下限・通知件数上限・本文リトライ上限は `s
 |--------|------|---------|
 | `feeds` | RSS フィード URL・ソース名・category（通知の分類） | 次回実行時（デプロイ不要） |
 | `keywords` | importance_score 判定の基準キーワード | 次回実行時（デプロイ不要） |
-| `settings` | `general/max_summarize`（要約件数上限、デフォルト 10）、`general/importance_threshold`（summaries に残す importance_score の下限、デフォルト 0.65）、`general/max_content_retries`（本文取得の最大リトライ回数、デフォルト 3）、`<category>/max_notify`（カテゴリ別通知上限、デフォルト 5）、`<category>/label`（Slack ヘッダー表示名） | 次回実行時（デプロイ不要） |
+| `settings` | `general/max_summarize`（要約件数上限、デフォルト 10）、`general/importance_threshold`（summaries に残す importance_score の下限、デフォルト 0.65）、`general/max_content_retries`（本文取得の最大リトライ回数、デフォルト 3）、`general/recalculate_limit`（1回の /recalculate で再採点する最大件数、デフォルト 50）、`<category>/max_notify`（カテゴリ別通知上限、デフォルト 5）、`<category>/label`（Slack ヘッダー表示名） | 次回実行時（デプロイ不要） |
