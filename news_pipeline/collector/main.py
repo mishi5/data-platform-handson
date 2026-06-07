@@ -40,7 +40,7 @@ from notifier import (
 )
 from pydantic import BaseModel
 from rss_fetcher import fetch_articles
-from summarizer import summarize_article
+from summarizer import SCORING_VERSION, score_article, summarize_article
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
@@ -59,6 +59,7 @@ _DEFAULT_MAX_SUMMARIZE = 10
 # settings シートの general から取得するデフォルト値
 _DEFAULT_IMPORTANCE_THRESHOLD = 0.65
 _DEFAULT_MAX_CONTENT_RETRIES = 3
+_DEFAULT_RECALCULATE_LIMIT = 50
 
 
 class PipelineResponse(BaseModel):
@@ -223,6 +224,7 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
                         "title": article["title"],
                         "url": article["url"],
                         "source": article["source"],
+                        "scoring_version": SCORING_VERSION,
                         **result,
                     }
                 )
@@ -350,6 +352,86 @@ def _run_notify(triggered_by: str = "scheduler") -> int:
             logger.error("[notify] failed to save pipeline log: %s", e)
 
 
+def _run_recalculate(triggered_by: str = "manual") -> int:
+    """既存 summaries の importance_score を現行 SCORING_VERSION で再計算する。成功件数を返す。"""
+    import uuid
+    from datetime import datetime, timezone
+
+    run_id = str(uuid.uuid4())
+    started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    log: dict = {
+        "run_id": run_id,
+        "triggered_by": triggered_by,
+        "started_at": started_at,
+        "finished_at": None,
+        "articles_fetched": 0,
+        "new_articles": 0,
+        "summaries_generated": 0,
+        "notified_count": 0,
+        "error_count": 0,
+        "status": "success",
+        "error_message": None,
+        "keywords": [],
+    }
+
+    config = load_config()
+    keywords: list[str] = config.get("keywords", [])
+    settings: dict = config.get("settings", {})
+    general: dict = settings.get("general", {})
+    recalculate_limit: int = int(
+        general.get("recalculate_limit", _DEFAULT_RECALCULATE_LIMIT)
+    )
+    log["keywords"] = keywords
+
+    bq = BQClient(project=PROJECT_ID)
+
+    try:
+        rows = bq.get_outdated_summaries(SCORING_VERSION, recalculate_limit)
+        logger.info(
+            "[recalculate] %d outdated summaries (version < %d)",
+            len(rows),
+            SCORING_VERSION,
+        )
+
+        recalculated = 0
+        for row in rows:
+            score = score_article(
+                title=row["title"],
+                content=row.get("content") or "",
+                api_key=ANTHROPIC_API_KEY,
+                keywords=keywords,
+            )
+            if score is None:
+                log["error_count"] += 1
+                continue
+            try:
+                bq.update_summary_score(row["article_id"], score, SCORING_VERSION)
+                recalculated += 1
+            except Exception as e:
+                logger.warning(
+                    "[recalculate] update failed for %s: %s", row["article_id"], e
+                )
+                log["error_count"] += 1
+
+        log["summaries_generated"] = recalculated
+        logger.info("[recalculate] recalculated %d summaries", recalculated)
+        return recalculated
+
+    except Exception as e:
+        log["status"] = "error"
+        log["error_message"] = str(e)
+        logger.error("[recalculate] error: %s", e)
+        raise
+
+    finally:
+        log["finished_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            bq.insert_pipeline_log(log)
+            logger.info("[recalculate] saved pipeline log run_id=%s", run_id)
+        except Exception as e:
+            logger.error("[recalculate] failed to save pipeline log: %s", e)
+
+
 def _run_deepdive(article_id_prefix: str, response_url: str) -> None:
     """深堀り処理。完了後に response_url へ結果を POST する。"""
     bq = BQClient(project=PROJECT_ID)
@@ -420,6 +502,13 @@ async def notify():
     """Cloud Scheduler からの通知トリガー。未通知サマリーを通知する。"""
     notified = await asyncio.to_thread(_run_notify)
     return PipelineResponse(status="ok", notified=notified)
+
+
+@app.post("/recalculate", response_model=PipelineResponse)
+async def recalculate():
+    """importance_score を現行ロジックで再計算する手動エンドポイント。"""
+    n = await asyncio.to_thread(_run_recalculate)
+    return PipelineResponse(status="ok", notified=n)
 
 
 @app.post("/slack", response_model=SlackResponse)
