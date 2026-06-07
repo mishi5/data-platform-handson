@@ -34,6 +34,7 @@ resource "google_bigquery_table" "summaries" {
     { name = "summary",          type = "STRING",  mode = "NULLABLE" },
     { name = "tags",             type = "STRING",  mode = "REPEATED" },
     { name = "importance_score", type = "FLOAT64", mode = "NULLABLE" },
+    { name = "scoring_version",  type = "INT64",   mode = "NULLABLE" },
   ])
 }
 
