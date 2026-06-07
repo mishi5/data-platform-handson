@@ -349,3 +349,38 @@ def test_update_article_content_swallows_streaming_buffer_error(mock_bq_class):
     bq = BQClient(project="test-project")
     # 例外を送出せず黙って握りつぶす（pending のまま次回に回す）
     bq.update_article_content("p1", "body text", "ok", 1)
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_get_outdated_summaries_filters_version(mock_bq_class):
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+    _data = {"article_id": "a1", "title": "T", "content": "body", "source": "S"}
+    mock_row = MagicMock()
+    mock_row.keys.return_value = list(_data.keys())
+    mock_row.__getitem__ = lambda self, key: _data[key]
+    mock_client.query.return_value.result.return_value = [mock_row]
+
+    bq = BQClient(project="test-project")
+    result = bq.get_outdated_summaries(version=2, limit=50)
+
+    assert result[0]["article_id"] == "a1"
+    q = mock_client.query.call_args[0][0]
+    assert "summaries" in q
+    assert "raw_articles" in q
+    assert "scoring_version" in q
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_update_summary_score_runs_update_dml(mock_bq_class):
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+
+    bq = BQClient(project="test-project")
+    bq.update_summary_score("a1", 0.9, 2)
+
+    q = mock_client.query.call_args[0][0]
+    assert "UPDATE" in q
+    assert "summaries" in q
+    assert "scoring_version" in q
+    assert "importance_score" in q

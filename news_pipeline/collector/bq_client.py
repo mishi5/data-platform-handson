@@ -119,6 +119,46 @@ class BQClient:
             logger.error("[bq_client] insert_summaries errors: %s", errors)
             raise RuntimeError(f"BigQuery insert_summaries failed: {errors}")
 
+    def get_outdated_summaries(self, version: int, limit: int) -> list[dict]:
+        """scoring_version が古い（NULL含む）summaries を本文付きで返す。"""
+        query = (
+            f"SELECT s.article_id, s.title, r.content, s.source"
+            f" FROM `{self.project}.{DATASET}.summaries` s"
+            f" LEFT JOIN `{self.project}.{DATASET}.raw_articles` r"
+            f" ON s.article_id = r.article_id"
+            f" WHERE (s.scoring_version IS NULL OR s.scoring_version < @version)"
+            f" LIMIT @limit"
+        )
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("version", "INT64", version),
+                bigquery.ScalarQueryParameter("limit", "INT64", limit),
+            ]
+        )
+        rows = self.client.query(query, job_config=job_config).result()
+        return [dict(row) for row in rows]
+
+    def update_summary_score(
+        self, article_id: str, importance_score: float, scoring_version: int
+    ) -> None:
+        """summaries の importance_score と scoring_version を DML UPDATE で更新する。
+
+        例外は送出する（呼び出し側が1件ずつ握って次回繰り越し）。
+        """
+        query = (
+            f"UPDATE `{self.project}.{DATASET}.summaries`"
+            f" SET importance_score = @score, scoring_version = @ver"
+            f" WHERE article_id = @aid"
+        )
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("score", "FLOAT64", importance_score),
+                bigquery.ScalarQueryParameter("ver", "INT64", scoring_version),
+                bigquery.ScalarQueryParameter("aid", "STRING", article_id),
+            ]
+        )
+        self.client.query(query, job_config=job_config).result()
+
     def get_deepdive(self, article_id: str) -> str | None:
         """既存の深堀り結果を取得。なければ None。"""
         query = (
