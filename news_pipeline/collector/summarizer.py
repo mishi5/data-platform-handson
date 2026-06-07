@@ -14,7 +14,7 @@ from anthropic.types import TextBlock
 logger = logging.getLogger(__name__)
 
 # スコアロジックの版。_build_scoring_criteria を変えたら +1 する。
-SCORING_VERSION = 1
+SCORING_VERSION = 2
 
 _MODEL = "claude-haiku-4-5-20251001"
 
@@ -44,17 +44,35 @@ JSON のみを返してください。説明文は不要です。"""
 
 
 def _build_scoring_criteria(keywords: list[str]) -> str:
-    """importance_score の判定基準を組み立てる。summarize / score_article で共用。"""
+    """importance_score の判定基準を組み立てる。summarize / score_article で共用。
+
+    主軸は「データエンジニアにとって読む価値があるか」の総合判断。
+    keyword は興味分野のヒント（加点）で、無くても価値があれば相応に高くする。
+    """
     if keywords:
         items = "\n".join(f"  - {kw}" for kw in keywords)
     else:
         items = "  （キーワード未設定のため、データエンジニアリング全般を対象とする）"
     return (
-        "importance_score の判定基準：\n"
-        "- 以下のキーワードに関連する内容であるほど高いスコアを付ける\n"
+        "importance_score は「データエンジニアにとって読む価値があるか」を総合的に判断して付ける。\n"
+        "\n"
+        "高くすべき記事（価値が高い）：\n"
+        "- 実務で使える具体的な知見（設計・運用ノウハウ、how-to、トラブル対応）\n"
+        "- 技術的な深さ・考察（アーキテクチャ議論、仕組みの深掘り、トレードオフ分析）\n"
+        "- 大規模・本番環境の実例（実サービスの事例、失敗談やスケールの教訓）\n"
+        "\n"
+        "低くすべき記事（価値が低い）：\n"
+        "- 宣伝・PR・製品の単なる紹介（マーケティング目的）\n"
+        "- 中身が薄い・短い（具体性がなく表面的）\n"
+        "\n"
+        "次のキーワードは特に関心の高いトピックのヒント。該当すれば加点するが、"
+        "キーワードに無くても上記の価値があれば相応に高くする：\n"
         f"{items}\n"
-        "- 複数のキーワードに関連するほど高くする\n"
-        "- 全く関連しない場合は 0.1 以下にする"
+        "\n"
+        "スコアの目安：\n"
+        "- 0.8〜1.0: 実務に直接役立つ深い技術記事、本番事例の濃い知見\n"
+        "- 0.5前後: 有用だが一般的、または部分的に価値がある\n"
+        "- 0.3以下: 宣伝・PR、中身が薄い、データエンジニアにほぼ無関係"
     )
 
 

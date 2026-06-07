@@ -103,3 +103,19 @@ def test_score_article_returns_none_on_error(mock_anthropic_class):
     mock_client.messages.create.side_effect = Exception("API error")
 
     assert score_article(title="T", content="C", api_key="k") is None
+
+
+def test_build_scoring_criteria_uses_de_value_axis():
+    c = _build_scoring_criteria(["BigQuery"])
+    # DE価値ベースの主軸とアンカーが含まれる
+    assert "読む価値" in c
+    assert "スコアの目安" in c
+    # 高/低スコア軸の語
+    assert "実務" in c
+    assert "宣伝" in c
+
+
+def test_scoring_version_is_2():
+    from collector.summarizer import SCORING_VERSION
+
+    assert SCORING_VERSION == 2
