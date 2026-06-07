@@ -5,19 +5,18 @@
 ## アーキテクチャ
 
 ```
-Cloud Scheduler（平日7:30 JST）
-      │
-      ▼
 Cloud Run Service (news-collector)
-      │  POST /          ← スケジューラからの定期実行
-      │  POST /slack     ← Slack スラッシュコマンドからの手動実行
-      ▼
-RSS Fetch → dedup（raw_articles） → 本文取得 → raw_articles 保存
+  POST /collect  ← スケジューラ（毎日6:00 JST）: 収集〜要約
+  POST /notify   ← スケジューラ（毎日6:30 JST）: 通知
+  POST /slack    ← Slack スラッシュコマンド（/news-update）: 通知のみ
+
+【/collect】
+RSS Fetch → dedup（raw_articles） → 本文取得（失敗は pending で次回再取得）→ raw_articles 保存
       │
       ▼
-Claude 要約（全新着記事）→ importance_score フィルタ → summaries 保存
-      │
-      ▼
+Claude 要約（本文取得成功分のみ）→ importance_score フィルタ → summaries 保存
+
+【/notify】
 未通知サマリー取得（notification_log で管理）
       │
       ├─ 1件以上 → category 別にグルーピング → カテゴリごとに Slack 通知
@@ -159,8 +158,8 @@ terraform apply -var="project_id=$GCP_PROJECT_ID"
 ```
 
 Terraform が作成・管理するリソース:
-- Cloud Run Service（`/` と `/slack` エンドポイント）
-- Cloud Scheduler（平日7:30 JST に `POST /` を呼び出し）
+- Cloud Run Service（`/collect`・`/notify`・`/slack` エンドポイント）
+- Cloud Scheduler 2本（収集: 毎日6:00 JST に `POST /collect`、通知: 毎日6:30 JST に `POST /notify`）
 - BigQuery Dataset / Tables（`raw_articles`, `summaries`, `notification_log`, `article_chunks`）
 - Google Sheets API 有効化
 - IAM: Compute Engine デフォルト SA に `secretmanager.secretAccessor` 付与
@@ -232,7 +231,7 @@ gcloud logging read \
 
 | テーブル | 用途 |
 |---------|------|
-| `tech_news.raw_articles` | 収集した記事の原文（dedup の基準） |
+| `tech_news.raw_articles` | 収集した記事の原文（dedup の基準）。`content_status`（ok/pending/failed）と `retry_count` で本文取得リトライを管理 |
 | `tech_news.summaries` | Claude 生成サマリー（importance_score 閾値以上のみ） |
 | `tech_news.notification_log` | Slack 通知済み article_id の記録 |
 | `tech_news.article_chunks` | 将来の RAG 検索用（現在は空） |
@@ -246,9 +245,8 @@ gcloud logging read \
 | `SLACK_WEBHOOK_URL` | Slack Incoming Webhook URL | `.env` | Secret Manager |
 | `SLACK_SIGNING_SECRET` | Slack App の署名シークレット | `.env`（空でも可） | Secret Manager |
 | `SHEET_ID` | 設定スプレッドシートの ID | `.env` | Terraform で設定 |
-| `IMPORTANCE_THRESHOLD` | 通知対象とする importance_score の閾値 | `.env`（デフォルト: 0.5） | Terraform で設定 |
 
-通知件数の上限は `settings` シートの `<category>/max_notify`（デフォルト 5）で管理する。
+importance_score の下限・通知件数上限・本文リトライ上限は `settings` シートで管理する（下記参照）。
 
 ## Google Sheets で管理する設定
 
@@ -256,4 +254,4 @@ gcloud logging read \
 |--------|------|---------|
 | `feeds` | RSS フィード URL・ソース名・category（通知の分類） | 次回実行時（デプロイ不要） |
 | `keywords` | importance_score 判定の基準キーワード | 次回実行時（デプロイ不要） |
-| `settings` | `general/max_summarize`（要約件数上限、デフォルト 10）、`<category>/max_notify`（カテゴリ別通知上限、デフォルト 5）、`<category>/label`（Slack ヘッダー表示名） | 次回実行時（デプロイ不要） |
+| `settings` | `general/max_summarize`（要約件数上限、デフォルト 10）、`general/importance_threshold`（summaries に残す importance_score の下限、デフォルト 0.65）、`general/max_content_retries`（本文取得の最大リトライ回数、デフォルト 3）、`<category>/max_notify`（カテゴリ別通知上限、デフォルト 5）、`<category>/label`（Slack ヘッダー表示名） | 次回実行時（デプロイ不要） |
