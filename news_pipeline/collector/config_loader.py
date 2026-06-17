@@ -27,6 +27,7 @@ def load_config() -> dict:
         feeds = _load_feeds(spreadsheet)
         keywords = _load_keywords(spreadsheet)
         feed_categories = _load_feed_categories(spreadsheet)
+        feed_blocks = _load_feed_blocks(spreadsheet)
         settings = _load_settings(spreadsheet)
         logger.info(
             "[config_loader] loaded %d feeds, %d keywords, %d setting groups from Sheets",
@@ -38,6 +39,7 @@ def load_config() -> dict:
             "feeds": feeds,
             "keywords": keywords,
             "feed_categories": feed_categories,
+            "feed_blocks": feed_blocks,
             "settings": settings,
         }
     except Exception as e:
@@ -74,6 +76,31 @@ def _load_feed_categories(spreadsheet) -> dict[str, str]:
         return result
     except Exception as e:
         logger.warning("[config_loader] failed to load feed categories: %s", e)
+        return {}
+
+
+def _load_feed_blocks(spreadsheet) -> dict[str, dict]:
+    """feeds シートを {source: {"users": set, "location": str}} で返す。
+
+    4列目 block_users（カンマ区切り）、5列目 user_location（空欄は path1）。
+    block_users が空の行は登録しない。
+    """
+    try:
+        ws = spreadsheet.worksheet("feeds")
+        rows = ws.get_all_values()[1:]  # 1行目はヘッダー
+        result: dict[str, dict] = {}
+        for row in rows:
+            if len(row) < 4 or not row[1]:
+                continue
+            source = row[1]
+            users = {u.strip() for u in row[3].split(",") if u.strip()}
+            if not users:
+                continue
+            location = row[4].strip() if len(row) >= 5 and row[4].strip() else "path1"
+            result[source] = {"users": users, "location": location}
+        return result
+    except Exception as e:
+        logger.warning("[config_loader] failed to load feed blocks: %s", e)
         return {}
 
 

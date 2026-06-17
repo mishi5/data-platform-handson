@@ -1,6 +1,10 @@
 from unittest.mock import MagicMock
 
-from collector.config_loader import _load_feed_categories, _load_settings
+from collector.config_loader import (
+    _load_feed_blocks,
+    _load_feed_categories,
+    _load_settings,
+)
 
 
 def _spreadsheet_with(sheet_name, values):
@@ -89,3 +93,30 @@ def test_load_settings_preserves_group_order():
         ],
     )
     assert list(_load_settings(ss).keys()) == ["general", "vendor", "official"]
+
+
+def test_load_feed_blocks_parses_users_and_location():
+    ss = _spreadsheet_with(
+        "feeds",
+        [
+            ["url", "source", "category", "block_users", "user_location"],
+            ["https://a", "Zenn", "bigquery", "web_benriya, spammer", ""],
+            ["https://b", "Hatena", "personal", "taro", "subdomain"],
+        ],
+    )
+    assert _load_feed_blocks(ss) == {
+        "Zenn": {"users": {"web_benriya", "spammer"}, "location": "path1"},
+        "Hatena": {"users": {"taro"}, "location": "subdomain"},
+    }
+
+
+def test_load_feed_blocks_skips_rows_without_users():
+    ss = _spreadsheet_with(
+        "feeds",
+        [
+            ["url", "source", "category", "block_users", "user_location"],
+            ["https://a", "Zenn", "bigquery", "", ""],
+            ["https://b", "Qiita", "personal"],  # 列不足
+        ],
+    )
+    assert _load_feed_blocks(ss) == {}
