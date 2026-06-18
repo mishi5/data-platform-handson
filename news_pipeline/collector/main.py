@@ -21,6 +21,7 @@ import time
 import urllib.parse
 
 from article_parser import fetch_content
+from blocklist import is_blocked
 from bq_client import BQClient
 from categorizer import (
     category_label,
@@ -108,6 +109,19 @@ async def verify_slack(request: Request) -> None:
         raise HTTPException(status_code=403, detail="invalid signature")
 
 
+def _filter_blocked(items: list[dict], feed_blocks: dict) -> list[dict]:
+    """url/source を持つ dict のリストから、ブロック対象ユーザーの記事を除外する。"""
+    kept = []
+    for item in items:
+        block = feed_blocks.get(item["source"], {})
+        if is_blocked(
+            item["url"], block.get("users", set()), block.get("location", "path1")
+        ):
+            continue
+        kept.append(item)
+    return kept
+
+
 def _run_collect(triggered_by: str = "scheduler") -> int:
     """収集パイプライン。RSS取得〜要約〜summaries保存。新着要約件数を返す。"""
     import uuid
@@ -133,6 +147,7 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
     config = load_config()
     feeds: dict[str, str] = config.get("feeds", {})
     keywords: list[str] = config.get("keywords", [])
+    feed_blocks: dict = config.get("feed_blocks", {})
     settings: dict = config.get("settings", {})
     general: dict = settings.get("general", {})
     max_summarize: int = int(general.get("max_summarize", _DEFAULT_MAX_SUMMARIZE))
@@ -151,6 +166,15 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
         articles = fetch_articles(feeds)
         log["articles_fetched"] = len(articles)
         logger.info("[collect] fetched %d articles from RSS", len(articles))
+
+        # 1.5. ブロックユーザーの記事を除外
+        before_block = len(articles)
+        articles = _filter_blocked(articles, feed_blocks)
+        if before_block != len(articles):
+            logger.info(
+                "[collect] blocked %d articles by feed block list",
+                before_block - len(articles),
+            )
 
         # 2. dedup（raw_articles ベース）→ 要約上限で絞る
         existing_urls = bq.get_existing_urls()
@@ -294,6 +318,7 @@ def _run_notify(triggered_by: str = "scheduler") -> int:
     config = load_config()
     settings: dict = config.get("settings", {})
     feed_categories: dict[str, str] = config.get("feed_categories", {})
+    feed_blocks: dict = config.get("feed_blocks", {})
 
     bq = BQClient(project=PROJECT_ID)
 
@@ -301,6 +326,15 @@ def _run_notify(triggered_by: str = "scheduler") -> int:
         # 9. 未通知サマリーを取得
         unnotified = bq.get_unnotified_summaries()
         logger.info("[notify] %d unnotified summaries in BQ", len(unnotified))
+
+        # 9.5. ブロックユーザーの記事を除外（保存済み記事も通知しない）
+        before_block = len(unnotified)
+        unnotified = _filter_blocked(unnotified, feed_blocks)
+        if before_block != len(unnotified):
+            logger.info(
+                "[notify] blocked %d summaries by feed block list",
+                before_block - len(unnotified),
+            )
 
         if not unnotified:
             send_no_news_notification(SLACK_WEBHOOK_URL, "新着記事はありませんでした。")
