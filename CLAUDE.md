@@ -170,7 +170,23 @@ news_pipeline/
 
 通知の分類・件数上限・表示名は Google Sheets で動的に管理する（コード変更不要）。
 
-- **feeds シート**: `URL | source | category` の3列。`category` 列でニュースの分類を指定（任意の文字列）。空欄は `other` 扱い。
+- **feeds シート**: `URL | source | category | block_users | user_location` の5列。
+  - `category`: ニュースの分類（任意の文字列）。空欄は `other` 扱い。
+  - `block_users`: ブロックする著者の識別子（カンマ区切り、**完全一致**）。空欄ならブロックなし。
+  - `user_location`: `block_users` を記事URLのどこと照合するか。空欄は `path1`（パス第1セグメント）。
+
+  **ブロックの仕組みと対応サイト**（記事URLから抽出した識別子と `block_users` を完全一致で照合）:
+
+  | user_location | 抽出位置 | 対応サイト例 | block_users に書く値 |
+  |---|---|---|---|
+  | （空欄）/ `path1` | パス第1セグメント | Zenn `zenn.dev/<user>/...`、Qiita、note | ユーザー名（例: `web_benriya`） |
+  | `subdomain` | ホスト名の先頭ラベル | はてなブログ `<user>.hatenablog.com` | サブドメイン名 |
+  | `path2` / `path3` … | パスの N 番目セグメント | 第1がカテゴリ等で第2が著者のサイト | 著者slug |
+
+  - 部分一致はしないため `web_benriya` 指定で `web_benriya2` は誤ブロックされない。
+  - 著者slugがURLに無いサイト（一般メディア等）はブロック不可。`block_users` を書いても一致しなければ無視されるだけで無害。
+  - Zenn の organization 記事（`zenn.dev/<org>/...`）は第1セグメントが org slug なので org 単位のブロックになる。
+  - ブロックは収集時（RSS取得直後）と通知時（保存済みサマリーの通知前）の両方で適用される。
 - **settings シート**: `group | key | value` の3列（namespace 方式）。`group` の出現順が通知順になる。
   - `general / max_summarize`: 1実行で要約する最大件数
   - `general / importance_threshold`: summaries に残す importance_score の下限（未設定は 0.65）
