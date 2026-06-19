@@ -1,9 +1,41 @@
 """Slack Incoming Webhook でニュースサマリーを通知するモジュール。"""
 
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import requests
 
 logger = logging.getLogger(__name__)
+
+_JST = ZoneInfo("Asia/Tokyo")
+
+
+def _to_jst_date(value) -> str | None:
+    """datetime / ISO文字列を JST の YYYY-MM-DD に変換する。無効なら None。"""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        try:
+            dt = datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+    return dt.astimezone(_JST).strftime("%Y-%m-%d")
+
+
+def format_date_label(published_at, collected_at) -> str:
+    """発行日優先・無ければ取得日を「🗓 発行: YYYY-MM-DD」形式で返す。両方無効なら空文字。"""
+    pub = _to_jst_date(published_at)
+    if pub:
+        return f"🗓 発行: {pub}"
+    col = _to_jst_date(collected_at)
+    if col:
+        return f"🗓 取得: {col}"
+    return ""
 
 
 def _format_blocks(articles: list[dict], header_text: str) -> list:
@@ -16,12 +48,17 @@ def _format_blocks(articles: list[dict], header_text: str) -> list:
     ]
     for i, a in enumerate(articles, 1):
         article_id = a.get("article_id", "")
+        date_label = format_date_label(a.get("published_at"), a.get("collected_at"))
+        source_line = f"_出典: {a['source']}"
+        if date_label:
+            source_line += f" ・ {date_label}"
+        source_line += "_"
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*{i}. {a['title']}*\n{a.get('summary', '')}\n_出典: {a['source']}_",
+                    "text": f"*{i}. {a['title']}*\n{a.get('summary', '')}\n{source_line}",
                 },
             }
         )
