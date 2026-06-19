@@ -29,12 +29,14 @@ class BQClient:
     def get_unnotified_summaries(self) -> list[dict]:
         """notification_log に記録されていないサマリーを返す（未通知分）。article_id 重複は最高スコアの1件に絞る。"""
         query = (
-            f"SELECT s.* FROM ("
+            f"SELECT s.*, r.published_at, r.collected_at FROM ("
             f"  SELECT *, ROW_NUMBER() OVER (PARTITION BY article_id ORDER BY importance_score DESC) AS _rn"
             f"  FROM `{self.project}.{DATASET}.summaries`"
             f") s"
             f" LEFT JOIN `{self.project}.{DATASET}.notification_log` n"
             f" ON s.article_id = n.article_id"
+            f" LEFT JOIN `{self.project}.{DATASET}.raw_articles` r"
+            f" ON s.article_id = r.article_id"
             f" WHERE n.article_id IS NULL AND s._rn = 1"
             f" ORDER BY s.importance_score DESC"
         )
