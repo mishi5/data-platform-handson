@@ -1,0 +1,185 @@
+"""_run_collect の繰り越し（取りこぼし防止）ロジックのテスト。"""
+
+import os
+import sys
+from unittest.mock import MagicMock, patch
+
+# main は import 時に環境変数を要求するので先に設定する
+os.environ.setdefault("GCP_PROJECT_ID", "test-project")
+os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
+os.environ.setdefault("SLACK_WEBHOOK_URL", "https://hooks.slack.com/test")
+
+# main.py は兄弟モジュールを bare import するため collector ディレクトリを path に追加
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "collector"))
+
+from collector import main as main_mod
+
+
+def _make_article(i: int) -> dict:
+    return {
+        "article_id": f"id{i}",
+        "title": f"Title {i}",
+        "url": f"https://example.com/{i}",
+        "source": "Example",
+        "published_at": "2026-06-20T00:00:00Z",
+        "collected_at": "2026-06-20T01:00:00Z",
+    }
+
+
+def _config(max_summarize: str) -> dict:
+    return {
+        "feeds": {},
+        "keywords": [],
+        "feed_blocks": {},
+        "settings": {
+            "general": {
+                "max_summarize": max_summarize,
+                "importance_threshold": "0.65",
+                "max_content_retries": "3",
+            }
+        },
+    }
+
+
+@patch("collector.main.summarize_article")
+@patch("collector.main.fetch_content")
+@patch("collector.main.fetch_articles")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_overflow_saved_to_raw_and_deferred(
+    mock_bqclass,
+    mock_load_config,
+    mock_fetch_articles,
+    mock_fetch_content,
+    mock_summarize,
+):
+    """新着 > バジェットでも全件 raw_articles に保存し、超過分は pending で繰り越す。"""
+    mock_load_config.return_value = _config(max_summarize="3")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_existing_urls.return_value = set()
+    bq.get_pending_articles.return_value = []
+    bq.get_existing_summary_ids.return_value = set()
+
+    mock_fetch_articles.return_value = [_make_article(i) for i in range(5)]
+    mock_fetch_content.return_value = ("body", True)
+    mock_summarize.return_value = {
+        "summary": "s",
+        "tags": [],
+        "importance_score": 0.9,
+    }
+
+    main_mod._run_collect()
+
+    # 全5件が raw_articles に保存される（取りこぼしゼロ）
+    saved = bq.insert_raw_articles.call_args[0][0]
+    assert len(saved) == 5
+
+    statuses = [a["content_status"] for a in saved]
+    assert statuses.count("ok") == 3  # バジェット分は処理
+    assert statuses.count("pending") == 2  # 超過分は繰り越し
+
+    deferred = [a for a in saved if a["content_status"] == "pending"]
+    assert all(a["content"] is None and a["retry_count"] == 0 for a in deferred)
+
+    # 要約は3件のみ（バジェット内）
+    assert mock_summarize.call_count == 3
+
+
+@patch("collector.main.summarize_article")
+@patch("collector.main.fetch_content")
+@patch("collector.main.fetch_articles")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_pending_consumes_budget_before_new(
+    mock_bqclass,
+    mock_load_config,
+    mock_fetch_articles,
+    mock_fetch_content,
+    mock_summarize,
+):
+    """繰り越し（pending）がバジェットを先に消費し、新着の処理枠が減る。"""
+    mock_load_config.return_value = _config(max_summarize="3")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_existing_urls.return_value = set()
+    # 既存 pending 2件（古いバックログ）
+    bq.get_pending_articles.return_value = [
+        {
+            "article_id": "p1",
+            "url": "https://example.com/p1",
+            "title": "P1",
+            "source": "Example",
+            "retry_count": 0,
+        },
+        {
+            "article_id": "p2",
+            "url": "https://example.com/p2",
+            "title": "P2",
+            "source": "Example",
+            "retry_count": 0,
+        },
+    ]
+    bq.get_existing_summary_ids.return_value = set()
+
+    mock_fetch_articles.return_value = [_make_article(i) for i in range(4)]
+    mock_fetch_content.return_value = ("body", True)
+    mock_summarize.return_value = {
+        "summary": "s",
+        "tags": [],
+        "importance_score": 0.9,
+    }
+
+    main_mod._run_collect()
+
+    # バジェット3 - pending成功2 = 残り1 のみ新着を即時処理、残り3件は繰り越し
+    saved = bq.insert_raw_articles.call_args[0][0]
+    assert len(saved) == 4  # 新着は全件保存
+    statuses = [a["content_status"] for a in saved]
+    assert statuses.count("ok") == 1
+    assert statuses.count("pending") == 3
+
+    # 要約は pending 2 + 新着 1 = 3件
+    assert mock_summarize.call_count == 3
+
+    # get_pending_articles は limit=max_summarize で呼ばれる
+    assert bq.get_pending_articles.call_args.kwargs.get("limit") == 3 or (
+        len(bq.get_pending_articles.call_args.args) >= 2
+        and bq.get_pending_articles.call_args.args[1] == 3
+    )
+
+
+@patch("collector.main.summarize_article")
+@patch("collector.main.fetch_content")
+@patch("collector.main.fetch_articles")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_under_budget_processes_all_new_no_defer(
+    mock_bqclass,
+    mock_load_config,
+    mock_fetch_articles,
+    mock_fetch_content,
+    mock_summarize,
+):
+    """新着がバジェット以下なら従来通り全件即時処理し、繰り越しは発生しない。"""
+    mock_load_config.return_value = _config(max_summarize="10")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_existing_urls.return_value = set()
+    bq.get_pending_articles.return_value = []
+    bq.get_existing_summary_ids.return_value = set()
+
+    mock_fetch_articles.return_value = [_make_article(i) for i in range(3)]
+    mock_fetch_content.return_value = ("body", True)
+    mock_summarize.return_value = {
+        "summary": "s",
+        "tags": [],
+        "importance_score": 0.9,
+    }
+
+    main_mod._run_collect()
+
+    saved = bq.insert_raw_articles.call_args[0][0]
+    assert len(saved) == 3
+    assert all(a["content_status"] == "ok" for a in saved)
+    assert mock_summarize.call_count == 3

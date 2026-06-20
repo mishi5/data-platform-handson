@@ -176,38 +176,21 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
                 before_block - len(articles),
             )
 
-        # 2. dedup（raw_articles ベース）→ 要約上限で絞る
+        # 2. dedup（raw_articles ベース）→ 全新着を保持（切り捨てない）
         existing_urls = bq.get_existing_urls()
         new_articles = [a for a in articles if a["url"] not in existing_urls]
         log["new_articles"] = len(new_articles)
-        new_articles = new_articles[:max_summarize]
-        logger.info(
-            "[collect] %d new articles (limited to %d)",
-            log["new_articles"],
-            len(new_articles),
-        )
+        logger.info("[collect] %d new articles", len(new_articles))
 
-        # to_summarize: この実行で本文取得に成功した記事（新着 + pending→ok）
+        # to_summarize: この実行で本文取得に成功した記事（繰り越し + 新着）
         to_summarize: list[dict] = []
 
-        # 3. 新着の本文取得（UA付き・1回）
-        for article in new_articles:
-            text, ok = fetch_content(article["url"])
-            status, retry = next_fetch_state(ok, 0, max_content_retries)
-            article["content"] = text
-            article["content_status"] = status
-            article["retry_count"] = retry
-            if status == "ok" and text:
-                to_summarize.append(article)
-
-        # 4. raw_articles 保存（content_status / retry_count 込み）
-        if new_articles:
-            bq.insert_raw_articles(new_articles)
-            logger.info("[collect] saved %d to raw_articles", len(new_articles))
-
-        # 5. pending 記事の再取得（次回繰り越し分）
-        pending = bq.get_pending_articles(max_content_retries)
-        logger.info("[collect] %d pending articles to retry", len(pending))
+        # 3. 繰り越し（pending）を優先処理。古い順・最大 max_summarize 件まで。
+        #    max_summarize は「繰り越し + 新着」合算の1実行バジェット。
+        pending = bq.get_pending_articles(max_content_retries, limit=max_summarize)
+        logger.info(
+            "[collect] %d carried-over (pending) articles to process", len(pending)
+        )
         for p in pending:
             text, ok = fetch_content(p["url"])
             status, retry = next_fetch_state(
@@ -224,6 +207,38 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
                         "content": text,
                     }
                 )
+
+        # 4. 残りバジェットで新着を処理。超過分は破棄せず pending として繰り越す。
+        remaining = max(0, max_summarize - len(to_summarize))
+        to_fetch_now = new_articles[:remaining]
+        deferred = new_articles[remaining:]
+        if deferred:
+            logger.info(
+                "[collect] %d new articles deferred to next run (budget=%d)",
+                len(deferred),
+                max_summarize,
+            )
+
+        # 4a. 今回処理する新着の本文取得（UA付き・1回）
+        for article in to_fetch_now:
+            text, ok = fetch_content(article["url"])
+            status, retry = next_fetch_state(ok, 0, max_content_retries)
+            article["content"] = text
+            article["content_status"] = status
+            article["retry_count"] = retry
+            if status == "ok" and text:
+                to_summarize.append(article)
+
+        # 4b. 繰り越す新着は本文未取得の pending として保存（次回の繰り越し処理で拾う）
+        for article in deferred:
+            article["content"] = None
+            article["content_status"] = "pending"
+            article["retry_count"] = 0
+
+        # 5. raw_articles 保存（全新着＝取りこぼしゼロ）
+        if new_articles:
+            bq.insert_raw_articles(new_articles)
+            logger.info("[collect] saved %d to raw_articles", len(new_articles))
 
         # 6. 要約生成（本文取得に成功した記事のみ）
         summaries = []

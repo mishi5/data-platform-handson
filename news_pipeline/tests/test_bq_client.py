@@ -325,6 +325,26 @@ def test_get_pending_articles_filters_pending_and_retry(mock_bq_class):
 
 
 @patch("collector.bq_client.bigquery.Client")
+def test_get_pending_articles_applies_limit_and_fifo_order(mock_bq_class):
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+    mock_client.query.return_value.result.return_value = []
+
+    bq = BQClient(project="test-project")
+    bq.get_pending_articles(max_retries=3, limit=5)
+
+    query_arg = mock_client.query.call_args[0][0]
+    # 古い順（FIFO）に並べてバジェット分だけ取得する
+    assert "ORDER BY" in query_arg
+    assert "collected_at" in query_arg
+    assert "LIMIT" in query_arg
+    # limit はクエリパラメータとして渡す
+    job_config = mock_client.query.call_args.kwargs["job_config"]
+    param_names = {p.name for p in job_config.query_parameters}
+    assert "limit" in param_names
+
+
+@patch("collector.bq_client.bigquery.Client")
 def test_update_article_content_runs_update_dml(mock_bq_class):
     mock_client = MagicMock()
     mock_bq_class.return_value = mock_client

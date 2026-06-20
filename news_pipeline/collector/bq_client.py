@@ -66,18 +66,26 @@ class BQClient:
             logger.error("[bq_client] insert_raw_articles errors: %s", errors)
             raise RuntimeError(f"BigQuery insert_raw_articles failed: {errors}")
 
-    def get_pending_articles(self, max_retries: int) -> list[dict]:
-        """本文未取得（content_status='pending'）かつリトライ上限未満の記事を返す。"""
+    def get_pending_articles(
+        self, max_retries: int, limit: int | None = None
+    ) -> list[dict]:
+        """本文未取得（content_status='pending'）かつリトライ上限未満の記事を返す。
+
+        古い順（collected_at ASC = FIFO）で並べ、limit 指定時はその件数までに絞る。
+        繰り越し（バジェット超過）も同じ pending キューに入るため、古いバックログから
+        先に消化される。
+        """
         query = (
             f"SELECT article_id, url, title, source, retry_count"
             f" FROM `{self.project}.{DATASET}.raw_articles`"
             f" WHERE content_status = 'pending' AND retry_count < @max_retries"
+            f" ORDER BY collected_at ASC"
         )
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter("max_retries", "INT64", max_retries)
-            ]
-        )
+        params = [bigquery.ScalarQueryParameter("max_retries", "INT64", max_retries)]
+        if limit is not None:
+            query += " LIMIT @limit"
+            params.append(bigquery.ScalarQueryParameter("limit", "INT64", limit))
+        job_config = bigquery.QueryJobConfig(query_parameters=params)
         rows = self.client.query(query, job_config=job_config).result()
         return [dict(row) for row in rows]
 

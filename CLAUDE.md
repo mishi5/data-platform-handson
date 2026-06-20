@@ -154,6 +154,7 @@ news_pipeline/
 - **Terraform latestタグ**: イメージ内容が変わってもTerraformは検知しない。コード変更時は `gcloud run services update` を使う
 - **収集/通知の分離**: `/collect`（毎日6:00 JST）がRSS取得〜要約〜summaries保存、`/notify`（毎日6:30 JST）が未通知サマリーをSlack通知。それぞれ独立したCloud Schedulerで呼び出す。Slack `/news-update` は `/notify` を呼ぶ軽量即応答。
 - **本文取得リトライ**: 本文取得に失敗した記事は `raw_articles` に `content_status='pending'` と `retry_count` で保存し、次回 `/collect` 実行時に再取得。`max_content_retries`（settings: `general/max_content_retries`、既定3）到達後は `failed` となり要約をスキップ。
+- **収集の繰り越し（取りこぼし防止）**: `/collect` は新着を**全件 `raw_articles` に保存**する（切り捨てない）。`max_summarize` は「1実行の要約バジェット＝繰り越し（pending）＋新着の合算上限」。バジェットは古い順に pending を優先消化し、残り枠で新着を即時要約。超過した新着は `content_status='pending'`・`retry_count=0` で繰り越し、次回以降に処理される（本文取得失敗の pending と同じキューを再利用）。
 - **スコア再計算**: importance_score のロジック（`summarizer._build_scoring_criteria`）を変えたら `summarizer.SCORING_VERSION` を +1 してデプロイし、`POST /recalculate` を古い版が無くなるまで数回叩く。`summaries.scoring_version` で差分管理（既存行は NULL=旧版）。1回 `recalculate_limit`（既定50）件ずつ処理し、スコア更新のみで行は削除しない。
 
 ### 環境変数（news_pipeline/.env）
@@ -188,7 +189,7 @@ news_pipeline/
   - Zenn の organization 記事（`zenn.dev/<org>/...`）は第1セグメントが org slug なので org 単位のブロックになる。
   - ブロックは収集時（RSS取得直後）と通知時（保存済みサマリーの通知前）の両方で適用される。
 - **settings シート**: `group | key | value` の3列（namespace 方式）。`group` の出現順が通知順になる。
-  - `general / max_summarize`: 1実行で要約する最大件数
+  - `general / max_summarize`: 1実行で要約する最大件数（繰り越し pending ＋ 新着の合算バジェット）
   - `general / importance_threshold`: summaries に残す importance_score の下限（未設定は 0.65）
   - `general / max_content_retries`: 本文取得の最大リトライ回数（未設定は 3）
   - `general / recalculate_limit`: 1回の /recalculate で再採点する最大件数（未設定は 50）
