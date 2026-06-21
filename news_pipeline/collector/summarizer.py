@@ -43,6 +43,17 @@ _SCORE_PROMPT_TEMPLATE = """あなたはデータエンジニアリングの技�
 JSON のみを返してください。説明文は不要です。"""
 
 
+_SLIDE_PREFILTER_PROMPT_TEMPLATE = """あなたはデータエンジニアリングのスライド資料を、全文(PDF)を読む前にざっくり選別するアシスタントです。
+スライドのタイトルと短い説明だけから、データエンジニアにとって読む価値がありそうかを 0.0〜1.0 で見積もってください。
+
+{scoring_criteria}
+
+重要: 説明が空・極端に短い等で情報が少ない場合は判断を保留し、高め(0.6以上)に倒してください（PDFを読めば価値があるかもしれず、取りこぼしを避けるため）。
+
+次の JSON のみを返してください。説明文は不要です。
+{{"relevance_score": 0.0〜1.0}}"""
+
+
 def _build_scoring_criteria(keywords: list[str]) -> str:
     """importance_score の判定基準を組み立てる。summarize / score_article で共用。
 
@@ -128,6 +139,43 @@ def summarize_article(
         return result
     except Exception as e:
         logger.error("[summarizer] failed: %s", e)
+        return None
+
+
+def score_slide_relevance(
+    title: str, description: str, api_key: str, keywords: list[str] | None = None
+) -> float | None:
+    """スライド(Speaker Deck)の PDF を読む前に、title+description だけで関連度を見積もる。
+
+    PDFビジョン書き起こし(高コスト)の前段フィルタ用。失敗時は None（呼び出し側は
+    None を「判定不能＝通す」として扱う）。情報が少ない場合は高めのスコアを返す。
+    """
+    system_prompt = _SLIDE_PREFILTER_PROMPT_TEMPLATE.format(
+        scoring_criteria=_build_scoring_criteria(keywords or [])
+    )
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        message = client.messages.create(
+            model=_MODEL,
+            max_tokens=64,
+            system=system_prompt,
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"タイトル: {title}\n\n説明:\n{(description or '')[:500]}",
+                }
+            ],
+        )
+        block = message.content[0]
+        if not isinstance(block, TextBlock):
+            return None
+        result = json.loads(_strip_code_fence(block.text))
+        score = result.get("relevance_score")
+        if score is None:
+            return None
+        return float(score)
+    except Exception as e:
+        logger.error("[summarizer] slide prefilter failed: %s", e)
         return None
 
 

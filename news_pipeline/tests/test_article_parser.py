@@ -1,3 +1,9 @@
+import os
+import sys
+
+# article_parser は speakerdeck を bare import するため collector を path に追加
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "collector"))
+
 from collector.article_parser import fetch_content
 
 
@@ -51,3 +57,21 @@ def test_fetch_content_sends_user_agent(mocker):
     headers = mock_get.call_args.kwargs["headers"]
     assert "User-Agent" in headers
     assert "Mozilla" in headers["User-Agent"]
+
+
+def test_fetch_content_routes_speakerdeck_to_slide_text(mocker):
+    mock_slide = mocker.patch(
+        "collector.article_parser.speakerdeck.fetch_slide_text",
+        return_value=("slide body", True),
+    )
+    text, ok = fetch_content("https://speakerdeck.com/u/talk", "api-key")
+    assert (text, ok) == ("slide body", True)
+    mock_slide.assert_called_once_with("https://speakerdeck.com/u/talk", "api-key")
+
+
+def test_fetch_content_speakerdeck_without_key_is_skip(mocker):
+    mock_slide = mocker.patch("collector.article_parser.speakerdeck.fetch_slide_text")
+    text, ok = fetch_content("https://speakerdeck.com/u/talk")
+    assert text is None
+    assert ok is True
+    mock_slide.assert_not_called()

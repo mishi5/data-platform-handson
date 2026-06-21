@@ -183,3 +183,92 @@ def test_under_budget_processes_all_new_no_defer(
     assert len(saved) == 3
     assert all(a["content_status"] == "ok" for a in saved)
     assert mock_summarize.call_count == 3
+
+
+def _speakerdeck_article(i: int, desc: str = "") -> dict:
+    return {
+        "article_id": f"sd{i}",
+        "title": f"Slide {i}",
+        "url": f"https://speakerdeck.com/user/talk-{i}",
+        "source": "Speaker Deck",
+        "published_at": "2026-06-20T00:00:00Z",
+        "collected_at": "2026-06-20T01:00:00Z",
+        "description": desc,
+    }
+
+
+@patch("collector.main.score_slide_relevance")
+@patch("collector.main.summarize_article")
+@patch("collector.main.fetch_content")
+@patch("collector.main.fetch_articles")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_slide_prefilter_skips_low_relevance(
+    mock_bqclass,
+    mock_load_config,
+    mock_fetch_articles,
+    mock_fetch_content,
+    mock_summarize,
+    mock_prefilter,
+):
+    """関連度が閾値未満の Speaker Deck スライドは PDF を取得せず filtered で保存する。"""
+    mock_load_config.return_value = _config(max_summarize="10")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_existing_urls.return_value = set()
+    bq.get_pending_articles.return_value = []
+    bq.get_existing_summary_ids.return_value = set()
+
+    # 1件目=低スコア(弾く), 2件目=高スコア(通す)
+    mock_prefilter.side_effect = [0.1, 0.9]
+    mock_fetch_articles.return_value = [
+        _speakerdeck_article(0),
+        _speakerdeck_article(1),
+    ]
+    mock_fetch_content.return_value = ("slide body", True)
+    mock_summarize.return_value = {"summary": "s", "tags": [], "importance_score": 0.9}
+
+    main_mod._run_collect()
+
+    saved = bq.insert_raw_articles.call_args[0][0]
+    assert len(saved) == 2  # 両方 raw_articles に保存（filtered も記録）
+    statuses = {a["url"]: a["content_status"] for a in saved}
+    assert statuses["https://speakerdeck.com/user/talk-0"] == "filtered"
+    assert statuses["https://speakerdeck.com/user/talk-1"] == "ok"
+    # description はスキーマ外なので保存前に除去される
+    assert all("description" not in a for a in saved)
+    # 弾いた1件は PDF 取得も要約もされない
+    assert mock_fetch_content.call_count == 1
+    assert mock_summarize.call_count == 1
+
+
+@patch("collector.main.score_slide_relevance")
+@patch("collector.main.summarize_article")
+@patch("collector.main.fetch_content")
+@patch("collector.main.fetch_articles")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_prefilter_not_applied_to_non_speakerdeck(
+    mock_bqclass,
+    mock_load_config,
+    mock_fetch_articles,
+    mock_fetch_content,
+    mock_summarize,
+    mock_prefilter,
+):
+    """通常記事には1次フィルタを適用しない（score_slide_relevance を呼ばない）。"""
+    mock_load_config.return_value = _config(max_summarize="10")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_existing_urls.return_value = set()
+    bq.get_pending_articles.return_value = []
+    bq.get_existing_summary_ids.return_value = set()
+
+    mock_fetch_articles.return_value = [_make_article(i) for i in range(2)]
+    mock_fetch_content.return_value = ("body", True)
+    mock_summarize.return_value = {"summary": "s", "tags": [], "importance_score": 0.9}
+
+    main_mod._run_collect()
+
+    mock_prefilter.assert_not_called()
+    assert mock_summarize.call_count == 2

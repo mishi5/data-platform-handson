@@ -41,7 +41,13 @@ from notifier import (
 )
 from pydantic import BaseModel
 from rss_fetcher import fetch_articles
-from summarizer import SCORING_VERSION, score_article, summarize_article
+from speakerdeck import is_speakerdeck_url
+from summarizer import (
+    SCORING_VERSION,
+    score_article,
+    score_slide_relevance,
+    summarize_article,
+)
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
@@ -61,6 +67,9 @@ _DEFAULT_MAX_SUMMARIZE = 10
 _DEFAULT_IMPORTANCE_THRESHOLD = 0.65
 _DEFAULT_MAX_CONTENT_RETRIES = 3
 _DEFAULT_RECALCULATE_LIMIT = 50
+# slide_prefilter_threshold: Speaker Deck の PDF を取得する前に title+description で
+# 関連度を見積もり、この値未満なら PDF をスキップする。取りこぼし防止のため低め。
+_DEFAULT_SLIDE_PREFILTER_THRESHOLD = 0.4
 
 
 class PipelineResponse(BaseModel):
@@ -157,6 +166,9 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
     max_content_retries: int = int(
         general.get("max_content_retries", _DEFAULT_MAX_CONTENT_RETRIES)
     )
+    slide_prefilter_threshold: float = float(
+        general.get("slide_prefilter_threshold", _DEFAULT_SLIDE_PREFILTER_THRESHOLD)
+    )
     log["keywords"] = keywords
 
     bq = BQClient(project=PROJECT_ID)
@@ -182,6 +194,34 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
         log["new_articles"] = len(new_articles)
         logger.info("[collect] %d new articles", len(new_articles))
 
+        # 2.5. Speaker Deck の1次フィルタ（PDF取得前に title+description で関連度判定）。
+        #      高コストな PDF ビジョン書き起こしの前に明らかな無関係を除外する。
+        #      判定不能（None）や閾値以上は通す（取りこぼし防止）。弾いた記事は
+        #      raw_articles に content_status='filtered' で記録し再取得しない。
+        survivors: list[dict] = []
+        prefiltered = 0
+        for a in new_articles:
+            if is_speakerdeck_url(a["url"]):
+                score = score_slide_relevance(
+                    title=a["title"],
+                    description=a.get("description", ""),
+                    api_key=ANTHROPIC_API_KEY,
+                    keywords=keywords,
+                )
+                if score is not None and score < slide_prefilter_threshold:
+                    a["content"] = None
+                    a["content_status"] = "filtered"
+                    a["retry_count"] = 0
+                    prefiltered += 1
+                    continue
+            survivors.append(a)
+        if prefiltered:
+            logger.info(
+                "[collect] slide prefilter skipped %d slides (threshold=%.2f)",
+                prefiltered,
+                slide_prefilter_threshold,
+            )
+
         # to_summarize: この実行で本文取得に成功した記事（繰り越し + 新着）
         to_summarize: list[dict] = []
 
@@ -192,7 +232,7 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
             "[collect] %d carried-over (pending) articles to process", len(pending)
         )
         for p in pending:
-            text, ok = fetch_content(p["url"])
+            text, ok = fetch_content(p["url"], ANTHROPIC_API_KEY)
             status, retry = next_fetch_state(
                 ok, int(p.get("retry_count", 0)), max_content_retries
             )
@@ -210,8 +250,8 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
 
         # 4. 残りバジェットで新着を処理。超過分は破棄せず pending として繰り越す。
         remaining = max(0, max_summarize - len(to_summarize))
-        to_fetch_now = new_articles[:remaining]
-        deferred = new_articles[remaining:]
+        to_fetch_now = survivors[:remaining]
+        deferred = survivors[remaining:]
         if deferred:
             logger.info(
                 "[collect] %d new articles deferred to next run (budget=%d)",
@@ -221,7 +261,7 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
 
         # 4a. 今回処理する新着の本文取得（UA付き・1回）
         for article in to_fetch_now:
-            text, ok = fetch_content(article["url"])
+            text, ok = fetch_content(article["url"], ANTHROPIC_API_KEY)
             status, retry = next_fetch_state(ok, 0, max_content_retries)
             article["content"] = text
             article["content_status"] = status
@@ -235,8 +275,11 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
             article["content_status"] = "pending"
             article["retry_count"] = 0
 
-        # 5. raw_articles 保存（全新着＝取りこぼしゼロ）
+        # 5. raw_articles 保存（全新着＝取りこぼしゼロ。filtered も記録し再取得を防ぐ）
         if new_articles:
+            # description は1次フィルタ用の一時情報。スキーマ外なので保存前に除去。
+            for a in new_articles:
+                a.pop("description", None)
             bq.insert_raw_articles(new_articles)
             logger.info("[collect] saved %d to raw_articles", len(new_articles))
 

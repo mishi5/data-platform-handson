@@ -1,4 +1,5 @@
 """RSS フィードから記事メタデータを取得するモジュール。"""
+
 import hashlib
 import feedparser
 from datetime import datetime, timezone
@@ -35,14 +36,18 @@ def fetch_articles(feeds: dict[str, str]) -> list[dict]:
                 if not hasattr(entry, "link"):
                     continue
                 url = str(entry.link)
-                results.append({
-                    "article_id": _make_article_id(url),
-                    "title": getattr(entry, "title", ""),
-                    "url": url,
-                    "source": source_name,
-                    "published_at": _parse_published(entry),
-                    "collected_at": datetime.now(timezone.utc).isoformat(),
-                })
+                results.append(
+                    {
+                        "article_id": _make_article_id(url),
+                        "title": getattr(entry, "title", ""),
+                        "url": url,
+                        "source": source_name,
+                        "published_at": _parse_published(entry),
+                        "collected_at": datetime.now(timezone.utc).isoformat(),
+                        # description は1次フィルタ用の一時情報。raw_articles 保存前に除去する。
+                        "description": getattr(entry, "summary", ""),
+                    }
+                )
         except Exception as e:
             print(f"[rss_fetcher] feed error {feed_url}: {e}")
 

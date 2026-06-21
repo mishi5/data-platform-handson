@@ -119,3 +119,28 @@ def test_scoring_version_is_2():
     from collector.summarizer import SCORING_VERSION
 
     assert SCORING_VERSION == 2
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_score_slide_relevance_returns_float(mock_anthropic_class):
+    from collector.summarizer import score_slide_relevance
+
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    mock_msg = MagicMock()
+    mock_msg.content = [TextBlock(type="text", text='{"relevance_score": 0.8}')]
+    mock_client.messages.create.return_value = mock_msg
+
+    score = score_slide_relevance("Title", "desc", "key", keywords=["dbt"])
+    assert score == 0.8
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_score_slide_relevance_failure_returns_none(mock_anthropic_class):
+    from collector.summarizer import score_slide_relevance
+
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    mock_client.messages.create.side_effect = Exception("boom")
+
+    assert score_slide_relevance("Title", "desc", "key") is None

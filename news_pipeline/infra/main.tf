@@ -27,6 +27,10 @@ resource "google_cloud_run_v2_service" "news_collector" {
   deletion_protection = false
 
   template {
+    # /collect は同期処理。Speaker Deck の PDF ビジョン書き起こしで長時間化するため、
+    # 既定300sではゲートウェイ504になる。リクエストを完走させるため延長する。
+    timeout = "1800s"
+
     containers {
       image = "asia-northeast1-docker.pkg.dev/${var.project_id}/news-collector/news-collector:latest"
 
@@ -88,6 +92,8 @@ resource "google_cloud_scheduler_job" "news_pipeline_collect" {
   schedule  = "0 21 * * *"
   time_zone = "UTC"
   region    = var.region
+  # collect は数分〜十数分かかる。既定180sでは失敗扱い＆リトライになるため延長する。
+  attempt_deadline = "1800s"
 
   http_target {
     http_method = "POST"
