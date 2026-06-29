@@ -68,8 +68,9 @@ _DEFAULT_IMPORTANCE_THRESHOLD = 0.65
 _DEFAULT_MAX_CONTENT_RETRIES = 3
 _DEFAULT_RECALCULATE_LIMIT = 50
 # slide_prefilter_threshold: Speaker Deck の PDF を取得する前に title+description で
-# 関連度を見積もり、この値未満なら PDF をスキップする。取りこぼし防止のため低め。
-_DEFAULT_SLIDE_PREFILTER_THRESHOLD = 0.4
+# 関連度を見積もり、この値未満なら PDF をスキップする。description が空で title 中心の
+# 判定になりやすく辛めに出るため、取りこぼし防止を優先して低めに設定する。
+_DEFAULT_SLIDE_PREFILTER_THRESHOLD = 0.3
 
 
 class PipelineResponse(BaseModel):

@@ -156,7 +156,7 @@ news_pipeline/
 - **本文取得リトライ**: 本文取得に失敗した記事は `raw_articles` に `content_status='pending'` と `retry_count` で保存し、次回 `/collect` 実行時に再取得。`max_content_retries`（settings: `general/max_content_retries`、既定3）到達後は `failed` となり要約をスキップ。
 - **収集の繰り越し（取りこぼし防止）**: `/collect` は新着を**全件 `raw_articles` に保存**する（切り捨てない）。`max_summarize` は「1実行の要約バジェット＝繰り越し（pending）＋新着の合算上限」。バジェットは古い順に pending を優先消化し、残り枠で新着を即時要約。超過した新着は `content_status='pending'`・`retry_count=0` で繰り越し、次回以降に処理される（本文取得失敗の pending と同じキューを再利用）。
 - **Speaker Deck（スライド）**: feeds に `https://speakerdeck.com/<user>.rss`（ユーザー/組織単位のRSS）を追加すると収集対象になる。本文はスライド画像のため trafilatura では取れない。`article_parser.fetch_content` が Speaker Deck URL を判定し、`speakerdeck.fetch_slide_text` に委譲＝記事ページから PDF を取得し Claude のビジョン入力（`document` ブロック・Haiku 4.5）でプレーンテキストに**書き起こして** content として返す。以降（要約・再採点・deepdive・繰り越し/リトライ）は通常記事と同じ。PDF未発見やAPI 400（ページ超過等）はリトライ不要のスキップ、通信エラーは pending で繰り越す。pypdf 等のテキスト抽出は日本語スライドで文字化けするため不可。
-  - **1次フィルタ（コスト最適化）**: PDF取得の前に RSS の `title`+`description` だけで関連度を Haiku で見積もり（`summarizer.score_slide_relevance`）、`general/slide_prefilter_threshold`（既定0.4）未満なら PDFビジョン書き起こし(~$0.05)をスキップする。弾いた記事は `raw_articles` に `content_status='filtered'` で記録され再取得されない。description は空の item が多いため title 中心の判定で、判定不能(None)・閾値以上は通す（取りこぼし防止）。Speaker Deck 以外には適用しない。`description` は1次フィルタ専用の一時情報で raw_articles には保存しない。
+  - **1次フィルタ（コスト最適化）**: PDF取得の前に RSS の `title`+`description` だけで関連度を Haiku で見積もり（`summarizer.score_slide_relevance`）、`general/slide_prefilter_threshold`（既定0.3）未満なら PDFビジョン書き起こし(~$0.05)をスキップする。弾いた記事は `raw_articles` に `content_status='filtered'` で記録され再取得されない。description は空の item が多いため title 中心の判定で、判定不能(None)・閾値以上は通す（取りこぼし防止）。Speaker Deck 以外には適用しない。`description` は1次フィルタ専用の一時情報で raw_articles には保存しない。
 - **スコア再計算**: importance_score のロジック（`summarizer._build_scoring_criteria`）を変えたら `summarizer.SCORING_VERSION` を +1 してデプロイし、`POST /recalculate` を古い版が無くなるまで数回叩く。`summaries.scoring_version` で差分管理（既存行は NULL=旧版）。1回 `recalculate_limit`（既定50）件ずつ処理し、スコア更新のみで行は削除しない。
 
 ### 環境変数（news_pipeline/.env）
@@ -194,7 +194,7 @@ news_pipeline/
   - `general / max_summarize`: 1実行で要約する最大件数（繰り越し pending ＋ 新着の合算バジェット）
   - `general / importance_threshold`: summaries に残す importance_score の下限（未設定は 0.65）
   - `general / max_content_retries`: 本文取得の最大リトライ回数（未設定は 3）
-  - `general / slide_prefilter_threshold`: Speaker Deck の PDF を取得する前の関連度フィルタ下限（未設定は 0.4）。低いほど通しやすい
+  - `general / slide_prefilter_threshold`: Speaker Deck の PDF を取得する前の関連度フィルタ下限（未設定は 0.3）。低いほど通しやすい
   - `general / recalculate_limit`: 1回の /recalculate で再採点する最大件数（未設定は 50）
   - `<category> / max_notify`: そのカテゴリの通知件数上限（未設定は5）
   - `<category> / label`: Slack 通知のヘッダー表示名（未設定はカテゴリ名、`other` は `📰 その他`）
