@@ -138,7 +138,7 @@ gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.serv
 ```
 news_pipeline/
 ├── collector/          # Cloud Run Service（Flask）
-│   ├── main.py         # /collect (収集) /notify (通知) /recalculate (再採点) と /slack (Slash command, 通知) エンドポイント
+│   ├── main.py         # /collect (収集) /notify (通知) /recalculate (再採点) /resummarize (要約漏れ復旧) と /slack (Slash command, 通知) エンドポイント
 │   ├── rss_fetcher.py  # RSS取得
 │   ├── article_parser.py # 本文取得（requests + trafilatura）
 │   ├── summarizer.py   # Claude API要約
@@ -158,6 +158,7 @@ news_pipeline/
 - **Speaker Deck（スライド）**: feeds に `https://speakerdeck.com/<user>.rss`（ユーザー/組織単位のRSS）を追加すると収集対象になる。本文はスライド画像のため trafilatura では取れない。`article_parser.fetch_content` が Speaker Deck URL を判定し、`speakerdeck.fetch_slide_text` に委譲＝記事ページから PDF を取得し Claude のビジョン入力（`document` ブロック・Haiku 4.5）でプレーンテキストに**書き起こして** content として返す。以降（要約・再採点・deepdive・繰り越し/リトライ）は通常記事と同じ。PDF未発見やAPI 400（ページ超過等）はリトライ不要のスキップ、通信エラーは pending で繰り越す。pypdf 等のテキスト抽出は日本語スライドで文字化けするため不可。
   - **1次フィルタ（コスト最適化）**: PDF取得の前に RSS の `title`+`description` だけで関連度を Haiku で見積もり（`summarizer.score_slide_relevance`）、`general/slide_prefilter_threshold`（既定0.3）未満なら PDFビジョン書き起こし(~$0.05)をスキップする。弾いた記事は `raw_articles` に `content_status='filtered'` で記録され再取得されない。description は空の item が多いため title 中心の判定で、判定不能(None)・閾値以上は通す（取りこぼし防止）。Speaker Deck 以外には適用しない。`description` は1次フィルタ専用の一時情報で raw_articles には保存しない。
 - **スコア再計算**: importance_score のロジック（`summarizer._build_scoring_criteria`）を変えたら `summarizer.SCORING_VERSION` を +1 してデプロイし、`POST /recalculate` を古い版が無くなるまで数回叩く。`summaries.scoring_version` で差分管理（既存行は NULL=旧版）。1回 `recalculate_limit`（既定50）件ずつ処理し、スコア更新のみで行は削除しない。
+- **要約漏れの復旧（/resummarize）**: 本文取得は成功したが要約に失敗した記事（クレジット枯渇・API障害など）は `content_status='ok'`・`content` ありで残るが `summaries` が無く、pending でもないため自動リトライされない。`POST /resummarize` はこの orphan（`ok`＋本文あり＋summaries無し）を古い順に再要約する手動バッチ。閾値超えは `summaries` に保存し通常の未通知フローで通知、閾値未満は `content_status='summarized'`（終端）にマークして以降の対象外にする（冪等）。1回 `resummarize_limit`（既定50）件・直近 `resummarize_days`（既定7）日を対象。`recovered=0` かつ orphan 枯渇まで数回叩く。
 
 ### 環境変数（news_pipeline/.env）
 
@@ -196,6 +197,8 @@ news_pipeline/
   - `general / max_content_retries`: 本文取得の最大リトライ回数（未設定は 3）
   - `general / slide_prefilter_threshold`: Speaker Deck の PDF を取得する前の関連度フィルタ下限（未設定は 0.3）。低いほど通しやすい
   - `general / recalculate_limit`: 1回の /recalculate で再採点する最大件数（未設定は 50）
+  - `general / resummarize_limit`: 1回の /resummarize で再要約する最大件数（未設定は 50）
+  - `general / resummarize_days`: /resummarize が対象とする収集日ウィンドウ（未設定は 7）
   - `<category> / max_notify`: そのカテゴリの通知件数上限（未設定は5）
   - `<category> / label`: Slack 通知のヘッダー表示名（未設定はカテゴリ名、`other` は `📰 その他`）
 

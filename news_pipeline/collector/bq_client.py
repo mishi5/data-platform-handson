@@ -169,6 +169,55 @@ class BQClient:
         )
         self.client.query(query, job_config=job_config).result()
 
+    def get_unsummarized_articles(self, days: int, limit: int) -> list[dict]:
+        """本文はあるのに summaries が無い記事（orphan）を古い順で返す。
+
+        content_status='ok' かつ content 非空 かつ summaries に行が無いもの。直近 days 日、
+        LIMIT limit。要約失敗（クレジット枯渇等）で取り残された記事の復旧に使う。
+        """
+        query = (
+            f"SELECT r.article_id, r.title, r.url, r.source, r.content"
+            f" FROM `{self.project}.{DATASET}.raw_articles` r"
+            f" LEFT JOIN `{self.project}.{DATASET}.summaries` s"
+            f" ON r.article_id = s.article_id"
+            f" WHERE r.content_status = 'ok' AND r.content IS NOT NULL AND r.content != ''"
+            f" AND s.article_id IS NULL"
+            f" AND r.collected_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)"
+            f" ORDER BY r.collected_at ASC"
+            f" LIMIT @limit"
+        )
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("days", "INT64", days),
+                bigquery.ScalarQueryParameter("limit", "INT64", limit),
+            ]
+        )
+        rows = self.client.query(query, job_config=job_config).result()
+        return [dict(row) for row in rows]
+
+    def mark_article_summarized(self, article_id: str) -> None:
+        """再要約したが閾値未満だった記事を content_status='summarized'（終端）にする。
+
+        以降 get_unsummarized_articles の対象から除外され、無駄な再要約を防ぐ。
+        streaming buffer 制約等で UPDATE が失敗しても送出せずログのみ。
+        """
+        query = (
+            f"UPDATE `{self.project}.{DATASET}.raw_articles`"
+            f" SET content_status = 'summarized'"
+            f" WHERE article_id = @aid"
+        )
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("aid", "STRING", article_id),
+            ]
+        )
+        try:
+            self.client.query(query, job_config=job_config).result()
+        except Exception as e:
+            logger.warning(
+                "[bq_client] mark_article_summarized skipped for %s: %s", article_id, e
+            )
+
     def get_deepdive(self, article_id: str) -> str | None:
         """既存の深堀り結果を取得。なければ None。"""
         query = (

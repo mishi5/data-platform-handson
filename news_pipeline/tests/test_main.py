@@ -272,3 +272,91 @@ def test_prefilter_not_applied_to_non_speakerdeck(
 
     mock_prefilter.assert_not_called()
     assert mock_summarize.call_count == 2
+
+
+def _resummarize_config() -> dict:
+    return {
+        "feeds": {},
+        "keywords": [],
+        "feed_blocks": {},
+        "settings": {
+            "general": {
+                "importance_threshold": "0.65",
+                "resummarize_limit": "50",
+                "resummarize_days": "7",
+            }
+        },
+    }
+
+
+def _orphan(i: int) -> dict:
+    return {
+        "article_id": f"orphan{i}",
+        "title": f"Orphan {i}",
+        "url": f"https://example.com/orphan-{i}",
+        "source": "Example",
+        "content": "recovered body",
+    }
+
+
+@patch("collector.main.summarize_article")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_resummarize_above_threshold_inserts_summary(
+    mock_bqclass, mock_load_config, mock_summarize
+):
+    """閾値以上のorphanは summaries に復旧し、summarized マークはしない。"""
+    mock_load_config.return_value = _resummarize_config()
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_unsummarized_articles.return_value = [_orphan(0)]
+    mock_summarize.return_value = {"summary": "s", "tags": [], "importance_score": 0.8}
+
+    recovered = main_mod._run_resummarize()
+
+    assert recovered == 1
+    bq.insert_summaries.assert_called_once()
+    inserted = bq.insert_summaries.call_args[0][0][0]
+    assert inserted["article_id"] == "orphan0"
+    assert inserted["scoring_version"] == main_mod.SCORING_VERSION
+    bq.mark_article_summarized.assert_not_called()
+
+
+@patch("collector.main.summarize_article")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_resummarize_below_threshold_marks_summarized(
+    mock_bqclass, mock_load_config, mock_summarize
+):
+    """閾値未満のorphanは summaries に入れず content_status='summarized' にマーク。"""
+    mock_load_config.return_value = _resummarize_config()
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_unsummarized_articles.return_value = [_orphan(0)]
+    mock_summarize.return_value = {"summary": "s", "tags": [], "importance_score": 0.3}
+
+    recovered = main_mod._run_resummarize()
+
+    assert recovered == 0
+    bq.insert_summaries.assert_not_called()
+    bq.mark_article_summarized.assert_called_once_with("orphan0")
+
+
+@patch("collector.main.summarize_article")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_resummarize_failure_skips_without_marking(
+    mock_bqclass, mock_load_config, mock_summarize
+):
+    """要約失敗（None）は summaries挿入もマークもせず 'ok' のまま残す（次回リトライ）。"""
+    mock_load_config.return_value = _resummarize_config()
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_unsummarized_articles.return_value = [_orphan(0)]
+    mock_summarize.return_value = None
+
+    recovered = main_mod._run_resummarize()
+
+    assert recovered == 0
+    bq.insert_summaries.assert_not_called()
+    bq.mark_article_summarized.assert_not_called()

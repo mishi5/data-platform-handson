@@ -67,6 +67,9 @@ _DEFAULT_MAX_SUMMARIZE = 10
 _DEFAULT_IMPORTANCE_THRESHOLD = 0.65
 _DEFAULT_MAX_CONTENT_RETRIES = 3
 _DEFAULT_RECALCULATE_LIMIT = 50
+# resummarize: 要約漏れ記事（本文ありで summaries 無し）の復旧バッチ設定
+_DEFAULT_RESUMMARIZE_LIMIT = 50
+_DEFAULT_RESUMMARIZE_DAYS = 7
 # slide_prefilter_threshold: Speaker Deck の PDF を取得する前に title+description で
 # 関連度を見積もり、この値未満なら PDF をスキップする。description が空で title 中心の
 # 判定になりやすく辛めに出るため、取りこぼし防止を優先して低めに設定する。
@@ -525,6 +528,112 @@ def _run_recalculate(triggered_by: str = "manual") -> int:
             logger.error("[recalculate] failed to save pipeline log: %s", e)
 
 
+def _run_resummarize(triggered_by: str = "manual") -> int:
+    """本文ありで summaries が無い記事（orphan）を再要約する。復旧（summaries挿入）件数を返す。
+
+    要約失敗（クレジット枯渇等）で取り残された記事を救済する手動バッチ。閾値超えは
+    summaries に保存し通常の未通知フローで通知される。閾値未満は content_status='summarized'
+    にマークして以降の対象から除外する（冪等化）。
+    """
+    import uuid
+    from datetime import datetime, timezone
+
+    run_id = str(uuid.uuid4())
+    started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    log: dict = {
+        "run_id": run_id,
+        "triggered_by": triggered_by,
+        "started_at": started_at,
+        "finished_at": None,
+        "articles_fetched": 0,
+        "new_articles": 0,
+        "summaries_generated": 0,
+        "notified_count": 0,
+        "error_count": 0,
+        "status": "success",
+        "error_message": None,
+        "keywords": [],
+    }
+
+    config = load_config()
+    keywords: list[str] = config.get("keywords", [])
+    settings: dict = config.get("settings", {})
+    general: dict = settings.get("general", {})
+    importance_threshold: float = float(
+        general.get("importance_threshold", _DEFAULT_IMPORTANCE_THRESHOLD)
+    )
+    resummarize_limit: int = int(
+        general.get("resummarize_limit", _DEFAULT_RESUMMARIZE_LIMIT)
+    )
+    resummarize_days: int = int(
+        general.get("resummarize_days", _DEFAULT_RESUMMARIZE_DAYS)
+    )
+    log["keywords"] = keywords
+
+    bq = BQClient(project=PROJECT_ID)
+
+    try:
+        orphans = bq.get_unsummarized_articles(resummarize_days, resummarize_limit)
+        logger.info(
+            "[resummarize] %d unsummarized articles (within %d days)",
+            len(orphans),
+            resummarize_days,
+        )
+
+        recovered = 0
+        for a in orphans:
+            try:
+                result = summarize_article(
+                    title=a["title"],
+                    content=a.get("content") or "",
+                    api_key=ANTHROPIC_API_KEY,
+                    keywords=keywords,
+                )
+            except Exception as e:
+                logger.warning("[resummarize] summarize failed for %s: %s", a["url"], e)
+                log["error_count"] += 1
+                continue
+            if not result:
+                log["error_count"] += 1
+                continue
+
+            if result.get("importance_score", 0) >= importance_threshold:
+                bq.insert_summaries(
+                    [
+                        {
+                            "article_id": a["article_id"],
+                            "title": a["title"],
+                            "url": a["url"],
+                            "source": a["source"],
+                            "scoring_version": SCORING_VERSION,
+                            **result,
+                        }
+                    ]
+                )
+                recovered += 1
+            else:
+                # 閾値未満は終端状態にして以降の対象から外す（冪等化）
+                bq.mark_article_summarized(a["article_id"])
+
+        log["summaries_generated"] = recovered
+        logger.info("[resummarize] recovered %d summaries", recovered)
+        return recovered
+
+    except Exception as e:
+        log["status"] = "error"
+        log["error_message"] = str(e)
+        logger.error("[resummarize] error: %s", e)
+        raise
+
+    finally:
+        log["finished_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            bq.insert_pipeline_log(log)
+            logger.info("[resummarize] saved pipeline log run_id=%s", run_id)
+        except Exception as e:
+            logger.error("[resummarize] failed to save pipeline log: %s", e)
+
+
 def _run_deepdive(article_id_prefix: str, response_url: str) -> None:
     """深堀り処理。完了後に response_url へ結果を POST する。"""
     bq = BQClient(project=PROJECT_ID)
@@ -601,6 +710,13 @@ async def notify():
 async def recalculate():
     """importance_score を現行ロジックで再計算する手動エンドポイント。"""
     n = await asyncio.to_thread(_run_recalculate)
+    return PipelineResponse(status="ok", notified=n)
+
+
+@app.post("/resummarize", response_model=PipelineResponse)
+async def resummarize():
+    """本文ありで summaries が無い記事を再要約し復旧する手動エンドポイント。"""
+    n = await asyncio.to_thread(_run_resummarize)
     return PipelineResponse(status="ok", notified=n)
 
 

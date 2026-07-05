@@ -406,3 +406,66 @@ def test_update_summary_score_runs_update_dml(mock_bq_class):
     assert "summaries" in q
     assert "scoring_version" in q
     assert "importance_score" in q
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_get_unsummarized_articles_filters_orphans(mock_bq_class):
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+    _data = {
+        "article_id": "o1",
+        "title": "Orphan",
+        "url": "https://example.com/o1",
+        "source": "Src",
+        "content": "body",
+    }
+    mock_row = MagicMock()
+    mock_row.keys.return_value = list(_data.keys())
+    mock_row.__getitem__ = lambda self, key: _data[key]
+    mock_client.query.return_value.result.return_value = [mock_row]
+
+    bq = BQClient(project="test-project")
+    result = bq.get_unsummarized_articles(days=7, limit=50)
+
+    assert result[0]["article_id"] == "o1"
+    q = mock_client.query.call_args[0][0]
+    assert "raw_articles" in q
+    assert "summaries" in q
+    assert "LEFT JOIN" in q
+    assert "IS NULL" in q  # summaries に無い
+    assert "content_status = 'ok'" in q
+    assert "ORDER BY" in q
+    assert "collected_at" in q
+    assert "LIMIT" in q
+    param_names = {
+        p.name
+        for p in mock_client.query.call_args.kwargs["job_config"].query_parameters
+    }
+    assert "days" in param_names and "limit" in param_names
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_mark_article_summarized_runs_update_dml(mock_bq_class):
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+
+    bq = BQClient(project="test-project")
+    bq.mark_article_summarized("o1")
+
+    q = mock_client.query.call_args[0][0]
+    assert "UPDATE" in q
+    assert "raw_articles" in q
+    assert "summarized" in q
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_mark_article_summarized_swallows_streaming_buffer_error(mock_bq_class):
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+    mock_client.query.return_value.result.side_effect = Exception(
+        "UPDATE or DELETE statement over table would affect rows in the streaming buffer"
+    )
+
+    bq = BQClient(project="test-project")
+    # 例外を送出しない
+    bq.mark_article_summarized("o1")
