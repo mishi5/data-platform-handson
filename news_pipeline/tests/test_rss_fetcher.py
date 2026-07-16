@@ -1,5 +1,5 @@
 from unittest.mock import MagicMock
-from collector.rss_fetcher import fetch_articles
+from collector.rss_fetcher import _normalize_url, fetch_articles
 
 _DUMMY_FEEDS = {"https://example.com/rss": "Example Source"}
 
@@ -64,3 +64,41 @@ def test_fetch_articles_handles_http_error(mocker):
 
     articles = fetch_articles(_DUMMY_FEEDS)
     assert articles == []
+
+
+def test_normalize_url_strips_tracking_params():
+    assert (
+        _normalize_url(
+            "https://example.com/post?utm_source=rss&utm_medium=feed&id=1&fbclid=xyz"
+        )
+        == "https://example.com/post?id=1"
+    )
+
+
+def test_normalize_url_strips_fragment():
+    assert _normalize_url("https://example.com/post#section-2") == (
+        "https://example.com/post"
+    )
+
+
+def test_normalize_url_keeps_clean_url_unchanged():
+    assert (
+        _normalize_url("https://example.com/post?page=2")
+        == "https://example.com/post?page=2"
+    )
+
+
+def test_fetch_articles_normalizes_entry_url(mocker):
+    _mock_response(mocker)
+    mock_feed = MagicMock()
+    mock_feed.entries = [
+        MagicMock(
+            title="T",
+            link="https://example.com/post?utm_source=rss",
+            published="Sat, 08 Mar 2026 09:00:00 GMT",
+        )
+    ]
+    mocker.patch("collector.rss_fetcher.feedparser.parse", return_value=mock_feed)
+
+    articles = fetch_articles(_DUMMY_FEEDS)
+    assert articles[0]["url"] == "https://example.com/post"

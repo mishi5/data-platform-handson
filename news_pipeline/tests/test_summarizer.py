@@ -1,6 +1,5 @@
-import json
 from unittest.mock import MagicMock, patch
-from anthropic.types import TextBlock
+from anthropic.types import ToolUseBlock
 from collector.summarizer import (
     summarize_article,
     score_article,
@@ -9,21 +8,26 @@ from collector.summarizer import (
 )
 
 
-@patch("collector.summarizer.anthropic.Anthropic")
-def test_summarize_article_returns_dict(mock_anthropic_class):
+def _mock_tool_response(mock_anthropic_class, tool_input: dict) -> MagicMock:
+    """tool_use ブロックを1つ返す messages.create のモックを組み立てる。"""
     mock_client = MagicMock()
     mock_anthropic_class.return_value = mock_client
+    block = MagicMock(spec=ToolUseBlock)
+    block.input = tool_input
+    mock_client.messages.create.return_value.content = [block]
+    return mock_client
 
-    response_text = json.dumps(
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_summarize_article_returns_dict(mock_anthropic_class):
+    mock_client = _mock_tool_response(
+        mock_anthropic_class,
         {
             "summary": "- BigQuery added new feature\n- Improves performance",
             "tags": ["bigquery", "performance"],
             "importance_score": 0.85,
-        }
+        },
     )
-    mock_client.messages.create.return_value.content = [
-        MagicMock(spec=TextBlock, text=response_text)
-    ]
 
     result = summarize_article(
         title="BigQuery update",
@@ -36,12 +40,39 @@ def test_summarize_article_returns_dict(mock_anthropic_class):
     assert "bigquery" in result["tags"]
     assert result["importance_score"] == 0.85
 
+    # tool use を強制し temperature=0 で呼び出す（structured output・採点の一貫性）
+    call_kwargs = mock_client.messages.create.call_args.kwargs
+    assert call_kwargs["temperature"] == 0
+    assert call_kwargs["tool_choice"]["type"] == "tool"
+    assert call_kwargs["tool_choice"]["name"] == "record_summary"
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_summarize_article_joins_list_summary(mock_anthropic_class):
+    _mock_tool_response(
+        mock_anthropic_class,
+        {"summary": ["- A", "- B"], "tags": [], "importance_score": 0.5},
+    )
+
+    result = summarize_article(title="T", content="C", api_key="key")
+    assert result["summary"] == "- A\n- B"
+
 
 @patch("collector.summarizer.anthropic.Anthropic")
 def test_summarize_article_returns_none_on_api_error(mock_anthropic_class):
     mock_client = MagicMock()
     mock_anthropic_class.return_value = mock_client
     mock_client.messages.create.side_effect = Exception("API error")
+
+    result = summarize_article(title="T", content="C", api_key="key")
+    assert result is None
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_summarize_article_returns_none_without_tool_block(mock_anthropic_class):
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    mock_client.messages.create.return_value.content = []
 
     result = summarize_article(title="T", content="C", api_key="key")
     assert result is None
@@ -72,28 +103,14 @@ def test_build_scoring_criteria_no_keywords():
 
 @patch("collector.summarizer.anthropic.Anthropic")
 def test_score_article_returns_float(mock_anthropic_class):
-    mock_client = MagicMock()
-    mock_anthropic_class.return_value = mock_client
-    response_text = json.dumps({"importance_score": 0.72})
-    mock_client.messages.create.return_value.content = [
-        MagicMock(spec=TextBlock, text=response_text)
-    ]
+    mock_client = _mock_tool_response(mock_anthropic_class, {"importance_score": 0.72})
 
     score = score_article(title="T", content="C", api_key="k", keywords=["BigQuery"])
     assert score == 0.72
 
-
-@patch("collector.summarizer.anthropic.Anthropic")
-def test_score_article_strips_code_fence(mock_anthropic_class):
-    mock_client = MagicMock()
-    mock_anthropic_class.return_value = mock_client
-    response_text = '```json\n{"importance_score": 0.4}\n```'
-    mock_client.messages.create.return_value.content = [
-        MagicMock(spec=TextBlock, text=response_text)
-    ]
-
-    score = score_article(title="T", content="C", api_key="k")
-    assert score == 0.4
+    call_kwargs = mock_client.messages.create.call_args.kwargs
+    assert call_kwargs["temperature"] == 0
+    assert call_kwargs["tool_choice"]["name"] == "record_score"
 
 
 @patch("collector.summarizer.anthropic.Anthropic")
@@ -125,14 +142,13 @@ def test_scoring_version_is_2():
 def test_score_slide_relevance_returns_float(mock_anthropic_class):
     from collector.summarizer import score_slide_relevance
 
-    mock_client = MagicMock()
-    mock_anthropic_class.return_value = mock_client
-    mock_msg = MagicMock()
-    mock_msg.content = [TextBlock(type="text", text='{"relevance_score": 0.8}')]
-    mock_client.messages.create.return_value = mock_msg
+    mock_client = _mock_tool_response(mock_anthropic_class, {"relevance_score": 0.8})
 
     score = score_slide_relevance("Title", "desc", "key", keywords=["dbt"])
     assert score == 0.8
+
+    call_kwargs = mock_client.messages.create.call_args.kwargs
+    assert call_kwargs["tool_choice"]["name"] == "record_relevance"
 
 
 @patch("collector.summarizer.anthropic.Anthropic")

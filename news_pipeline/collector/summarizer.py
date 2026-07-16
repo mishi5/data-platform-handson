@@ -4,12 +4,16 @@
 - score_article: 重要度スコアのみを再計算（/recalculate 用）
 スコア判定基準は _build_scoring_criteria に集約し両者で共用する。
 スコアロジックを変えたら SCORING_VERSION を +1 すること。
+
+出力は tool use（tool_choice で強制）による structured output で受け取る。
+プロンプトで「JSONのみ返せ」と指示してパースする方式はモデルが余計な文を
+返すと落ちるため使わない。採点の一貫性のため temperature=0 を明示する。
 """
 
-import json
 import logging
+
 import anthropic
-from anthropic.types import TextBlock
+from anthropic.types import ToolUseBlock
 
 logger = logging.getLogger(__name__)
 
@@ -18,40 +22,84 @@ SCORING_VERSION = 2
 
 _MODEL = "claude-haiku-4-5-20251001"
 
+# 要約・採点に渡す本文の最大文字数。長い技術記事は結論が後半にあることが
+# 多いため、切り詰めすぎると価値を取りこぼす（Haiku なので費用影響は小さい）。
+_MAX_CONTENT_CHARS = 8000
+
 _SUMMARY_PROMPT_TEMPLATE = """あなたはデータエンジニアリングの技術ニュースを要約するアシスタントです。
-記事を読んで以下の JSON 形式で回答してください。
+記事を読んで record_summary ツールで要約・タグ・重要度を記録してください。
 
-{{
-  "summary": "箇条書きで3〜5項目の技術ポイント（日本語・文字列・改行区切り）",
-  "tags": ["タグ1", "タグ2"],
-  "importance_score": 0.0〜1.0
-}}
+summary は箇条書きで3〜5項目の技術ポイント（日本語・改行区切り）にしてください。
 
-{scoring_criteria}
-
-JSON のみを返してください。説明文は不要です。"""
+{scoring_criteria}"""
 
 _SCORE_PROMPT_TEMPLATE = """あなたはデータエンジニアリングの技術ニュースの重要度を評価するアシスタントです。
-記事を読んで以下の JSON 形式で重要度スコアのみを回答してください。
+記事を読んで record_score ツールで重要度スコアを記録してください。
 
-{{
-  "importance_score": 0.0〜1.0
-}}
-
-{scoring_criteria}
-
-JSON のみを返してください。説明文は不要です。"""
+{scoring_criteria}"""
 
 
 _SLIDE_PREFILTER_PROMPT_TEMPLATE = """あなたはデータエンジニアリングのスライド資料を、全文(PDF)を読む前にざっくり選別するアシスタントです。
-スライドのタイトルと短い説明だけから、データエンジニアにとって読む価値がありそうかを 0.0〜1.0 で見積もってください。
+スライドのタイトルと短い説明だけから、データエンジニアにとって読む価値がありそうかを 0.0〜1.0 で見積もり、record_relevance ツールで記録してください。
 
 {scoring_criteria}
 
-重要: 説明が空・極端に短い等で情報が少ない場合は判断を保留し、高め(0.6以上)に倒してください（PDFを読めば価値があるかもしれず、取りこぼしを避けるため）。
+重要: 説明が空・極端に短い等で情報が少ない場合は判断を保留し、高め(0.6以上)に倒してください（PDFを読めば価値があるかもしれず、取りこぼしを避けるため）。"""
 
-次の JSON のみを返してください。説明文は不要です。
-{{"relevance_score": 0.0〜1.0}}"""
+
+_SUMMARY_TOOL = {
+    "name": "record_summary",
+    "description": "記事の要約・タグ・重要度スコアを記録する",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "summary": {
+                "type": "string",
+                "description": "箇条書き3〜5項目の技術ポイント（日本語・改行区切り）",
+            },
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "記事の技術トピックを表すタグ",
+            },
+            "importance_score": {
+                "type": "number",
+                "description": "重要度スコア（0.0〜1.0）",
+            },
+        },
+        "required": ["summary", "tags", "importance_score"],
+    },
+}
+
+_SCORE_TOOL = {
+    "name": "record_score",
+    "description": "記事の重要度スコアを記録する",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "importance_score": {
+                "type": "number",
+                "description": "重要度スコア（0.0〜1.0）",
+            },
+        },
+        "required": ["importance_score"],
+    },
+}
+
+_RELEVANCE_TOOL = {
+    "name": "record_relevance",
+    "description": "スライドの関連度スコアを記録する",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "relevance_score": {
+                "type": "number",
+                "description": "関連度スコア（0.0〜1.0）",
+            },
+        },
+        "required": ["relevance_score"],
+    },
+}
 
 
 def _build_scoring_criteria(keywords: list[str]) -> str:
@@ -101,39 +149,47 @@ def _build_score_only_prompt(keywords: list[str]) -> str:
     )
 
 
-def _strip_code_fence(text: str) -> str:
-    """```json ... ``` や ``` ... ``` のコードフェンスを除去する。"""
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
-    return text
+def _call_tool(
+    system_prompt: str,
+    user_content: str,
+    tool: dict,
+    api_key: str,
+    max_tokens: int,
+) -> dict | None:
+    """tool_choice で指定ツールを強制呼び出しし、その入力（dict）を返す。"""
+    client = anthropic.Anthropic(api_key=api_key)
+    message = client.messages.create(
+        model=_MODEL,
+        max_tokens=max_tokens,
+        temperature=0,
+        system=system_prompt,
+        tools=[tool],
+        tool_choice={"type": "tool", "name": tool["name"]},
+        messages=[{"role": "user", "content": user_content}],
+    )
+    block = next(
+        (b for b in message.content if isinstance(b, ToolUseBlock)),
+        None,
+    )
+    if block is None:
+        return None
+    return dict(block.input)
 
 
 def summarize_article(
     title: str, content: str, api_key: str, keywords: list[str] | None = None
 ) -> dict | None:
     """Claude で記事を要約する。失敗時は None。keywords に基づいて importance_score を判定する。"""
-    system_prompt = _build_system_prompt(keywords or [])
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        message = client.messages.create(
-            model=_MODEL,
-            max_tokens=512,
-            system=system_prompt,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"タイトル: {title}\n\n本文:\n{content[:3000]}",
-                }
-            ],
+        result = _call_tool(
+            system_prompt=_build_system_prompt(keywords or []),
+            user_content=f"タイトル: {title}\n\n本文:\n{content[:_MAX_CONTENT_CHARS]}",
+            tool=_SUMMARY_TOOL,
+            api_key=api_key,
+            max_tokens=1024,
         )
-        block = message.content[0]
-        if not isinstance(block, TextBlock):
+        if result is None:
             return None
-        result = json.loads(_strip_code_fence(block.text))
         if isinstance(result.get("summary"), list):
             result["summary"] = "\n".join(result["summary"])
         return result
@@ -154,26 +210,16 @@ def score_slide_relevance(
         scoring_criteria=_build_scoring_criteria(keywords or [])
     )
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        message = client.messages.create(
-            model=_MODEL,
-            max_tokens=64,
-            system=system_prompt,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"タイトル: {title}\n\n説明:\n{(description or '')[:500]}",
-                }
-            ],
+        result = _call_tool(
+            system_prompt=system_prompt,
+            user_content=f"タイトル: {title}\n\n説明:\n{(description or '')[:500]}",
+            tool=_RELEVANCE_TOOL,
+            api_key=api_key,
+            max_tokens=128,
         )
-        block = message.content[0]
-        if not isinstance(block, TextBlock):
+        if result is None or result.get("relevance_score") is None:
             return None
-        result = json.loads(_strip_code_fence(block.text))
-        score = result.get("relevance_score")
-        if score is None:
-            return None
-        return float(score)
+        return float(result["relevance_score"])
     except Exception as e:
         logger.error("[summarizer] slide prefilter failed: %s", e)
         return None
@@ -183,28 +229,17 @@ def score_article(
     title: str, content: str, api_key: str, keywords: list[str] | None = None
 ) -> float | None:
     """記事の importance_score のみを再計算する。失敗時は None。"""
-    system_prompt = _build_score_only_prompt(keywords or [])
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        message = client.messages.create(
-            model=_MODEL,
-            max_tokens=64,
-            system=system_prompt,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"タイトル: {title}\n\n本文:\n{content[:3000]}",
-                }
-            ],
+        result = _call_tool(
+            system_prompt=_build_score_only_prompt(keywords or []),
+            user_content=f"タイトル: {title}\n\n本文:\n{content[:_MAX_CONTENT_CHARS]}",
+            tool=_SCORE_TOOL,
+            api_key=api_key,
+            max_tokens=128,
         )
-        block = message.content[0]
-        if not isinstance(block, TextBlock):
+        if result is None or result.get("importance_score") is None:
             return None
-        result = json.loads(_strip_code_fence(block.text))
-        score = result.get("importance_score")
-        if score is None:
-            return None
-        return float(score)
+        return float(result["importance_score"])
     except Exception as e:
         logger.error("[summarizer] score failed: %s", e)
         return None

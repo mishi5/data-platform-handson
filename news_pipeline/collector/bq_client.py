@@ -7,6 +7,10 @@ logger = logging.getLogger(__name__)
 
 DATASET = "tech_news"
 
+# dedup 用に既存URLを読む窓。RSS に載るのは直近記事だけなので全件は不要で、
+# 全件スキャンだと蓄積に比例してスキャン量・メモリが単調増加する。
+_DEDUP_WINDOW_DAYS = 90
+
 
 class BQClient:
     def __init__(self, project: str):
@@ -15,9 +19,18 @@ class BQClient:
         self.project = project
 
     def get_existing_urls(self) -> set[str]:
-        """raw_articles に保存済みの URL セットを返す（dedup 用）。"""
-        query = f"SELECT url FROM `{self.project}.{DATASET}.raw_articles`"
-        rows = self.client.query(query).result()
+        """直近 _DEDUP_WINDOW_DAYS 日に保存した URL セットを返す（dedup 用）。"""
+        query = (
+            f"SELECT url FROM `{self.project}.{DATASET}.raw_articles`"
+            f" WHERE collected_at >="
+            f" TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)"
+        )
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("days", "INT64", _DEDUP_WINDOW_DAYS),
+            ]
+        )
+        rows = self.client.query(query, job_config=job_config).result()
         return {row.url for row in rows}
 
     def get_existing_summary_ids(self) -> set[str]:

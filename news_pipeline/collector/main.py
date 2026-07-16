@@ -32,7 +32,7 @@ from categorizer import (
 from config_loader import load_config
 from deepdiver import deepdive_article
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fetch_retry import next_fetch_state
 from notifier import (
     format_favorites_blocks,
