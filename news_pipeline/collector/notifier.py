@@ -163,11 +163,15 @@ def send_slack_notification(
     articles: list[dict],
     webhook_url: str,
     header: str = "本日のデータエンジニアリング技術ニュース",
-) -> None:
-    """summaries リストを Slack に通知する。header はメッセージ見出し。"""
+) -> bool:
+    """summaries リストを Slack に通知する。header はメッセージ見出し。
+
+    送信成功時 True。失敗時は False を返し、呼び出し側は通知済みマークを
+    スキップして次回 /notify で再送させる。
+    """
     if not articles:
         logger.info("[notifier] no articles to notify")
-        return
+        return True
 
     blocks = _format_blocks(articles, header)
     payload = {"text": header, "blocks": blocks}
@@ -175,9 +179,9 @@ def send_slack_notification(
         resp = requests.post(webhook_url, json=payload, timeout=10)
         if resp.status_code != 200:
             logger.error("[notifier] slack error: %s %s", resp.status_code, resp.text)
-        else:
-            logger.info(
-                "[notifier] sent %d articles to slack (%s)", len(articles), header
-            )
+            return False
+        logger.info("[notifier] sent %d articles to slack (%s)", len(articles), header)
+        return True
     except Exception as e:
         logger.error("[notifier] failed to post to slack: %s", e)
+        return False

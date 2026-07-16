@@ -274,6 +274,153 @@ def test_prefilter_not_applied_to_non_speakerdeck(
     assert mock_summarize.call_count == 2
 
 
+@patch("collector.main.summarize_article")
+@patch("collector.main.fetch_content")
+@patch("collector.main.fetch_articles")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_below_threshold_new_articles_marked_summarized(
+    mock_bqclass,
+    mock_load_config,
+    mock_fetch_articles,
+    mock_fetch_content,
+    mock_summarize,
+):
+    """閾値未満の新着は content_status='summarized'（終端）で保存し orphan にしない。"""
+    mock_load_config.return_value = _config(max_summarize="10")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_existing_urls.return_value = set()
+    bq.get_pending_articles.return_value = []
+    bq.get_existing_summary_ids.return_value = set()
+
+    mock_fetch_articles.return_value = [_make_article(0), _make_article(1)]
+    mock_fetch_content.return_value = ("body", True)
+    # 1件目=閾値以上, 2件目=閾値未満
+    mock_summarize.side_effect = [
+        {"summary": "s", "tags": [], "importance_score": 0.9},
+        {"summary": "s", "tags": [], "importance_score": 0.3},
+    ]
+
+    main_mod._run_collect()
+
+    saved = bq.insert_raw_articles.call_args[0][0]
+    statuses = {a["article_id"]: a["content_status"] for a in saved}
+    assert statuses["id0"] == "ok"
+    assert statuses["id1"] == "summarized"
+    # 新着はストリーミング挿入前に dict を書き換えるので DML マークは呼ばれない
+    bq.mark_article_summarized.assert_not_called()
+
+
+@patch("collector.main.summarize_article")
+@patch("collector.main.fetch_content")
+@patch("collector.main.fetch_articles")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_below_threshold_pending_articles_marked_via_dml(
+    mock_bqclass,
+    mock_load_config,
+    mock_fetch_articles,
+    mock_fetch_content,
+    mock_summarize,
+):
+    """閾値未満の繰り越し（pending由来）記事は DML で summarized にマークする。"""
+    mock_load_config.return_value = _config(max_summarize="10")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_existing_urls.return_value = set()
+    bq.get_pending_articles.return_value = [
+        {
+            "article_id": "p1",
+            "url": "https://example.com/p1",
+            "title": "P1",
+            "source": "Example",
+            "retry_count": 0,
+        }
+    ]
+    bq.get_existing_summary_ids.return_value = set()
+
+    mock_fetch_articles.return_value = []
+    mock_fetch_content.return_value = ("body", True)
+    mock_summarize.return_value = {"summary": "s", "tags": [], "importance_score": 0.3}
+
+    main_mod._run_collect()
+
+    bq.mark_article_summarized.assert_called_once_with("p1")
+    bq.insert_summaries.assert_not_called()
+
+
+@patch("collector.main.send_no_news_notification")
+@patch("collector.main.send_slack_notification")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_notify_send_failure_does_not_mark_notified(
+    mock_bqclass, mock_load_config, mock_send, mock_no_news
+):
+    """Slack送信失敗時は通知済みマークせず、「新着なし」通知もしない。"""
+    mock_load_config.return_value = {
+        "feeds": {"https://example.com/rss": "Example"},
+        "keywords": [],
+        "feed_categories": {},
+        "feed_blocks": {},
+        "settings": {},
+    }
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_unnotified_summaries.return_value = [
+        {
+            "article_id": "a1",
+            "title": "T",
+            "url": "https://example.com/1",
+            "source": "Example",
+            "summary": "- x",
+            "importance_score": 0.9,
+        }
+    ]
+    mock_send.return_value = False
+
+    notified = main_mod._run_notify()
+
+    assert notified == 0
+    bq.mark_summaries_notified.assert_not_called()
+    mock_no_news.assert_not_called()
+
+
+@patch("collector.main.send_no_news_notification")
+@patch("collector.main.send_slack_notification")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_notify_success_marks_notified(
+    mock_bqclass, mock_load_config, mock_send, mock_no_news
+):
+    """Slack送信成功時は通知済みマークする。"""
+    mock_load_config.return_value = {
+        "feeds": {"https://example.com/rss": "Example"},
+        "keywords": [],
+        "feed_categories": {},
+        "feed_blocks": {},
+        "settings": {},
+    }
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_unnotified_summaries.return_value = [
+        {
+            "article_id": "a1",
+            "title": "T",
+            "url": "https://example.com/1",
+            "source": "Example",
+            "summary": "- x",
+            "importance_score": 0.9,
+        }
+    ]
+    mock_send.return_value = True
+
+    notified = main_mod._run_notify()
+
+    assert notified == 1
+    bq.mark_summaries_notified.assert_called_once_with(["a1"])
+
+
 def _resummarize_config() -> dict:
     return {
         "feeds": {},

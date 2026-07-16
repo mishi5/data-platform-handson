@@ -55,6 +55,58 @@ def test_format_includes_article_id_and_url(mock_post):
 
 
 @patch("collector.notifier.requests.post")
+def test_send_notification_returns_true_on_success(mock_post):
+    mock_post.return_value.status_code = 200
+    articles = [
+        {
+            "title": "T",
+            "url": "https://example.com/1",
+            "source": "S",
+            "summary": "- x",
+        }
+    ]
+    assert (
+        send_slack_notification(articles, webhook_url="https://hooks.slack.com/test")
+        is True
+    )
+
+
+@patch("collector.notifier.requests.post")
+def test_send_notification_returns_false_on_http_error(mock_post):
+    mock_post.return_value.status_code = 500
+    mock_post.return_value.text = "server error"
+    articles = [
+        {
+            "title": "T",
+            "url": "https://example.com/1",
+            "source": "S",
+            "summary": "- x",
+        }
+    ]
+    assert (
+        send_slack_notification(articles, webhook_url="https://hooks.slack.com/test")
+        is False
+    )
+
+
+@patch("collector.notifier.requests.post")
+def test_send_notification_returns_false_on_exception(mock_post):
+    mock_post.side_effect = Exception("connection error")
+    articles = [
+        {
+            "title": "T",
+            "url": "https://example.com/1",
+            "source": "S",
+            "summary": "- x",
+        }
+    ]
+    assert (
+        send_slack_notification(articles, webhook_url="https://hooks.slack.com/test")
+        is False
+    )
+
+
+@patch("collector.notifier.requests.post")
 def test_send_no_news_notification_posts_to_webhook(mock_post):
     mock_post.return_value.status_code = 200
 

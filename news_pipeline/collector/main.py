@@ -279,15 +279,7 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
             article["content_status"] = "pending"
             article["retry_count"] = 0
 
-        # 5. raw_articles 保存（全新着＝取りこぼしゼロ。filtered も記録し再取得を防ぐ）
-        if new_articles:
-            # description は1次フィルタ用の一時情報。スキーマ外なので保存前に除去。
-            for a in new_articles:
-                a.pop("description", None)
-            bq.insert_raw_articles(new_articles)
-            logger.info("[collect] saved %d to raw_articles", len(new_articles))
-
-        # 6. 要約生成（本文取得に成功した記事のみ）
+        # 5. 要約生成（本文取得に成功した記事のみ）
         summaries = []
         for article in to_summarize:
             try:
@@ -315,7 +307,7 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
                     }
                 )
 
-        # 7. importance_threshold フィルタ
+        # 6. importance_threshold フィルタ
         relevant_summaries = [
             s for s in summaries if s.get("importance_score", 0) >= importance_threshold
         ]
@@ -325,6 +317,35 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
             len(relevant_summaries),
             importance_threshold,
         )
+
+        # 6.5. 閾値未満は content_status='summarized'（終端）にする。放置すると
+        #      「本文あり・summaries無し」の orphan として /resummarize が無駄に
+        #      再要約してしまうため。新着は保存前に dict を書き換え（streaming buffer
+        #      直後の DML UPDATE は失敗するため）、繰り越し由来の既存行は DML でマーク。
+        below_ids = {
+            s["article_id"]
+            for s in summaries
+            if s.get("importance_score", 0) < importance_threshold
+        }
+        if below_ids:
+            for article in to_fetch_now:
+                if article["article_id"] in below_ids:
+                    article["content_status"] = "summarized"
+            for p in pending:
+                if p["article_id"] in below_ids:
+                    bq.mark_article_summarized(p["article_id"])
+            logger.info(
+                "[collect] marked %d below-threshold articles as summarized",
+                len(below_ids),
+            )
+
+        # 7. raw_articles 保存（全新着＝取りこぼしゼロ。filtered も記録し再取得を防ぐ）
+        if new_articles:
+            # description は1次フィルタ用の一時情報。スキーマ外なので保存前に除去。
+            for a in new_articles:
+                a.pop("description", None)
+            bq.insert_raw_articles(new_articles)
+            logger.info("[collect] saved %d to raw_articles", len(new_articles))
 
         # 8. summaries 保存（article_id 重複を排除）
         if relevant_summaries:
@@ -414,16 +435,29 @@ def _run_notify(triggered_by: str = "scheduler") -> int:
             top = items[: category_limit(category, settings)]
             if not top:
                 continue
-            send_slack_notification(
+            sent = send_slack_notification(
                 top, SLACK_WEBHOOK_URL, header=category_label(category, settings)
             )
+            if not sent:
+                # 送信失敗分は通知済みマークせず、次回 /notify で再送する
+                log["error_count"] += 1
+                logger.warning(
+                    "[notify] slack send failed for category '%s'; "
+                    "left unnotified for retry",
+                    category,
+                )
+                continue
             notified_ids.extend(a["article_id"] for a in top)
             logger.info(
                 "[notify] notified %d articles in category '%s'", len(top), category
             )
 
         if not notified_ids:
-            send_no_news_notification(SLACK_WEBHOOK_URL, "新着記事はありませんでした。")
+            # 送信失敗によるゼロ件では「新着なし」と誤通知しない
+            if log["error_count"] == 0:
+                send_no_news_notification(
+                    SLACK_WEBHOOK_URL, "新着記事はありませんでした。"
+                )
             return 0
 
         # 11. 通知済みマーク（全カテゴリの和集合）
@@ -774,7 +808,7 @@ async def slack_actions(
         background_tasks.add_task(_run_deepdive, article_id, response_url)
         return {
             "response_type": "ephemeral",
-            "text": f":mag: 深堀り中です。しばらくお待ちください...",
+            "text": ":mag: 深堀り中です。しばらくお待ちください...",
         }
 
     return {}

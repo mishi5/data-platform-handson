@@ -162,7 +162,11 @@ def test_get_deepdive_returns_text_when_found(mock_bq_class):
     assert result == "📌 背景...\n🔍 技術的なポイント..."
     query_arg = mock_client.query.call_args[0][0]
     assert "deepdives" in query_arg
-    assert "abc12345" in query_arg
+    # article_id は SQL に埋め込まずクエリパラメータで渡す（SQLi 対策）
+    assert "abc12345" not in query_arg
+    job_config = mock_client.query.call_args.kwargs["job_config"]
+    params = {p.name: p.value for p in job_config.query_parameters}
+    assert params["aid"] == "abc12345"
 
 
 @patch("collector.bq_client.bigquery.Client")
@@ -217,9 +221,42 @@ def test_get_article_by_id_returns_dict_when_found(mock_bq_class):
     assert result is not None
     assert result["article_id"] == "abc12345xyz"
     query_arg = mock_client.query.call_args[0][0]
-    assert "abc12345" in query_arg
     assert "raw_articles" in query_arg
     assert "summaries" in query_arg
+    # プレフィックスは SQL に埋め込まずクエリパラメータで渡す（SQLi 対策）
+    assert "abc12345" not in query_arg
+    job_config = mock_client.query.call_args.kwargs["job_config"]
+    params = {p.name: p.value for p in job_config.query_parameters}
+    assert params["prefix"] == "abc12345"
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_favorites_queries_use_parameters(mock_bq_class):
+    """delete_favorite / is_favorited は article_id をパラメータで渡す（SQLi 対策）。"""
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+    mock_client.query.return_value.result.return_value = []
+
+    bq = BQClient(project="test-project")
+    malicious = "x' OR '1'='1"
+
+    bq.delete_favorite(malicious)
+    q = mock_client.query.call_args[0][0]
+    assert malicious not in q
+    params = {
+        p.name: p.value
+        for p in mock_client.query.call_args.kwargs["job_config"].query_parameters
+    }
+    assert params["aid"] == malicious
+
+    bq.is_favorited(malicious)
+    q = mock_client.query.call_args[0][0]
+    assert malicious not in q
+    params = {
+        p.name: p.value
+        for p in mock_client.query.call_args.kwargs["job_config"].query_parameters
+    }
+    assert params["aid"] == malicious
 
 
 @patch("collector.bq_client.bigquery.Client")

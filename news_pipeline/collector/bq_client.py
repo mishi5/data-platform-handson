@@ -222,10 +222,15 @@ class BQClient:
         """既存の深堀り結果を取得。なければ None。"""
         query = (
             f"SELECT deepdive_text FROM `{self.project}.{DATASET}.deepdives`"
-            f" WHERE article_id = '{article_id}'"
+            f" WHERE article_id = @aid"
             f" LIMIT 1"
         )
-        rows = list(self.client.query(query).result())
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("aid", "STRING", article_id),
+            ]
+        )
+        rows = list(self.client.query(query, job_config=job_config).result())
         if not rows:
             return None
         return rows[0].deepdive_text
@@ -250,10 +255,15 @@ class BQClient:
             f"SELECT s.article_id, s.title, s.url, r.content"
             f" FROM `{self.project}.{DATASET}.summaries` s"
             f" JOIN `{self.project}.{DATASET}.raw_articles` r ON s.article_id = r.article_id"
-            f" WHERE s.article_id LIKE '{article_id_prefix}%'"
+            f" WHERE STARTS_WITH(s.article_id, @prefix)"
             f" LIMIT 1"
         )
-        rows = list(self.client.query(query).result())
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("prefix", "STRING", article_id_prefix),
+            ]
+        )
+        rows = list(self.client.query(query, job_config=job_config).result())
         if not rows:
             return None
         return dict(rows[0])
@@ -288,10 +298,14 @@ class BQClient:
     def delete_favorite(self, article_id: str) -> None:
         """お気に入りから記事を削除する。"""
         query = (
-            f"DELETE FROM `{self.project}.{DATASET}.favorites`"
-            f" WHERE article_id = '{article_id}'"
+            f"DELETE FROM `{self.project}.{DATASET}.favorites` WHERE article_id = @aid"
         )
-        self.client.query(query).result()
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("aid", "STRING", article_id),
+            ]
+        )
+        self.client.query(query, job_config=job_config).result()
         logger.info("[bq_client] deleted favorite article_id=%s", article_id)
 
     def insert_favorite(self, article_id: str) -> None:
@@ -311,10 +325,15 @@ class BQClient:
         """記事がすでにお気に入り済みか確認する。"""
         query = (
             f"SELECT 1 FROM `{self.project}.{DATASET}.favorites`"
-            f" WHERE article_id = '{article_id}'"
+            f" WHERE article_id = @aid"
             f" LIMIT 1"
         )
-        rows = list(self.client.query(query).result())
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("aid", "STRING", article_id),
+            ]
+        )
+        rows = list(self.client.query(query, job_config=job_config).result())
         return len(rows) > 0
 
     def insert_pipeline_log(self, log: dict) -> None:
