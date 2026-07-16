@@ -4,10 +4,14 @@ Speaker Deck の記事はスライド画像のため trafilatura では取得で
 URL を判定して speakerdeck モジュール（PDF→Claudeビジョン書き起こし）へ委譲する。
 """
 
+import logging
+
 import requests
 import trafilatura  # type: ignore[import-untyped]
 
 import speakerdeck
+
+logger = logging.getLogger(__name__)
 
 _HEADERS = {
     "User-Agent": (
@@ -37,7 +41,7 @@ def fetch_content(url: str, api_key: str | None = None) -> tuple[str | None, boo
         response = requests.get(url, headers=_HEADERS, timeout=30)
         response.raise_for_status()
     except Exception as e:
-        print(f"[article_parser] failed to fetch {url}: {e}")
+        logger.warning("[article_parser] failed to fetch %s: %s", url, e)
         return None, False
     text = trafilatura.extract(response.text)  # type: ignore[attr-defined]
     return text, True

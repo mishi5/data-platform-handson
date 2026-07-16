@@ -1,9 +1,29 @@
-"""RSS フィードから記事メタデータを取得するモジュール。"""
+"""RSS フィードから記事メタデータを取得するモジュール。
+
+feedparser にURLを直接渡すとタイムアウト指定ができず、応答しないフィードが
+1つあると収集全体がハングする。requests でタイムアウト付き取得してから
+feedparser にパースさせる2段構成にしている。
+"""
 
 import hashlib
-import feedparser
+import logging
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+
+import feedparser
+import requests
+
+logger = logging.getLogger(__name__)
+
+_FEED_TIMEOUT_SECONDS = 30
+
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
+}
 
 
 def _parse_published(entry) -> str | None:
@@ -25,13 +45,17 @@ def _make_article_id(url: str) -> str:
 def fetch_articles(feeds: dict[str, str]) -> list[dict]:
     """RSSフィードから記事リストを返す。feeds が空の場合は空リストを返す。"""
     if not feeds:
-        print("[rss_fetcher] feeds is empty")
+        logger.warning("[rss_fetcher] feeds is empty")
         return []
 
     results = []
     for feed_url, source_name in feeds.items():
         try:
-            feed = feedparser.parse(feed_url)
+            response = requests.get(
+                feed_url, headers=_HEADERS, timeout=_FEED_TIMEOUT_SECONDS
+            )
+            response.raise_for_status()
+            feed = feedparser.parse(response.content)
             for entry in feed.entries:
                 if not hasattr(entry, "link"):
                     continue
@@ -49,6 +73,6 @@ def fetch_articles(feeds: dict[str, str]) -> list[dict]:
                     }
                 )
         except Exception as e:
-            print(f"[rss_fetcher] feed error {feed_url}: {e}")
+            logger.warning("[rss_fetcher] feed error %s: %s", feed_url, e)
 
     return results

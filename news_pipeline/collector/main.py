@@ -36,6 +36,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Requ
 from fetch_retry import next_fetch_state
 from notifier import (
     format_favorites_blocks,
+    send_error_notification,
     send_no_news_notification,
     send_slack_notification,
 )
@@ -178,6 +179,13 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
     bq = BQClient(project=PROJECT_ID)
 
     try:
+        # 0. 設定ガード。Sheets 読み込み失敗（load_config が {} を返す）や feeds 空を
+        #    「新着0件の成功」として黙って完了させず、エラーとして観測可能にする。
+        if not feeds:
+            raise RuntimeError(
+                "feeds is empty: Google Sheets の設定読み込みに失敗した可能性"
+            )
+
         # 1. RSS 取得
         articles = fetch_articles(feeds)
         log["articles_fetched"] = len(articles)
@@ -365,6 +373,7 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
         log["status"] = "error"
         log["error_message"] = str(e)
         logger.error("[collect] pipeline error: %s", e)
+        send_error_notification(SLACK_WEBHOOK_URL, "collect", str(e))
         raise
 
     finally:
@@ -406,6 +415,13 @@ def _run_notify(triggered_by: str = "scheduler") -> int:
     bq = BQClient(project=PROJECT_ID)
 
     try:
+        # 0. 設定ガード。設定なしで進むとブロックリスト・カテゴリ設定が
+        #    適用されないまま通知してしまうため、エラーとして観測可能にする。
+        if not config:
+            raise RuntimeError(
+                "config is empty: Google Sheets の設定読み込みに失敗した可能性"
+            )
+
         # 9. 未通知サマリーを取得
         unnotified = bq.get_unnotified_summaries()
         logger.info("[notify] %d unnotified summaries in BQ", len(unnotified))
@@ -471,6 +487,7 @@ def _run_notify(triggered_by: str = "scheduler") -> int:
         log["status"] = "error"
         log["error_message"] = str(e)
         logger.error("[notify] pipeline error: %s", e)
+        send_error_notification(SLACK_WEBHOOK_URL, "notify", str(e))
         raise
 
     finally:
@@ -551,6 +568,7 @@ def _run_recalculate(triggered_by: str = "manual") -> int:
         log["status"] = "error"
         log["error_message"] = str(e)
         logger.error("[recalculate] error: %s", e)
+        send_error_notification(SLACK_WEBHOOK_URL, "recalculate", str(e))
         raise
 
     finally:
@@ -657,6 +675,7 @@ def _run_resummarize(triggered_by: str = "manual") -> int:
         log["status"] = "error"
         log["error_message"] = str(e)
         logger.error("[resummarize] error: %s", e)
+        send_error_notification(SLACK_WEBHOOK_URL, "resummarize", str(e))
         raise
 
     finally:

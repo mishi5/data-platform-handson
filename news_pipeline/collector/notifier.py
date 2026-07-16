@@ -146,6 +146,19 @@ def format_favorites_blocks(favorites: list[dict]) -> list:
     return blocks
 
 
+def send_error_notification(webhook_url: str, source: str, error: str) -> None:
+    """パイプラインエラーを Slack へアラート通知する。アラート自体の失敗はログのみ。"""
+    text = f"⚠️ *news_pipeline エラー* [{source}]\n```{error}```"
+    try:
+        resp = requests.post(webhook_url, json={"text": text}, timeout=10)
+        if resp.status_code != 200:
+            logger.error(
+                "[notifier] error alert failed: %s %s", resp.status_code, resp.text
+            )
+    except Exception as e:
+        logger.error("[notifier] failed to post error alert: %s", e)
+
+
 def send_no_news_notification(webhook_url: str, reason: str) -> None:
     """ネタ切れ時に Slack へ通知する。"""
     text = f":newspaper: *本日のデータエンジニアリングニュース*\n{reason}"

@@ -28,7 +28,7 @@ def _make_article(i: int) -> dict:
 
 def _config(max_summarize: str) -> dict:
     return {
-        "feeds": {},
+        "feeds": {"https://example.com/rss": "Example"},
         "keywords": [],
         "feed_blocks": {},
         "settings": {
@@ -350,6 +350,48 @@ def test_below_threshold_pending_articles_marked_via_dml(
     bq.insert_summaries.assert_not_called()
 
 
+@patch("collector.main.send_error_notification")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_collect_raises_and_alerts_when_feeds_empty(
+    mock_bqclass, mock_load_config, mock_alert
+):
+    """設定ロード失敗（feeds空）は「成功・0件」ではなくエラーにし、Slackアラートを送る。"""
+    import pytest
+
+    mock_load_config.return_value = {}
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+
+    with pytest.raises(RuntimeError):
+        main_mod._run_collect()
+
+    mock_alert.assert_called_once()
+    # pipeline_logs には status='error' で記録される
+    saved_log = bq.insert_pipeline_log.call_args[0][0]
+    assert saved_log["status"] == "error"
+
+
+@patch("collector.main.send_error_notification")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_notify_raises_and_alerts_when_config_empty(
+    mock_bqclass, mock_load_config, mock_alert
+):
+    """設定ロード失敗時の /notify はブロックリスト未適用のまま通知せずエラーにする。"""
+    import pytest
+
+    mock_load_config.return_value = {}
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+
+    with pytest.raises(RuntimeError):
+        main_mod._run_notify()
+
+    mock_alert.assert_called_once()
+    bq.mark_summaries_notified.assert_not_called()
+
+
 @patch("collector.main.send_no_news_notification")
 @patch("collector.main.send_slack_notification")
 @patch("collector.main.load_config")
@@ -423,7 +465,7 @@ def test_notify_success_marks_notified(
 
 def _resummarize_config() -> dict:
     return {
-        "feeds": {},
+        "feeds": {"https://example.com/rss": "Example"},
         "keywords": [],
         "feed_blocks": {},
         "settings": {
