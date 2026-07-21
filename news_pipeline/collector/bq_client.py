@@ -340,16 +340,21 @@ class BQClient:
         favorites × summaries を JOIN して tags を集計する。出現2回以上のタグのみを
         対象にし、1記事だけの偶発タグへの過適合を防ぐ（お気に入りが貯まるまでは
         自然に空＝パーソナライズなしで動く）。
+
+        タグは自由生成のため表記ゆれで票が割れる（Snowflake/snowflake、
+        data modeling/data_modeling 等）。小文字化・アンダースコア→スペース・
+        トリムで正規化してから集計する。
         """
         query = (
-            f"SELECT tag, COUNT(DISTINCT f.article_id) AS cnt"
+            f"SELECT TRIM(REPLACE(LOWER(tag), '_', ' ')) AS norm_tag,"
+            f" COUNT(DISTINCT f.article_id) AS cnt"
             f" FROM `{self.project}.{DATASET}.favorites` f"
             f" JOIN `{self.project}.{DATASET}.summaries` s"
             f" ON f.article_id = s.article_id"
             f", UNNEST(s.tags) AS tag"
-            f" GROUP BY tag"
+            f" GROUP BY norm_tag"
             f" HAVING cnt >= 2"
-            f" ORDER BY cnt DESC, tag"
+            f" ORDER BY cnt DESC, norm_tag"
             f" LIMIT @limit"
         )
         job_config = bigquery.QueryJobConfig(
@@ -358,7 +363,7 @@ class BQClient:
             ]
         )
         rows = self.client.query(query, job_config=job_config).result()
-        return [row.tag for row in rows]
+        return [row.norm_tag for row in rows]
 
     def is_favorited(self, article_id: str) -> bool:
         """記事がすでにお気に入り済みか確認する。"""

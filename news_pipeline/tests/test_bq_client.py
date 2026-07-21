@@ -483,13 +483,13 @@ def test_get_unsummarized_articles_filters_orphans(mock_bq_class):
 
 @patch("collector.bq_client.bigquery.Client")
 def test_get_favorite_tag_counts_aggregates_tags(mock_bq_class):
-    """favorites × summaries のタグを集計し、出現2回以上を頻度降順で返す。"""
+    """favorites × summaries のタグを正規化して集計し、出現2回以上を頻度降順で返す。"""
     mock_client = MagicMock()
     mock_bq_class.return_value = mock_client
     row1 = MagicMock()
-    row1.tag = "bigquery"
+    row1.norm_tag = "bigquery"
     row2 = MagicMock()
-    row2.tag = "dbt"
+    row2.norm_tag = "dbt"
     mock_client.query.return_value.result.return_value = [row1, row2]
 
     bq = BQClient(project="test-project")
@@ -502,6 +502,10 @@ def test_get_favorite_tag_counts_aggregates_tags(mock_bq_class):
     assert "UNNEST" in q
     assert "HAVING cnt >= 2" in q
     assert "ORDER BY cnt DESC" in q
+    # 表記ゆれ（大文字小文字・アンダースコア）を正規化してから集計する
+    assert "LOWER(tag)" in q
+    assert "REPLACE" in q
+    assert "GROUP BY norm_tag" in q
     params = {
         p.name: p.value
         for p in mock_client.query.call_args.kwargs["job_config"].query_parameters
