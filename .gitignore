@@ -47,7 +47,7 @@ news_pipeline/memo/
 
 # BigQuery関連
 bigquery-data/
-scripts/
+/scripts/
 
 # GCP認証キー（重要！） サービスアカウントキー（~/.dbt/bigquery-key.json）は別ディレクトリにあるため問題ないが念の為。
 *.json

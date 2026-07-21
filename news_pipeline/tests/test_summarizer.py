@@ -48,6 +48,38 @@ def test_summarize_article_returns_dict(mock_anthropic_class):
 
 
 @patch("collector.summarizer.anthropic.Anthropic")
+def test_summarize_article_normalizes_tags(mock_anthropic_class):
+    """タグは小文字化・アンダースコア→スペース・トリム・重複排除して返す。"""
+    _mock_tool_response(
+        mock_anthropic_class,
+        {
+            "summary": "- x",
+            "tags": ["Data_Governance", " dbt ", "dbt", "BigQuery"],
+            "importance_score": 0.5,
+        },
+    )
+
+    result = summarize_article(title="T", content="C", api_key="key")
+    assert result["tags"] == ["data governance", "dbt", "bigquery"]
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_summarize_prompt_instructs_english_tags(mock_anthropic_class):
+    """システムプロンプトとツール定義で英語タグを指示する。"""
+    mock_client = _mock_tool_response(
+        mock_anthropic_class,
+        {"summary": "- x", "tags": [], "importance_score": 0.5},
+    )
+
+    summarize_article(title="T", content="C", api_key="key")
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert "英語" in kwargs["system"]
+    tags_desc = kwargs["tools"][0]["input_schema"]["properties"]["tags"]["description"]
+    assert "英語" in tags_desc
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
 def test_summarize_article_joins_list_summary(mock_anthropic_class):
     _mock_tool_response(
         mock_anthropic_class,

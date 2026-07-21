@@ -30,6 +30,8 @@ _SUMMARY_PROMPT_TEMPLATE = """あなたはデータエンジニアリングの�
 記事を読んで record_summary ツールで要約・タグ・重要度を記録してください。
 
 summary は箇条書きで3〜5項目の技術ポイント（日本語・改行区切り）にしてください。
+tags は英語・小文字・単語はスペース区切りで統一してください（日本語記事でも英語で付ける。
+例: data governance, vector search, dbt）。
 
 {scoring_criteria}"""
 
@@ -60,7 +62,10 @@ _SUMMARY_TOOL = {
             "tags": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "記事の技術トピックを表すタグ",
+                "description": (
+                    "記事の技術トピックを表す英語小文字のタグ"
+                    "（例: data governance, dbt）。日本語記事でも英語で付ける"
+                ),
             },
             "importance_score": {
                 "type": "number",
@@ -165,6 +170,15 @@ def _build_score_only_prompt(
     )
 
 
+def _normalize_tag(tag: str) -> str:
+    """タグの機械正規化: 小文字化・アンダースコア→スペース・トリム。
+
+    プロンプトで英語小文字を指示しているが、モデル出力の揺れ
+    （大文字・アンダースコア区切り）を保存前に吸収する。
+    """
+    return tag.lower().replace("_", " ").strip()
+
+
 def _call_tool(
     system_prompt: str,
     user_content: str,
@@ -212,6 +226,15 @@ def summarize_article(
             return None
         if isinstance(result.get("summary"), list):
             result["summary"] = "\n".join(result["summary"])
+        if isinstance(result.get("tags"), list):
+            normalized: list[str] = []
+            for t in result["tags"]:
+                if not isinstance(t, str):
+                    continue
+                nt = _normalize_tag(t)
+                if nt and nt not in normalized:
+                    normalized.append(nt)
+            result["tags"] = normalized
         return result
     except Exception as e:
         logger.error("[summarizer] failed: %s", e)
