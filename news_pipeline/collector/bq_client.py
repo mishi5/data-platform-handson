@@ -334,6 +334,32 @@ class BQClient:
             logger.error("[bq_client] insert_favorite errors: %s", errors)
             raise RuntimeError(f"BigQuery favorites insert failed: {errors}")
 
+    def get_favorite_tag_counts(self, limit: int) -> list[str]:
+        """お気に入り記事に多いタグを出現数降順で返す（スコアリングのパーソナライズ用）。
+
+        favorites × summaries を JOIN して tags を集計する。出現2回以上のタグのみを
+        対象にし、1記事だけの偶発タグへの過適合を防ぐ（お気に入りが貯まるまでは
+        自然に空＝パーソナライズなしで動く）。
+        """
+        query = (
+            f"SELECT tag, COUNT(DISTINCT f.article_id) AS cnt"
+            f" FROM `{self.project}.{DATASET}.favorites` f"
+            f" JOIN `{self.project}.{DATASET}.summaries` s"
+            f" ON f.article_id = s.article_id"
+            f", UNNEST(s.tags) AS tag"
+            f" GROUP BY tag"
+            f" HAVING cnt >= 2"
+            f" ORDER BY cnt DESC, tag"
+            f" LIMIT @limit"
+        )
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("limit", "INT64", limit),
+            ]
+        )
+        rows = self.client.query(query, job_config=job_config).result()
+        return [row.tag for row in rows]
+
     def is_favorited(self, article_id: str) -> bool:
         """記事がすでにお気に入り済みか確認する。"""
         query = (

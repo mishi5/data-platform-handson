@@ -102,17 +102,20 @@ _RELEVANCE_TOOL = {
 }
 
 
-def _build_scoring_criteria(keywords: list[str]) -> str:
+def _build_scoring_criteria(
+    keywords: list[str], favorite_tags: list[str] | None = None
+) -> str:
     """importance_score の判定基準を組み立てる。summarize / score_article で共用。
 
     主軸は「データエンジニアにとって読む価値があるか」の総合判断。
     keyword は興味分野のヒント（加点）で、無くても価値があれば相応に高くする。
+    favorite_tags はお気に入り履歴由来の暗黙的な関心（加点ヒント）。
     """
     if keywords:
         items = "\n".join(f"  - {kw}" for kw in keywords)
     else:
         items = "  （キーワード未設定のため、データエンジニアリング全般を対象とする）"
-    return (
+    criteria = (
         "importance_score は「データエンジニアにとって読む価値があるか」を総合的に判断して付ける。\n"
         "\n"
         "高くすべき記事（価値が高い）：\n"
@@ -133,19 +136,32 @@ def _build_scoring_criteria(keywords: list[str]) -> str:
         "- 0.5前後: 有用だが一般的、または部分的に価値がある\n"
         "- 0.3以下: 宣伝・PR、中身が薄い、データエンジニアにほぼ無関係"
     )
+    if favorite_tags:
+        tag_items = "\n".join(f"  - {t}" for t in favorite_tags)
+        criteria += (
+            "\n\n"
+            "また、次はユーザーが過去にお気に入りした記事に多いトピック。"
+            "該当する記事は関心が高い可能性があるため加点のヒントにする：\n"
+            f"{tag_items}"
+        )
+    return criteria
 
 
-def _build_system_prompt(keywords: list[str]) -> str:
+def _build_system_prompt(
+    keywords: list[str], favorite_tags: list[str] | None = None
+) -> str:
     """要約+タグ+スコア用のシステムプロンプト。"""
     return _SUMMARY_PROMPT_TEMPLATE.format(
-        scoring_criteria=_build_scoring_criteria(keywords)
+        scoring_criteria=_build_scoring_criteria(keywords, favorite_tags)
     )
 
 
-def _build_score_only_prompt(keywords: list[str]) -> str:
+def _build_score_only_prompt(
+    keywords: list[str], favorite_tags: list[str] | None = None
+) -> str:
     """スコアのみ用のシステムプロンプト。"""
     return _SCORE_PROMPT_TEMPLATE.format(
-        scoring_criteria=_build_scoring_criteria(keywords)
+        scoring_criteria=_build_scoring_criteria(keywords, favorite_tags)
     )
 
 
@@ -177,12 +193,16 @@ def _call_tool(
 
 
 def summarize_article(
-    title: str, content: str, api_key: str, keywords: list[str] | None = None
+    title: str,
+    content: str,
+    api_key: str,
+    keywords: list[str] | None = None,
+    favorite_tags: list[str] | None = None,
 ) -> dict | None:
     """Claude で記事を要約する。失敗時は None。keywords に基づいて importance_score を判定する。"""
     try:
         result = _call_tool(
-            system_prompt=_build_system_prompt(keywords or []),
+            system_prompt=_build_system_prompt(keywords or [], favorite_tags),
             user_content=f"タイトル: {title}\n\n本文:\n{content[:_MAX_CONTENT_CHARS]}",
             tool=_SUMMARY_TOOL,
             api_key=api_key,
@@ -199,7 +219,11 @@ def summarize_article(
 
 
 def score_slide_relevance(
-    title: str, description: str, api_key: str, keywords: list[str] | None = None
+    title: str,
+    description: str,
+    api_key: str,
+    keywords: list[str] | None = None,
+    favorite_tags: list[str] | None = None,
 ) -> float | None:
     """スライド(Speaker Deck)の PDF を読む前に、title+description だけで関連度を見積もる。
 
@@ -207,7 +231,7 @@ def score_slide_relevance(
     None を「判定不能＝通す」として扱う）。情報が少ない場合は高めのスコアを返す。
     """
     system_prompt = _SLIDE_PREFILTER_PROMPT_TEMPLATE.format(
-        scoring_criteria=_build_scoring_criteria(keywords or [])
+        scoring_criteria=_build_scoring_criteria(keywords or [], favorite_tags)
     )
     try:
         result = _call_tool(
@@ -226,12 +250,16 @@ def score_slide_relevance(
 
 
 def score_article(
-    title: str, content: str, api_key: str, keywords: list[str] | None = None
+    title: str,
+    content: str,
+    api_key: str,
+    keywords: list[str] | None = None,
+    favorite_tags: list[str] | None = None,
 ) -> float | None:
     """記事の importance_score のみを再計算する。失敗時は None。"""
     try:
         result = _call_tool(
-            system_prompt=_build_score_only_prompt(keywords or []),
+            system_prompt=_build_score_only_prompt(keywords or [], favorite_tags),
             user_content=f"タイトル: {title}\n\n本文:\n{content[:_MAX_CONTENT_CHARS]}",
             tool=_SCORE_TOOL,
             api_key=api_key,

@@ -161,6 +161,7 @@ news_pipeline/
 - **閾値未満の終端化**: `/collect` で要約したが `importance_threshold` 未満だった記事は `content_status='summarized'`（終端）で保存され、orphan にならない（新着は streaming buffer 制約を避けるため raw_articles 保存前に status を確定、繰り越し由来は DML でマーク）。
 - **通知失敗の再送**: Slack 送信に失敗したカテゴリは通知済みマークをスキップし、次回 `/notify` で再送される。パイプライン例外時は Slack にエラーアラートが飛ぶ。設定ロード失敗（feeds/config 空）は「成功・0件」ではなくエラーになる。
 - **dedup**: 既存URLの照合は直近90日窓（`bq_client._DEDUP_WINDOW_DAYS`）。収集URLは `utm_*`・`fbclid` 等のトラッキングパラメータと fragment を除去して正規化してから article_id を計算する。
+- **スコアリングのパーソナライズ**: `/collect` `/recalculate` `/resummarize` は開始時に favorites × summaries からタグ頻度上位N個（`general/personalize_top_tags`、既定5・0で無効）を取得し、採点基準の加点ヒントとして追記する（`bq_client.get_favorite_tag_counts`）。出現2回以上のタグのみ対象（偶発タグへの過適合防止）。keywords シート同様「ヒント入力」の変化なので `SCORING_VERSION` は上げない。タグ取得失敗時は空リストで続行（パーソナライズなしにフォールバック）。
 - **要約漏れの復旧（/resummarize）**: 本文取得は成功したが要約に失敗した記事（クレジット枯渇・API障害など）は `content_status='ok'`・`content` ありで残るが `summaries` が無く、pending でもないため自動リトライされない。`POST /resummarize` はこの orphan（`ok`＋本文あり＋summaries無し）を古い順に再要約する手動バッチ。閾値超えは `summaries` に保存し通常の未通知フローで通知、閾値未満は `content_status='summarized'`（終端）にマークして以降の対象外にする（冪等）。1回 `resummarize_limit`（既定50）件・直近 `resummarize_days`（既定7）日を対象。`recovered=0` かつ orphan 枯渇まで数回叩く。
 
 ### 環境変数（news_pipeline/.env）
@@ -199,6 +200,7 @@ news_pipeline/
   - `general / importance_threshold`: summaries に残す importance_score の下限（未設定は 0.65）
   - `general / max_content_retries`: 本文取得の最大リトライ回数（未設定は 3）
   - `general / slide_prefilter_threshold`: Speaker Deck の PDF を取得する前の関連度フィルタ下限（未設定は 0.3）。低いほど通しやすい
+  - `general / personalize_top_tags`: お気に入り記事のタグ頻度上位N個を採点の加点ヒントに使う（未設定は 5、`0` で無効）
   - `general / recalculate_limit`: 1回の /recalculate で再採点する最大件数（未設定は 50）
   - `general / resummarize_limit`: 1回の /resummarize で再要約する最大件数（未設定は 50）
   - `general / resummarize_days`: /resummarize が対象とする収集日ウィンドウ（未設定は 7）

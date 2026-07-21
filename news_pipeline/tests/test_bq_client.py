@@ -482,6 +482,34 @@ def test_get_unsummarized_articles_filters_orphans(mock_bq_class):
 
 
 @patch("collector.bq_client.bigquery.Client")
+def test_get_favorite_tag_counts_aggregates_tags(mock_bq_class):
+    """favorites × summaries のタグを集計し、出現2回以上を頻度降順で返す。"""
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+    row1 = MagicMock()
+    row1.tag = "bigquery"
+    row2 = MagicMock()
+    row2.tag = "dbt"
+    mock_client.query.return_value.result.return_value = [row1, row2]
+
+    bq = BQClient(project="test-project")
+    tags = bq.get_favorite_tag_counts(limit=5)
+
+    assert tags == ["bigquery", "dbt"]
+    q = mock_client.query.call_args[0][0]
+    assert "favorites" in q
+    assert "summaries" in q
+    assert "UNNEST" in q
+    assert "HAVING cnt >= 2" in q
+    assert "ORDER BY cnt DESC" in q
+    params = {
+        p.name: p.value
+        for p in mock_client.query.call_args.kwargs["job_config"].query_parameters
+    }
+    assert params["limit"] == 5
+
+
+@patch("collector.bq_client.bigquery.Client")
 def test_mark_article_summarized_runs_update_dml(mock_bq_class):
     mock_client = MagicMock()
     mock_bq_class.return_value = mock_client

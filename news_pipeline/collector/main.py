@@ -75,6 +75,9 @@ _DEFAULT_RESUMMARIZE_DAYS = 7
 # 関連度を見積もり、この値未満なら PDF をスキップする。description が空で title 中心の
 # 判定になりやすく辛めに出るため、取りこぼし防止を優先して低めに設定する。
 _DEFAULT_SLIDE_PREFILTER_THRESHOLD = 0.3
+# personalize_top_tags: お気に入り記事のタグ頻度上位N個を採点の加点ヒントに使う。
+# 0 で無効（BigQuery クエリ自体をスキップ）。
+_DEFAULT_PERSONALIZE_TOP_TAGS = 5
 
 
 class PipelineResponse(BaseModel):
@@ -121,6 +124,25 @@ async def verify_slack(request: Request) -> None:
     )
     if not hmac.compare_digest(expected, request.headers.get("X-Slack-Signature", "")):
         raise HTTPException(status_code=403, detail="invalid signature")
+
+
+def _load_favorite_tags(bq: BQClient, general: dict) -> list[str]:
+    """お気に入り由来の関心タグを取得する（採点のパーソナライズ用）。
+
+    personalize_top_tags=0 なら無効（クエリ自体をスキップ）。取得失敗時は
+    空リストで続行し、パーソナライズなしの通常採点にフォールバックする。
+    """
+    limit = int(general.get("personalize_top_tags", _DEFAULT_PERSONALIZE_TOP_TAGS))
+    if limit <= 0:
+        return []
+    try:
+        tags = bq.get_favorite_tag_counts(limit)
+        if tags:
+            logger.info("[personalize] favorite tags: %s", tags)
+        return tags
+    except Exception as e:
+        logger.warning("[personalize] failed to load favorite tags: %s", e)
+        return []
 
 
 def _filter_blocked(items: list[dict], feed_blocks: dict) -> list[dict]:
@@ -186,6 +208,9 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
                 "feeds is empty: Google Sheets の設定読み込みに失敗した可能性"
             )
 
+        # 0.5. お気に入り由来の関心タグ（採点のパーソナライズ用。失敗しても続行）
+        favorite_tags = _load_favorite_tags(bq, general)
+
         # 1. RSS 取得
         articles = fetch_articles(feeds)
         log["articles_fetched"] = len(articles)
@@ -219,6 +244,7 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
                     description=a.get("description", ""),
                     api_key=ANTHROPIC_API_KEY,
                     keywords=keywords,
+                    favorite_tags=favorite_tags,
                 )
                 if score is not None and score < slide_prefilter_threshold:
                     a["content"] = None
@@ -296,6 +322,7 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
                     content=article["content"] or "",
                     api_key=ANTHROPIC_API_KEY,
                     keywords=keywords,
+                    favorite_tags=favorite_tags,
                 )
             except Exception as e:
                 logger.warning(
@@ -533,6 +560,8 @@ def _run_recalculate(triggered_by: str = "manual") -> int:
     bq = BQClient(project=PROJECT_ID)
 
     try:
+        favorite_tags = _load_favorite_tags(bq, general)
+
         rows = bq.get_outdated_summaries(SCORING_VERSION, recalculate_limit)
         logger.info(
             "[recalculate] %d outdated summaries (version < %d)",
@@ -547,6 +576,7 @@ def _run_recalculate(triggered_by: str = "manual") -> int:
                 content=row.get("content") or "",
                 api_key=ANTHROPIC_API_KEY,
                 keywords=keywords,
+                favorite_tags=favorite_tags,
             )
             if score is None:
                 log["error_count"] += 1
@@ -625,6 +655,8 @@ def _run_resummarize(triggered_by: str = "manual") -> int:
     bq = BQClient(project=PROJECT_ID)
 
     try:
+        favorite_tags = _load_favorite_tags(bq, general)
+
         orphans = bq.get_unsummarized_articles(resummarize_days, resummarize_limit)
         logger.info(
             "[resummarize] %d unsummarized articles (within %d days)",
@@ -640,6 +672,7 @@ def _run_resummarize(triggered_by: str = "manual") -> int:
                     content=a.get("content") or "",
                     api_key=ANTHROPIC_API_KEY,
                     keywords=keywords,
+                    favorite_tags=favorite_tags,
                 )
             except Exception as e:
                 logger.warning("[resummarize] summarize failed for %s: %s", a["url"], e)

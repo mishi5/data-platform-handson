@@ -122,6 +122,41 @@ def test_score_article_returns_none_on_error(mock_anthropic_class):
     assert score_article(title="T", content="C", api_key="k") is None
 
 
+def test_build_scoring_criteria_includes_favorite_tags():
+    c = _build_scoring_criteria(["BigQuery"], favorite_tags=["dbt", "airflow"])
+    assert "お気に入り" in c
+    assert "dbt" in c
+    assert "airflow" in c
+
+
+def test_build_scoring_criteria_without_favorite_tags_unchanged():
+    """favorite_tags が空/None なら既存の基準と完全に同一（パーソナライズなし）。"""
+    base = _build_scoring_criteria(["BigQuery"])
+    assert _build_scoring_criteria(["BigQuery"], favorite_tags=[]) == base
+    assert _build_scoring_criteria(["BigQuery"], favorite_tags=None) == base
+    assert "お気に入り" not in base
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_summarize_article_passes_favorite_tags_to_prompt(mock_anthropic_class):
+    mock_client = _mock_tool_response(
+        mock_anthropic_class,
+        {"summary": "- x", "tags": [], "importance_score": 0.5},
+    )
+
+    summarize_article(
+        title="T",
+        content="C",
+        api_key="key",
+        keywords=["BigQuery"],
+        favorite_tags=["dbt"],
+    )
+
+    system_prompt = mock_client.messages.create.call_args.kwargs["system"]
+    assert "お気に入り" in system_prompt
+    assert "dbt" in system_prompt
+
+
 def test_build_scoring_criteria_uses_de_value_axis():
     c = _build_scoring_criteria(["BigQuery"])
     # DE価値ベースの主軸とアンカーが含まれる

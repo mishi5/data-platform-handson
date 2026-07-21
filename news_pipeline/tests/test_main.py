@@ -350,6 +350,104 @@ def test_below_threshold_pending_articles_marked_via_dml(
     bq.insert_summaries.assert_not_called()
 
 
+def _config_with_personalize(top_tags: str) -> dict:
+    config = _config(max_summarize="10")
+    config["settings"]["general"]["personalize_top_tags"] = top_tags
+    return config
+
+
+@patch("collector.main.summarize_article")
+@patch("collector.main.fetch_content")
+@patch("collector.main.fetch_articles")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_collect_passes_favorite_tags_to_summarize(
+    mock_bqclass,
+    mock_load_config,
+    mock_fetch_articles,
+    mock_fetch_content,
+    mock_summarize,
+):
+    """お気に入り由来タグを取得し summarize_article に渡す。"""
+    mock_load_config.return_value = _config(max_summarize="10")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_existing_urls.return_value = set()
+    bq.get_pending_articles.return_value = []
+    bq.get_existing_summary_ids.return_value = set()
+    bq.get_favorite_tag_counts.return_value = ["dbt", "bigquery"]
+
+    mock_fetch_articles.return_value = [_make_article(0)]
+    mock_fetch_content.return_value = ("body", True)
+    mock_summarize.return_value = {"summary": "s", "tags": [], "importance_score": 0.9}
+
+    main_mod._run_collect()
+
+    bq.get_favorite_tag_counts.assert_called_once_with(5)  # 既定値
+    assert mock_summarize.call_args.kwargs["favorite_tags"] == ["dbt", "bigquery"]
+
+
+@patch("collector.main.summarize_article")
+@patch("collector.main.fetch_content")
+@patch("collector.main.fetch_articles")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_collect_personalize_disabled_skips_query(
+    mock_bqclass,
+    mock_load_config,
+    mock_fetch_articles,
+    mock_fetch_content,
+    mock_summarize,
+):
+    """personalize_top_tags=0 なら BigQuery クエリ自体をスキップする。"""
+    mock_load_config.return_value = _config_with_personalize("0")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_existing_urls.return_value = set()
+    bq.get_pending_articles.return_value = []
+    bq.get_existing_summary_ids.return_value = set()
+
+    mock_fetch_articles.return_value = [_make_article(0)]
+    mock_fetch_content.return_value = ("body", True)
+    mock_summarize.return_value = {"summary": "s", "tags": [], "importance_score": 0.9}
+
+    main_mod._run_collect()
+
+    bq.get_favorite_tag_counts.assert_not_called()
+    assert mock_summarize.call_args.kwargs["favorite_tags"] == []
+
+
+@patch("collector.main.summarize_article")
+@patch("collector.main.fetch_content")
+@patch("collector.main.fetch_articles")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_collect_continues_when_favorite_tags_query_fails(
+    mock_bqclass,
+    mock_load_config,
+    mock_fetch_articles,
+    mock_fetch_content,
+    mock_summarize,
+):
+    """タグ取得失敗時は空リストで続行（パーソナライズなしにフォールバック）。"""
+    mock_load_config.return_value = _config(max_summarize="10")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_existing_urls.return_value = set()
+    bq.get_pending_articles.return_value = []
+    bq.get_existing_summary_ids.return_value = set()
+    bq.get_favorite_tag_counts.side_effect = Exception("BQ error")
+
+    mock_fetch_articles.return_value = [_make_article(0)]
+    mock_fetch_content.return_value = ("body", True)
+    mock_summarize.return_value = {"summary": "s", "tags": [], "importance_score": 0.9}
+
+    summarized = main_mod._run_collect()
+
+    assert summarized == 1  # 収集は止まらない
+    assert mock_summarize.call_args.kwargs["favorite_tags"] == []
+
+
 @patch("collector.main.send_error_notification")
 @patch("collector.main.load_config")
 @patch("collector.main.BQClient")
