@@ -350,6 +350,40 @@ def test_below_threshold_pending_articles_marked_via_dml(
     bq.insert_summaries.assert_not_called()
 
 
+@patch("collector.main.summarize_article")
+@patch("collector.main.fetch_content")
+@patch("collector.main.fetch_articles")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_collect_dedupes_same_url_within_batch(
+    mock_bqclass,
+    mock_load_config,
+    mock_fetch_articles,
+    mock_fetch_content,
+    mock_summarize,
+):
+    """同一実行内で同じURLが複数フィードから来ても1件だけ処理・保存する。"""
+    mock_load_config.return_value = _config(max_summarize="10")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_existing_urls.return_value = set()
+    bq.get_pending_articles.return_value = []
+    bq.get_existing_summary_ids.return_value = set()
+    bq.get_favorite_tag_counts.return_value = []
+
+    dup_a = _make_article(0)
+    dup_b = dict(_make_article(0), source="Another Feed")  # 同一URL・別フィード
+    mock_fetch_articles.return_value = [dup_a, dup_b, _make_article(1)]
+    mock_fetch_content.return_value = ("body", True)
+    mock_summarize.return_value = {"summary": "s", "tags": [], "importance_score": 0.9}
+
+    main_mod._run_collect()
+
+    saved = bq.insert_raw_articles.call_args[0][0]
+    assert len(saved) == 2  # URL重複は1件に統合
+    assert mock_summarize.call_count == 2
+
+
 def _config_with_personalize(top_tags: str) -> dict:
     config = _config(max_summarize="10")
     config["settings"]["general"]["personalize_top_tags"] = top_tags

@@ -225,9 +225,16 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
                 before_block - len(articles),
             )
 
-        # 2. dedup（raw_articles ベース）→ 全新着を保持（切り捨てない）
+        # 2. dedup（raw_articles ベース + 同一実行内）→ 全新着を保持（切り捨てない）
+        #    同じURLが複数フィードに載ることがあるため、実行内でも重複を排除する
         existing_urls = bq.get_existing_urls()
-        new_articles = [a for a in articles if a["url"] not in existing_urls]
+        new_articles = []
+        seen_urls: set[str] = set()
+        for a in articles:
+            if a["url"] in existing_urls or a["url"] in seen_urls:
+                continue
+            seen_urls.add(a["url"])
+            new_articles.append(a)
         log["new_articles"] = len(new_articles)
         logger.info("[collect] %d new articles", len(new_articles))
 

@@ -1,15 +1,12 @@
 """BigQuery への読み書きを担当するモジュール。データセット: tech_news。"""
 
 import logging
+
 from google.cloud import bigquery
 
 logger = logging.getLogger(__name__)
 
 DATASET = "tech_news"
-
-# dedup 用に既存URLを読む窓。RSS に載るのは直近記事だけなので全件は不要で、
-# 全件スキャンだと蓄積に比例してスキャン量・メモリが単調増加する。
-_DEDUP_WINDOW_DAYS = 90
 
 
 class BQClient:
@@ -19,18 +16,15 @@ class BQClient:
         self.project = project
 
     def get_existing_urls(self) -> set[str]:
-        """直近 _DEDUP_WINDOW_DAYS 日に保存した URL セットを返す（dedup 用）。"""
-        query = (
-            f"SELECT url FROM `{self.project}.{DATASET}.raw_articles`"
-            f" WHERE collected_at >="
-            f" TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)"
-        )
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter("days", "INT64", _DEDUP_WINDOW_DAYS),
-            ]
-        )
-        rows = self.client.query(query, job_config=job_config).result()
+        """raw_articles に保存済みの全 URL セットを返す（dedup 用）。
+
+        以前は直近90日窓で絞っていたが、RSS に90日超の記事を残すフィードが
+        あり、窓から外れた既存記事が「新着」として再収集される実害が出た
+        （重複行→重複通知）。url 列のみの全件スキャンはこの規模では数MBで
+        コスト・メモリとも無視できるため、意図的に全件照合とする。
+        """
+        query = f"SELECT url FROM `{self.project}.{DATASET}.raw_articles`"
+        rows = self.client.query(query).result()
         return {row.url for row in rows}
 
     def get_existing_summary_ids(self) -> set[str]:
@@ -40,7 +34,12 @@ class BQClient:
         return {row.article_id for row in rows}
 
     def get_unnotified_summaries(self) -> list[dict]:
-        """notification_log に記録されていないサマリーを返す（未通知分）。article_id 重複は最高スコアの1件に絞る。"""
+        """notification_log に記録されていないサマリーを返す（未通知分）。
+
+        summaries・raw_articles の両側を article_id ごとに1行へ絞る。raw 側を
+        絞らないと、再収集等で重複行がある記事が JOIN で増幅され同じ記事が
+        複数回通知される。raw は最初の収集行（collected_at 最古）を採用する。
+        """
         query = (
             f"SELECT s.*, r.published_at, r.collected_at FROM ("
             f"  SELECT *, ROW_NUMBER() OVER (PARTITION BY article_id ORDER BY importance_score DESC) AS _rn"
@@ -48,14 +47,21 @@ class BQClient:
             f") s"
             f" LEFT JOIN `{self.project}.{DATASET}.notification_log` n"
             f" ON s.article_id = n.article_id"
-            f" LEFT JOIN `{self.project}.{DATASET}.raw_articles` r"
-            f" ON s.article_id = r.article_id"
+            f" LEFT JOIN ("
+            f"  SELECT article_id, published_at, collected_at,"
+            f"    ROW_NUMBER() OVER (PARTITION BY article_id ORDER BY collected_at ASC) AS _rrn"
+            f"  FROM `{self.project}.{DATASET}.raw_articles`"
+            f" ) r"
+            f" ON s.article_id = r.article_id AND r._rrn = 1"
             f" WHERE n.article_id IS NULL AND s._rn = 1"
             f" ORDER BY s.importance_score DESC"
         )
         rows = self.client.query(query).result()
-        # _rn は内部用カラムなので除外
-        return [{k: v for k, v in dict(row).items() if k != "_rn"} for row in rows]
+        # _rn / _rrn は内部用カラムなので除外
+        return [
+            {k: v for k, v in dict(row).items() if k not in ("_rn", "_rrn")}
+            for row in rows
+        ]
 
     def mark_summaries_notified(self, article_ids: list[str]) -> None:
         """通知済み article_id を notification_log にストリーミング挿入する。"""

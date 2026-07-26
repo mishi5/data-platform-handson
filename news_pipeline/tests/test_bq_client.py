@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock, patch
+
 from collector.bq_client import BQClient
 
 
@@ -46,6 +47,27 @@ def test_get_unnotified_summaries_returns_list(mock_bq_class):
     assert "notification_log" in query_arg
     assert "summaries" in query_arg
     assert "LEFT JOIN" in query_arg
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_get_unnotified_summaries_dedupes_raw_articles_join(mock_bq_class):
+    """raw_articles に同一 article_id が複数行あっても JOIN で通知が増幅されない。
+
+    再収集等で raw_articles に重複行があると、素朴な LEFT JOIN では
+    1 summary × N raw 行に膨れて同じ記事が N 回通知される。raw 側も
+    article_id ごとに1行へ絞っていることをクエリ構造で確認する。
+    """
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+    mock_client.query.return_value.result.return_value = []
+
+    bq = BQClient(project="test-project")
+    bq.get_unnotified_summaries()
+
+    q = mock_client.query.call_args[0][0]
+    # summaries 側と raw_articles 側の両方に ROW_NUMBER の絞り込みがある
+    assert q.count("ROW_NUMBER()") == 2
+    assert "PARTITION BY article_id ORDER BY collected_at" in q
 
 
 @patch("collector.bq_client.bigquery.Client")
