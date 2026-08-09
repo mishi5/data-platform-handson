@@ -11,6 +11,7 @@
 """
 
 import logging
+import re
 
 import anthropic
 from anthropic.types import ToolUseBlock
@@ -179,6 +180,21 @@ def _normalize_tag(tag: str) -> str:
     return tag.lower().replace("_", " ").strip()
 
 
+# 前後がクォート・カッコでないリテラル `\n` だけにマッチする
+_LITERAL_NEWLINE_RE = re.compile(r"""(?<!['"`「『（(\[{])\\n(?!['"`」』）)\]}])""")
+
+
+def _unescape_literal_newlines(text: str) -> str:
+    """summary 中のリテラル `\\n`（バックスラッシュ+n の2文字）を実改行に直す。
+
+    tool use の出力でモデルが改行の一部を二重エスケープすることがあり、
+    そのまま保存すると Slack 通知に「\\n」がそのまま表示される。
+    ただし記事が改行文字そのものを話題にしている場合（`'\\n'` や `「\\n」` の
+    ようにクォート・カッコで囲まれている場合）は意味を壊すので置換しない。
+    """
+    return _LITERAL_NEWLINE_RE.sub("\n", text)
+
+
 def _call_tool(
     system_prompt: str,
     user_content: str,
@@ -226,6 +242,8 @@ def summarize_article(
             return None
         if isinstance(result.get("summary"), list):
             result["summary"] = "\n".join(result["summary"])
+        if isinstance(result.get("summary"), str):
+            result["summary"] = _unescape_literal_newlines(result["summary"])
         if isinstance(result.get("tags"), list):
             normalized: list[str] = []
             for t in result["tags"]:

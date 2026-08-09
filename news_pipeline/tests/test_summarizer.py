@@ -91,6 +91,67 @@ def test_summarize_article_joins_list_summary(mock_anthropic_class):
 
 
 @patch("collector.summarizer.anthropic.Anthropic")
+def test_summarize_article_unescapes_literal_newlines(mock_anthropic_class):
+    """モデルが二重エスケープしたリテラル \\n は実改行に直して保存する。"""
+    _mock_tool_response(
+        mock_anthropic_class,
+        {
+            "summary": "- A\\n- B\\n- C",
+            "tags": [],
+            "importance_score": 0.5,
+        },
+    )
+
+    result = summarize_article(title="T", content="C", api_key="key")
+    assert result["summary"] == "- A\n- B\n- C"
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_summarize_article_unescapes_literal_newline_after_real_newline(
+    mock_anthropic_class,
+):
+    """実際に混入したパターン（実改行の直後にリテラル \\n）も解消する。"""
+    _mock_tool_response(
+        mock_anthropic_class,
+        {"summary": "- A\n\\n- B", "tags": [], "importance_score": 0.5},
+    )
+
+    result = summarize_article(title="T", content="C", api_key="key")
+    assert result["summary"] == "- A\n\n- B"
+    assert "\\n" not in result["summary"]
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_summarize_article_keeps_quoted_literal_newline(mock_anthropic_class):
+    """記事が改行文字そのものを扱う場合（クォート/カッコ囲み）は置換しない。"""
+    _mock_tool_response(
+        mock_anthropic_class,
+        {
+            "summary": "- 区切り文字は '\\n' を使う\n- 「\\n」でも同じ\n- `\\n` と (\\n) も保持",
+            "tags": [],
+            "importance_score": 0.5,
+        },
+    )
+
+    result = summarize_article(title="T", content="C", api_key="key")
+    assert result["summary"] == (
+        "- 区切り文字は '\\n' を使う\n- 「\\n」でも同じ\n- `\\n` と (\\n) も保持"
+    )
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_summarize_article_unescape_applies_after_list_join(mock_anthropic_class):
+    """summary が配列で返ってきた場合も各要素のリテラル \\n を解消する。"""
+    _mock_tool_response(
+        mock_anthropic_class,
+        {"summary": ["- A\\n- B", "- C"], "tags": [], "importance_score": 0.5},
+    )
+
+    result = summarize_article(title="T", content="C", api_key="key")
+    assert result["summary"] == "- A\n- B\n- C"
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
 def test_summarize_article_returns_none_on_api_error(mock_anthropic_class):
     mock_client = MagicMock()
     mock_anthropic_class.return_value = mock_client
