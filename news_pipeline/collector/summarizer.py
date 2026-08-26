@@ -19,7 +19,7 @@ from anthropic.types import ToolUseBlock
 logger = logging.getLogger(__name__)
 
 # スコアロジックの版。_build_scoring_criteria を変えたら +1 する。
-SCORING_VERSION = 2
+SCORING_VERSION = 3
 
 _MODEL = "claude-haiku-4-5-20251001"
 
@@ -72,8 +72,12 @@ _SUMMARY_TOOL = {
                 "type": "number",
                 "description": "重要度スコア（0.0〜1.0）",
             },
+            "relevance_score": {
+                "type": "number",
+                "description": "データ／データ基盤との関連度（0.0〜1.0）",
+            },
         },
-        "required": ["summary", "tags", "importance_score"],
+        "required": ["summary", "tags", "importance_score", "relevance_score"],
     },
 }
 
@@ -87,8 +91,12 @@ _SCORE_TOOL = {
                 "type": "number",
                 "description": "重要度スコア（0.0〜1.0）",
             },
+            "relevance_score": {
+                "type": "number",
+                "description": "データ／データ基盤との関連度（0.0〜1.0）",
+            },
         },
-        "required": ["importance_score"],
+        "required": ["importance_score", "relevance_score"],
     },
 }
 
@@ -108,21 +116,104 @@ _RELEVANCE_TOOL = {
 }
 
 
-def _build_scoring_criteria(
-    keywords: list[str], favorite_tags: list[str] | None = None
-) -> str:
-    """importance_score の判定基準を組み立てる。summarize / score_article で共用。
+_DOMAIN_DEFINITION = """このパイプラインの対象領域は「データエンジニアリング／データ基盤」である。
+relevance_score は、その記事の内容が対象領域にどれだけ関わるかを 0.0〜1.0 で表す。
 
-    主軸は「データエンジニアにとって読む価値があるか」の総合判断。
-    keyword は興味分野のヒント（加点）で、無くても価値があれば相応に高くする。
-    favorite_tags はお気に入り履歴由来の暗黙的な関心（加点ヒント）。
-    """
+対象（relevance が高い）：
+- データウェアハウス／レイクハウス（BigQuery, Snowflake, Databricks, Redshift, Iceberg, Delta Lake）
+- ETL/ELT・データパイプライン・ワークフロー（dbt, Dataform, Airflow, Dagster, Fivetran, Spark）
+- ストリーミング・CDC（Kafka, Flink, Debezium）
+- データ品質・データガバナンス・データカタログ・メタデータ・リネージ
+- BI・可視化・セマンティックレイヤー・メトリクス定義（Looker, Tableau, Omni）
+- データ基盤の上での AI/LLM 活用（RAG のためのデータ基盤、ベクトル検索、semantic model、
+  データ基盤そのものの開発・運用への AI 適用）
+- MLOps のうちデータ側（特徴量ストア、学習データのパイプライン）
+
+対象外（relevance が低い）：
+- 汎用のクラウド運用・IAM・権限管理・セキュリティ・認証
+- ネットワーク運用・サーバ運用・インフラ運用一般
+- 開発環境やローカルツールの Tips（SSH、シェル、エディタ、パッケージ管理、認証情報の保管）
+- データ基盤に紐づかない開発プロセス論・AI コーディング論・組織論
+- 汎用の Web／アプリ／ゲーム開発
+
+判定の原理：AI・Terraform/IaC・クラウドといった「技法」が登場するかどうかではなく、
+その技法の適用対象がデータ／データ基盤かどうかで判断する。技法が同じでも適用対象が違えば
+判定は逆になる。
+
+対比例：
+- 「Claude Code で Snowflake + dbt プロジェクトを AI 駆動で開発する」→ 適用対象がデータ基盤 → 0.8
+- 「AI 駆動開発で仕様はどこまで書くべきか（一般のソフトウェア開発の話）」→ 適用対象が一般の開発 → 0.1
+- 「GitHub Copilot で社内コーディング規約のレビューを自動化する」→ 適用対象が一般の開発 → 0.1
+- 「AI に任せたレガシーシステムのモダナイズで仕様の移行漏れに気づけない理由」→ 適用対象が一般の開発 → 0.1
+- 「dbt のモデルを Terraform で管理する」→ 適用対象がデータ基盤 → 0.8
+- 「IAM Policy Autopilot が Terraform の plan ファイルをサポート」→ 適用対象が権限管理 → 0.1
+- 「NOC サーバチームで実践したネットワーク構成の SSoT・IaC の取り組み」→ 適用対象がネットワーク運用 → 0.1
+- 「WSL2 から 1Password の SSH エージェントを使う」→ 開発環境の Tips → 0.0"""
+
+
+def _build_domain_definition() -> str:
+    """対象領域（データ基盤）の定義。relevance_score の判定基準として3経路で共有する。"""
+    return _DOMAIN_DEFINITION
+
+
+def _build_keyword_hint(keywords: list[str]) -> str:
+    """関心キーワードのヒント文。"""
     if keywords:
         items = "\n".join(f"  - {kw}" for kw in keywords)
     else:
         items = "  （キーワード未設定のため、データエンジニアリング全般を対象とする）"
+    return (
+        "次のキーワードは特に関心の高いトピックのヒント。該当すれば加点するが、"
+        "キーワードに無くても対象領域の価値があれば相応に高くする：\n"
+        f"{items}"
+    )
+
+
+def _build_favorite_hint(favorite_tags: list[str] | None) -> str:
+    """お気に入り履歴由来のタグヒント文。無ければ空文字。"""
+    if not favorite_tags:
+        return ""
+    tag_items = "\n".join(f"  - {t}" for t in favorite_tags)
+    return (
+        "\n\n"
+        "また、次はユーザーが過去にお気に入りした記事に多いトピック。"
+        "該当する記事は関心が高い可能性があるため加点のヒントにする：\n"
+        f"{tag_items}"
+    )
+
+
+def _build_relevance_criteria(
+    keywords: list[str], favorite_tags: list[str] | None = None
+) -> str:
+    """relevance_score のみの判定基準。スライドの1次フィルタ用。
+
+    importance_score の目安を混ぜると2つのスコア定義が1つのプロンプトに同居して
+    混線するため、ドメイン定義とヒントだけで構成する。
+    """
+    return (
+        f"{_build_domain_definition()}\n\n"
+        f"{_build_keyword_hint(keywords)}"
+        f"{_build_favorite_hint(favorite_tags)}"
+    )
+
+
+def _build_scoring_criteria(
+    keywords: list[str], favorite_tags: list[str] | None = None
+) -> str:
+    """importance_score / relevance_score の判定基準。summarize / score_article で共用。
+
+    relevance_score は対象領域（データ基盤）との関連度、importance_score は
+    「データエンジニアにとって読む価値があるか」の総合判断。関連度が低い記事は
+    内容が良質でも importance を高くしない。
+    keyword は興味分野のヒント（加点）、favorite_tags はお気に入り履歴由来の
+    暗黙的な関心（加点ヒント）。
+    """
     criteria = (
+        f"{_build_domain_definition()}\n"
+        "\n"
         "importance_score は「データエンジニアにとって読む価値があるか」を総合的に判断して付ける。\n"
+        "対象領域の記事であることが前提で、relevance_score が低い記事は内容が良質でも "
+        "importance_score を高くしない。\n"
         "\n"
         "高くすべき記事（価値が高い）：\n"
         "- 実務で使える具体的な知見（設計・運用ノウハウ、how-to、トラブル対応）\n"
@@ -130,26 +221,18 @@ def _build_scoring_criteria(
         "- 大規模・本番環境の実例（実サービスの事例、失敗談やスケールの教訓）\n"
         "\n"
         "低くすべき記事（価値が低い）：\n"
+        "- 対象領域外（relevance_score が低い）\n"
         "- 宣伝・PR・製品の単なる紹介（マーケティング目的）\n"
         "- 中身が薄い・短い（具体性がなく表面的）\n"
         "\n"
-        "次のキーワードは特に関心の高いトピックのヒント。該当すれば加点するが、"
-        "キーワードに無くても上記の価値があれば相応に高くする：\n"
-        f"{items}\n"
+        f"{_build_keyword_hint(keywords)}\n"
         "\n"
         "スコアの目安：\n"
         "- 0.8〜1.0: 実務に直接役立つ深い技術記事、本番事例の濃い知見\n"
         "- 0.5前後: 有用だが一般的、または部分的に価値がある\n"
-        "- 0.3以下: 宣伝・PR、中身が薄い、データエンジニアにほぼ無関係"
+        "- 0.3以下: 対象領域外、宣伝・PR、中身が薄い"
     )
-    if favorite_tags:
-        tag_items = "\n".join(f"  - {t}" for t in favorite_tags)
-        criteria += (
-            "\n\n"
-            "また、次はユーザーが過去にお気に入りした記事に多いトピック。"
-            "該当する記事は関心が高い可能性があるため加点のヒントにする：\n"
-            f"{tag_items}"
-        )
+    criteria += _build_favorite_hint(favorite_tags)
     return criteria
 
 
@@ -169,6 +252,20 @@ def _build_score_only_prompt(
     return _SCORE_PROMPT_TEMPLATE.format(
         scoring_criteria=_build_scoring_criteria(keywords, favorite_tags)
     )
+
+
+def _as_float(value) -> float | None:
+    """スコア値を float に正規化する。欠落・非数値は None（＝判定不能）。
+
+    None は呼び出し側で「ゲートを通す」側にフォールバックさせるため、
+    0.0 に丸めずそのまま None を返す。
+    """
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _normalize_tag(tag: str) -> str:
@@ -253,6 +350,7 @@ def summarize_article(
                 if nt and nt not in normalized:
                     normalized.append(nt)
             result["tags"] = normalized
+        result["relevance_score"] = _as_float(result.get("relevance_score"))
         return result
     except Exception as e:
         logger.error("[summarizer] failed: %s", e)
@@ -272,7 +370,7 @@ def score_slide_relevance(
     None を「判定不能＝通す」として扱う）。情報が少ない場合は高めのスコアを返す。
     """
     system_prompt = _SLIDE_PREFILTER_PROMPT_TEMPLATE.format(
-        scoring_criteria=_build_scoring_criteria(keywords or [], favorite_tags)
+        scoring_criteria=_build_relevance_criteria(keywords or [], favorite_tags)
     )
     try:
         result = _call_tool(
@@ -296,8 +394,13 @@ def score_article(
     api_key: str,
     keywords: list[str] | None = None,
     favorite_tags: list[str] | None = None,
-) -> float | None:
-    """記事の importance_score のみを再計算する。失敗時は None。"""
+) -> dict | None:
+    """記事のスコアを再計算する。失敗時は None。
+
+    {"importance_score": float, "relevance_score": float | None} を返す。
+    relevance_score が None なのはモデルが返さなかった場合で、呼び出し側は
+    「判定不能＝ゲートを通す」として扱う（取りこぼし防止）。
+    """
     try:
         result = _call_tool(
             system_prompt=_build_score_only_prompt(keywords or [], favorite_tags),
@@ -308,7 +411,10 @@ def score_article(
         )
         if result is None or result.get("importance_score") is None:
             return None
-        return float(result["importance_score"])
+        return {
+            "importance_score": float(result["importance_score"]),
+            "relevance_score": _as_float(result.get("relevance_score")),
+        }
     except Exception as e:
         logger.error("[summarizer] score failed: %s", e)
         return None

@@ -33,13 +33,22 @@ class BQClient:
         rows = self.client.query(query).result()
         return {row.article_id for row in rows}
 
-    def get_unnotified_summaries(self) -> list[dict]:
+    def get_unnotified_summaries(
+        self, importance_threshold: float, relevance_threshold: float
+    ) -> list[dict]:
         """notification_log に記録されていないサマリーを返す（未通知分）。
 
         summaries・raw_articles の両側を article_id ごとに1行へ絞る。raw 側を
         絞らないと、再収集等で重複行がある記事が JOIN で増幅され同じ記事が
         複数回通知される。raw は最初の収集行（collected_at 最古）を採用する。
+
+        閾値の足切りをここでも行う。/recalculate はスコアを下げるだけで行を
+        削除しないため、通知経路にゲートが無いと再採点で閾値割れした未通知記事が
+        そのまま通知される。relevance_score が NULL の行（再採点前の旧データ・
+        判定不能）は落とさない。
         """
+        imp = float(importance_threshold)
+        rel = float(relevance_threshold)
         query = (
             f"SELECT s.*, r.published_at, r.collected_at FROM ("
             f"  SELECT *, ROW_NUMBER() OVER (PARTITION BY article_id ORDER BY importance_score DESC) AS _rn"
@@ -54,6 +63,8 @@ class BQClient:
             f" ) r"
             f" ON s.article_id = r.article_id AND r._rrn = 1"
             f" WHERE n.article_id IS NULL AND s._rn = 1"
+            f" AND s.importance_score >= {imp}"
+            f" AND (s.relevance_score IS NULL OR s.relevance_score >= {rel})"
             f" ORDER BY s.importance_score DESC"
         )
         rows = self.client.query(query).result()
@@ -168,7 +179,11 @@ class BQClient:
         return [dict(row) for row in rows]
 
     def update_summary_score(
-        self, article_id: str, importance_score: float, scoring_version: int
+        self,
+        article_id: str,
+        importance_score: float,
+        scoring_version: int,
+        relevance_score: float | None = None,
     ) -> None:
         """summaries の importance_score と scoring_version を DML UPDATE で更新する。
 
@@ -176,13 +191,15 @@ class BQClient:
         """
         query = (
             f"UPDATE `{self.project}.{DATASET}.summaries`"
-            f" SET importance_score = @score, scoring_version = @ver"
+            f" SET importance_score = @score, scoring_version = @ver,"
+            f" relevance_score = @relevance"
             f" WHERE article_id = @aid"
         )
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter("score", "FLOAT64", importance_score),
                 bigquery.ScalarQueryParameter("ver", "INT64", scoring_version),
+                bigquery.ScalarQueryParameter("relevance", "FLOAT64", relevance_score),
                 bigquery.ScalarQueryParameter("aid", "STRING", article_id),
             ]
         )

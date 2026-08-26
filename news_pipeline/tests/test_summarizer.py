@@ -195,15 +195,29 @@ def test_build_scoring_criteria_no_keywords():
 
 
 @patch("collector.summarizer.anthropic.Anthropic")
-def test_score_article_returns_float(mock_anthropic_class):
-    mock_client = _mock_tool_response(mock_anthropic_class, {"importance_score": 0.72})
+def test_score_article_returns_both_scores(mock_anthropic_class):
+    """再採点は importance と relevance の両方を返す（relevance を保存経路に通すため）。"""
+    mock_client = _mock_tool_response(
+        mock_anthropic_class, {"importance_score": 0.72, "relevance_score": 0.9}
+    )
 
-    score = score_article(title="T", content="C", api_key="k", keywords=["BigQuery"])
-    assert score == 0.72
+    result = score_article(title="T", content="C", api_key="k", keywords=["BigQuery"])
+    assert result["importance_score"] == 0.72
+    assert result["relevance_score"] == 0.9
 
     call_kwargs = mock_client.messages.create.call_args.kwargs
     assert call_kwargs["temperature"] == 0
     assert call_kwargs["tool_choice"]["name"] == "record_score"
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_score_article_relevance_none_when_absent(mock_anthropic_class):
+    """relevance が欠けても importance だけで返す（判定不能は呼び出し側で通す）。"""
+    _mock_tool_response(mock_anthropic_class, {"importance_score": 0.72})
+
+    result = score_article(title="T", content="C", api_key="k")
+    assert result["importance_score"] == 0.72
+    assert result["relevance_score"] is None
 
 
 @patch("collector.summarizer.anthropic.Anthropic")
@@ -260,10 +274,10 @@ def test_build_scoring_criteria_uses_de_value_axis():
     assert "宣伝" in c
 
 
-def test_scoring_version_is_2():
+def test_scoring_version_is_3():
     from collector.summarizer import SCORING_VERSION
 
-    assert SCORING_VERSION == 2
+    assert SCORING_VERSION == 3
 
 
 @patch("collector.summarizer.anthropic.Anthropic")
@@ -288,3 +302,105 @@ def test_score_slide_relevance_failure_returns_none(mock_anthropic_class):
     mock_client.messages.create.side_effect = Exception("boom")
 
     assert score_slide_relevance("Title", "desc", "key") is None
+
+
+# --- relevance 軸（データ基盤との関連度）------------------------------------
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_summarize_article_returns_relevance_score(mock_anthropic_class):
+    """要約時に relevance_score（データ基盤との関連度）も受け取る。"""
+    _mock_tool_response(
+        mock_anthropic_class,
+        {
+            "summary": "- x",
+            "tags": ["dbt"],
+            "importance_score": 0.8,
+            "relevance_score": 0.9,
+        },
+    )
+
+    result = summarize_article(title="T", content="C", api_key="key")
+    assert result["relevance_score"] == 0.9
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_summarize_article_keeps_importance_unmodified(mock_anthropic_class):
+    """relevance が低くても importance は加工しない（キャップせずゲートで判定する）。"""
+    _mock_tool_response(
+        mock_anthropic_class,
+        {
+            "summary": "- x",
+            "tags": [],
+            "importance_score": 0.82,
+            "relevance_score": 0.1,
+        },
+    )
+
+    result = summarize_article(title="T", content="C", api_key="key")
+    assert result["importance_score"] == 0.82
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_summarize_article_relevance_none_when_absent(mock_anthropic_class):
+    """モデルが relevance を返さない場合は None（呼び出し側で通す＝取りこぼし防止）。"""
+    _mock_tool_response(
+        mock_anthropic_class,
+        {"summary": "- x", "tags": [], "importance_score": 0.8},
+    )
+
+    result = summarize_article(title="T", content="C", api_key="key")
+    assert result["relevance_score"] is None
+
+
+def test_summary_tool_requires_relevance_score():
+    from collector.summarizer import _SCORE_TOOL, _SUMMARY_TOOL
+
+    for tool in (_SUMMARY_TOOL, _SCORE_TOOL):
+        assert "relevance_score" in tool["input_schema"]["properties"]
+        assert "relevance_score" in tool["input_schema"]["required"]
+
+
+# --- ドメイン定義（対象スコープ）--------------------------------------------
+
+
+def test_domain_definition_lists_target_and_excluded_topics():
+    from collector.summarizer import _build_domain_definition
+
+    d = _build_domain_definition()
+    # 対象ドメイン
+    assert "dbt" in d
+    assert "データ品質" in d
+    # 対象外ドメイン
+    assert "ネットワーク運用" in d
+    # 判定原理: 技法ではなく「適用対象」で判断する
+    assert "適用対象" in d
+
+
+def test_scoring_criteria_includes_domain_definition():
+    c = _build_scoring_criteria(["BigQuery"])
+    assert "適用対象" in c
+    assert "スコアの目安" in c
+
+
+def test_relevance_criteria_omits_importance_guidance():
+    """プレフィルタ用の基準には importance の目安を混ぜない（2つのスコア定義の混線防止）。"""
+    from collector.summarizer import _build_relevance_criteria
+
+    c = _build_relevance_criteria(["BigQuery"])
+    assert "適用対象" in c
+    assert "importance_score" not in c
+    assert "スコアの目安" not in c
+    assert "BigQuery" in c
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_score_slide_relevance_prompt_omits_importance_guidance(mock_anthropic_class):
+    from collector.summarizer import score_slide_relevance
+
+    mock_client = _mock_tool_response(mock_anthropic_class, {"relevance_score": 0.8})
+    score_slide_relevance("Title", "desc", "key", keywords=["dbt"])
+
+    system_prompt = mock_client.messages.create.call_args.kwargs["system"]
+    assert "適用対象" in system_prompt
+    assert "importance_score" not in system_prompt

@@ -40,7 +40,7 @@ def test_get_unnotified_summaries_returns_list(mock_bq_class):
     mock_client.query.return_value.result.return_value = [mock_row]
 
     bq = BQClient(project="test-project")
-    result = bq.get_unnotified_summaries()
+    result = bq.get_unnotified_summaries(0.65, 0.55)
 
     assert isinstance(result, list)
     query_arg = mock_client.query.call_args[0][0]
@@ -62,7 +62,7 @@ def test_get_unnotified_summaries_dedupes_raw_articles_join(mock_bq_class):
     mock_client.query.return_value.result.return_value = []
 
     bq = BQClient(project="test-project")
-    bq.get_unnotified_summaries()
+    bq.get_unnotified_summaries(0.65, 0.55)
 
     q = mock_client.query.call_args[0][0]
     # summaries 側と raw_articles 側の両方に ROW_NUMBER の絞り込みがある
@@ -560,3 +560,61 @@ def test_mark_article_summarized_swallows_streaming_buffer_error(mock_bq_class):
     bq = BQClient(project="test-project")
     # 例外を送出しない
     bq.mark_article_summarized("o1")
+
+
+# --- relevance 軸（データ基盤との関連度）------------------------------------
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_get_unnotified_summaries_filters_by_thresholds(mock_bq_class):
+    """通知クエリ側でも閾値で足切りする。
+
+    /recalculate はスコアを下げるだけで行を削除しないため、通知経路にゲートが
+    無いと再採点で閾値割れした未通知記事がそのまま Slack に流れる。
+    """
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+    mock_client.query.return_value.result.return_value = []
+
+    bq = BQClient(project="test-project")
+    bq.get_unnotified_summaries(importance_threshold=0.65, relevance_threshold=0.55)
+
+    q = mock_client.query.call_args[0][0]
+    assert "importance_score >= 0.65" in q
+    # relevance が NULL（旧データ・判定不能）は落とさない
+    assert "relevance_score IS NULL" in q
+    assert "relevance_score >= 0.55" in q
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_update_summary_score_persists_relevance(mock_bq_class):
+    """再採点でも relevance を保存し、既存行の relevance_score を埋める。"""
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+
+    bq = BQClient(project="test-project")
+    bq.update_summary_score("a1", 0.9, 3, relevance_score=0.8)
+
+    q = mock_client.query.call_args[0][0]
+    assert "relevance_score = @relevance" in q
+    params = {
+        p.name: p.value
+        for p in mock_client.query.call_args.kwargs["job_config"].query_parameters
+    }
+    assert params["relevance"] == 0.8
+
+
+@patch("collector.bq_client.bigquery.Client")
+def test_update_summary_score_accepts_null_relevance(mock_bq_class):
+    """relevance が判定不能なら NULL のまま更新する（0.0 に丸めない）。"""
+    mock_client = MagicMock()
+    mock_bq_class.return_value = mock_client
+
+    bq = BQClient(project="test-project")
+    bq.update_summary_score("a1", 0.9, 3, relevance_score=None)
+
+    params = {
+        p.name: p.value
+        for p in mock_client.query.call_args.kwargs["job_config"].query_parameters
+    }
+    assert params["relevance"] is None

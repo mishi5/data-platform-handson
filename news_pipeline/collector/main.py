@@ -45,6 +45,7 @@ from rss_fetcher import fetch_articles
 from speakerdeck import is_speakerdeck_url
 from summarizer import (
     SCORING_VERSION,
+    _as_float,
     score_article,
     score_slide_relevance,
     summarize_article,
@@ -66,6 +67,9 @@ SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
 _DEFAULT_MAX_SUMMARIZE = 10
 # settings シートの general から取得するデフォルト値
 _DEFAULT_IMPORTANCE_THRESHOLD = 0.65
+# relevance_threshold: データ基盤との関連度の下限。良質でも対象領域外の記事を落とす。
+# モデルは 0.5 のような丸い値を出しやすいため、境界をその上にずらして 0.5 を落とす。
+_DEFAULT_RELEVANCE_THRESHOLD = 0.55
 _DEFAULT_MAX_CONTENT_RETRIES = 3
 _DEFAULT_RECALCULATE_LIMIT = 50
 # resummarize: 要約漏れ記事（本文ありで summaries 無し）の復旧バッチ設定
@@ -73,8 +77,9 @@ _DEFAULT_RESUMMARIZE_LIMIT = 50
 _DEFAULT_RESUMMARIZE_DAYS = 7
 # slide_prefilter_threshold: Speaker Deck の PDF を取得する前に title+description で
 # 関連度を見積もり、この値未満なら PDF をスキップする。description が空で title 中心の
-# 判定になりやすく辛めに出るため、取りこぼし防止を優先して低めに設定する。
-_DEFAULT_SLIDE_PREFILTER_THRESHOLD = 0.3
+# 判定になりやすく辛めに出るうえ、採点基準にドメイン定義が入って更に辛くなったため、
+# 取りこぼし防止を優先して低めに設定する（filtered は終端で再取得されない）。
+_DEFAULT_SLIDE_PREFILTER_THRESHOLD = 0.2
 # personalize_top_tags: お気に入り記事のタグ頻度上位N個を採点の加点ヒントに使う。
 # 0 で無効（BigQuery クエリ自体をスキップ）。
 _DEFAULT_PERSONALIZE_TOP_TAGS = 5
@@ -124,6 +129,24 @@ async def verify_slack(request: Request) -> None:
     )
     if not hmac.compare_digest(expected, request.headers.get("X-Slack-Signature", "")):
         raise HTTPException(status_code=403, detail="invalid signature")
+
+
+def passes_thresholds(
+    summary: dict, importance_threshold: float, relevance_threshold: float
+) -> bool:
+    """サマリーが通知対象かを判定する。
+
+    importance（読む価値）と relevance（データ基盤との関連度）の2軸ゲート。
+    relevance が判定不能（None・非数値・キー欠落）の場合は通す。モデルが
+    relevance を返さなかっただけで良記事を落とすと取りこぼしになるため。
+    """
+    importance = _as_float(summary.get("importance_score"))
+    if importance is None or importance < importance_threshold:
+        return False
+    relevance = _as_float(summary.get("relevance_score"))
+    if relevance is not None and relevance < relevance_threshold:
+        return False
+    return True
 
 
 def _load_favorite_tags(bq: BQClient, general: dict) -> list[str]:
@@ -189,6 +212,9 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
     max_summarize: int = int(general.get("max_summarize", _DEFAULT_MAX_SUMMARIZE))
     importance_threshold: float = float(
         general.get("importance_threshold", _DEFAULT_IMPORTANCE_THRESHOLD)
+    )
+    relevance_threshold: float = float(
+        general.get("relevance_threshold", _DEFAULT_RELEVANCE_THRESHOLD)
     )
     max_content_retries: int = int(
         general.get("max_content_retries", _DEFAULT_MAX_CONTENT_RETRIES)
@@ -349,25 +375,30 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
                     }
                 )
 
-        # 6. importance_threshold フィルタ
+        # 6. importance / relevance の2軸ゲート
         relevant_summaries = [
-            s for s in summaries if s.get("importance_score", 0) >= importance_threshold
+            s
+            for s in summaries
+            if passes_thresholds(s, importance_threshold, relevance_threshold)
         ]
         log["summaries_generated"] = len(relevant_summaries)
         logger.info(
-            "[collect] %d relevant summaries (importance_score >= %.2f)",
+            "[collect] %d relevant summaries "
+            "(importance >= %.2f and relevance >= %.2f)",
             len(relevant_summaries),
             importance_threshold,
+            relevance_threshold,
         )
 
-        # 6.5. 閾値未満は content_status='summarized'（終端）にする。放置すると
+        # 6.5. ゲートを通らなかった記事は content_status='summarized'（終端）にする。
+        #      放置すると
         #      「本文あり・summaries無し」の orphan として /resummarize が無駄に
         #      再要約してしまうため。新着は保存前に dict を書き換え（streaming buffer
         #      直後の DML UPDATE は失敗するため）、繰り越し由来の既存行は DML でマーク。
         below_ids = {
             s["article_id"]
             for s in summaries
-            if s.get("importance_score", 0) < importance_threshold
+            if not passes_thresholds(s, importance_threshold, relevance_threshold)
         }
         if below_ids:
             for article in to_fetch_now:
@@ -443,6 +474,13 @@ def _run_notify(triggered_by: str = "scheduler") -> int:
 
     config = load_config()
     settings: dict = config.get("settings", {})
+    general: dict = settings.get("general", {})
+    importance_threshold: float = float(
+        general.get("importance_threshold", _DEFAULT_IMPORTANCE_THRESHOLD)
+    )
+    relevance_threshold: float = float(
+        general.get("relevance_threshold", _DEFAULT_RELEVANCE_THRESHOLD)
+    )
     feed_categories: dict[str, str] = config.get("feed_categories", {})
     feed_blocks: dict = config.get("feed_blocks", {})
 
@@ -456,8 +494,10 @@ def _run_notify(triggered_by: str = "scheduler") -> int:
                 "config is empty: Google Sheets の設定読み込みに失敗した可能性"
             )
 
-        # 9. 未通知サマリーを取得
-        unnotified = bq.get_unnotified_summaries()
+        # 9. 未通知サマリーを取得（importance / relevance の2軸ゲート付き）
+        unnotified = bq.get_unnotified_summaries(
+            importance_threshold, relevance_threshold
+        )
         logger.info("[notify] %d unnotified summaries in BQ", len(unnotified))
 
         # 9.5. ブロックユーザーの記事を除外（保存済み記事も通知しない）
@@ -534,7 +574,11 @@ def _run_notify(triggered_by: str = "scheduler") -> int:
 
 
 def _run_recalculate(triggered_by: str = "manual") -> int:
-    """既存 summaries の importance_score を現行 SCORING_VERSION で再計算する。成功件数を返す。"""
+    """既存 summaries のスコアを現行 SCORING_VERSION で再計算する。成功件数を返す。
+
+    importance_score と relevance_score の両方を更新する。行は削除しないため、
+    閾値割れした行は通知クエリ側のゲート（get_unnotified_summaries）で落とす。
+    """
     import uuid
     from datetime import datetime, timezone
 
@@ -578,18 +622,23 @@ def _run_recalculate(triggered_by: str = "manual") -> int:
 
         recalculated = 0
         for row in rows:
-            score = score_article(
+            scores = score_article(
                 title=row["title"],
                 content=row.get("content") or "",
                 api_key=ANTHROPIC_API_KEY,
                 keywords=keywords,
                 favorite_tags=favorite_tags,
             )
-            if score is None:
+            if scores is None:
                 log["error_count"] += 1
                 continue
             try:
-                bq.update_summary_score(row["article_id"], score, SCORING_VERSION)
+                bq.update_summary_score(
+                    row["article_id"],
+                    scores["importance_score"],
+                    SCORING_VERSION,
+                    relevance_score=scores.get("relevance_score"),
+                )
                 recalculated += 1
             except Exception as e:
                 logger.warning(
@@ -651,6 +700,9 @@ def _run_resummarize(triggered_by: str = "manual") -> int:
     importance_threshold: float = float(
         general.get("importance_threshold", _DEFAULT_IMPORTANCE_THRESHOLD)
     )
+    relevance_threshold: float = float(
+        general.get("relevance_threshold", _DEFAULT_RELEVANCE_THRESHOLD)
+    )
     resummarize_limit: int = int(
         general.get("resummarize_limit", _DEFAULT_RESUMMARIZE_LIMIT)
     )
@@ -689,7 +741,7 @@ def _run_resummarize(triggered_by: str = "manual") -> int:
                 log["error_count"] += 1
                 continue
 
-            if result.get("importance_score", 0) >= importance_threshold:
+            if passes_thresholds(result, importance_threshold, relevance_threshold):
                 bq.insert_summaries(
                     [
                         {
