@@ -633,7 +633,7 @@ def test_resummarize_above_threshold_inserts_summary(
     bq.get_unsummarized_articles.return_value = [_orphan(0)]
     mock_summarize.return_value = {"summary": "s", "tags": [], "importance_score": 0.8}
 
-    recovered = main_mod._run_resummarize()
+    recovered, _ = main_mod._run_resummarize()
 
     assert recovered == 1
     bq.insert_summaries.assert_called_once()
@@ -656,7 +656,7 @@ def test_resummarize_below_threshold_marks_summarized(
     bq.get_unsummarized_articles.return_value = [_orphan(0)]
     mock_summarize.return_value = {"summary": "s", "tags": [], "importance_score": 0.3}
 
-    recovered = main_mod._run_resummarize()
+    recovered, _ = main_mod._run_resummarize()
 
     assert recovered == 0
     bq.insert_summaries.assert_not_called()
@@ -676,7 +676,7 @@ def test_resummarize_failure_skips_without_marking(
     bq.get_unsummarized_articles.return_value = [_orphan(0)]
     mock_summarize.return_value = None
 
-    recovered = main_mod._run_resummarize()
+    recovered, _ = main_mod._run_resummarize()
 
     assert recovered == 0
     bq.insert_summaries.assert_not_called()
@@ -916,7 +916,8 @@ def test_recalculate_skips_failed_scoring(mock_bqclass, mock_load_config, mock_s
     ]
     mock_score.return_value = None
 
-    assert main_mod._run_recalculate() == 0
+    # 採点失敗は成功0件・エラー1件として報告される
+    assert main_mod._run_recalculate() == (0, 1)
     bq.update_summary_score.assert_not_called()
 
 
@@ -1017,3 +1018,75 @@ def test_slide_prefilter_threshold_lowered_for_stricter_domain_criteria():
     スライドの取りこぼしを避ける側に倒す。
     """
     assert main_mod._DEFAULT_SLIDE_PREFILTER_THRESHOLD == 0.2
+
+
+# --- バッチ系エンドポイントの error_count -----------------------------------
+
+
+@patch("collector.main.score_article")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_recalculate_reports_error_count(mock_bqclass, mock_load_config, mock_score):
+    """全件失敗（0件更新）と対象なし（0件更新）を呼び出し側で区別できること。
+
+    戻り値が成功件数だけだと、クレジット枯渇などで全件失敗しても 0 が返り、
+    「対象が無くなった＝完了」と誤認する。
+    """
+    mock_load_config.return_value = _config(max_summarize="10")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_favorite_tag_counts.return_value = []
+    bq.get_outdated_summaries.return_value = [
+        {"article_id": f"a{i}", "title": "T", "content": "body"} for i in range(3)
+    ]
+    mock_score.return_value = None  # 採点が全件失敗
+
+    recalculated, error_count = main_mod._run_recalculate()
+
+    assert recalculated == 0
+    assert error_count == 3
+
+
+@patch("collector.main.score_article")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_recalculate_no_targets_reports_zero_errors(
+    mock_bqclass, mock_load_config, mock_score
+):
+    """対象なしのときは (0, 0)。全件失敗の (0, N) と区別できる。"""
+    mock_load_config.return_value = _config(max_summarize="10")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_favorite_tag_counts.return_value = []
+    bq.get_outdated_summaries.return_value = []
+
+    assert main_mod._run_recalculate() == (0, 0)
+
+
+@patch("collector.main.summarize_article")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_resummarize_reports_error_count(
+    mock_bqclass, mock_load_config, mock_summarize
+):
+    """/resummarize も同じ落とし穴を持つので error_count を返す。"""
+    mock_load_config.return_value = _config(max_summarize="10")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_favorite_tag_counts.return_value = []
+    bq.get_unsummarized_articles.return_value = [
+        {"article_id": "a1", "title": "T", "url": "u", "source": "s", "content": "body"}
+    ]
+    mock_summarize.return_value = None  # 要約が失敗
+
+    recovered, error_count = main_mod._run_resummarize()
+
+    assert recovered == 0
+    assert error_count == 1
+
+
+def test_pipeline_response_exposes_error_count():
+    """レスポンスモデルが error_count を持つ（既定0で後方互換）。"""
+    r = main_mod.PipelineResponse(status="ok", notified=5)
+    assert r.error_count == 0
+    assert main_mod.PipelineResponse(status="ok", notified=0, error_count=3).error_count == 3

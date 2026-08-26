@@ -88,6 +88,9 @@ _DEFAULT_PERSONALIZE_TOP_TAGS = 5
 class PipelineResponse(BaseModel):
     status: str
     notified: int
+    # 成功件数が 0 でも「対象なし」と「全件失敗」を区別できるようにする。
+    # バッチ系（/recalculate・/resummarize）は 0 件を完了判定に使うため。
+    error_count: int = 0
 
 
 class SlackResponse(BaseModel):
@@ -573,7 +576,7 @@ def _run_notify(triggered_by: str = "scheduler") -> int:
             logger.error("[notify] failed to save pipeline log: %s", e)
 
 
-def _run_recalculate(triggered_by: str = "manual") -> int:
+def _run_recalculate(triggered_by: str = "manual") -> tuple[int, int]:
     """既存 summaries のスコアを現行 SCORING_VERSION で再計算する。成功件数を返す。
 
     importance_score と relevance_score の両方を更新する。行は削除しないため、
@@ -647,8 +650,12 @@ def _run_recalculate(triggered_by: str = "manual") -> int:
                 log["error_count"] += 1
 
         log["summaries_generated"] = recalculated
-        logger.info("[recalculate] recalculated %d summaries", recalculated)
-        return recalculated
+        logger.info(
+            "[recalculate] recalculated %d summaries (%d errors)",
+            recalculated,
+            log["error_count"],
+        )
+        return recalculated, log["error_count"]
 
     except Exception as e:
         log["status"] = "error"
@@ -666,7 +673,7 @@ def _run_recalculate(triggered_by: str = "manual") -> int:
             logger.error("[recalculate] failed to save pipeline log: %s", e)
 
 
-def _run_resummarize(triggered_by: str = "manual") -> int:
+def _run_resummarize(triggered_by: str = "manual") -> tuple[int, int]:
     """本文ありで summaries が無い記事（orphan）を再要約する。復旧（summaries挿入）件数を返す。
 
     要約失敗（クレジット枯渇等）で取り残された記事を救済する手動バッチ。閾値超えは
@@ -760,8 +767,12 @@ def _run_resummarize(triggered_by: str = "manual") -> int:
                 bq.mark_article_summarized(a["article_id"])
 
         log["summaries_generated"] = recovered
-        logger.info("[resummarize] recovered %d summaries", recovered)
-        return recovered
+        logger.info(
+            "[resummarize] recovered %d summaries (%d errors)",
+            recovered,
+            log["error_count"],
+        )
+        return recovered, log["error_count"]
 
     except Exception as e:
         log["status"] = "error"
@@ -854,15 +865,15 @@ async def notify():
 @app.post("/recalculate", response_model=PipelineResponse)
 async def recalculate():
     """importance_score を現行ロジックで再計算する手動エンドポイント。"""
-    n = await asyncio.to_thread(_run_recalculate)
-    return PipelineResponse(status="ok", notified=n)
+    n, errors = await asyncio.to_thread(_run_recalculate)
+    return PipelineResponse(status="ok", notified=n, error_count=errors)
 
 
 @app.post("/resummarize", response_model=PipelineResponse)
 async def resummarize():
     """本文ありで summaries が無い記事を再要約し復旧する手動エンドポイント。"""
-    n = await asyncio.to_thread(_run_resummarize)
-    return PipelineResponse(status="ok", notified=n)
+    n, errors = await asyncio.to_thread(_run_resummarize)
+    return PipelineResponse(status="ok", notified=n, error_count=errors)
 
 
 @app.post("/slack", response_model=SlackResponse)
