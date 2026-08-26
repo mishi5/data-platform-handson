@@ -148,6 +148,10 @@ news_pipeline/
 ```
 
 ### Gotchas
+- **Claude SDK / モデル**: `anthropic` は **1.x**（`pyproject.toml` で固定）。使用モデルは要約・採点・スライド書き起こしが `claude-haiku-4-5`（`summarizer._MODEL` / `speakerdeck._MODEL`）、深堀りが `claude-sonnet-5`（`deepdiver`）。**モデルIDに日付サフィックスを付けない**（`claude-haiku-4-5-20251001` のような形は使わない）。
+  - **`temperature` は `extra_body` で渡す**: SDK 1.x で `messages.create()` の引数から削除された。Haiku 4.5 は値自体は受け付けるので、採点の一貫性のために `extra_body={"temperature": 0}` として送っている。引数で渡すと `TypeError` で落ちる。
+  - **Sonnet 5 は adaptive thinking が既定で走る**: レスポンスの先頭ブロックが `thinking` になりうるため `content[0]` を決め打ちしてはいけない（`deepdiver` は TextBlock を探索する）。`max_tokens` は thinking と本文の合算上限なので余裕が要る（1024 では thinking だけで使い切る。実測で 4096 が妥当）。
+  - **モックテストは SDK の破壊的変更を検出できない**: Anthropic クライアントを丸ごとモックしているため、0.43.0 → 1.0.0 で `temperature` が削除されてもテストは全て通ったまま本番だけが落ちる状態だった。`tests/sdk_signature.py` の `assert_matches_sdk_signature` が、モックの記録した kwargs を実 SDK のシグネチャに `bind_partial` して齟齬を落とす。API 呼び出しの kwargs を検証するテストではこれを併用する。
 - **Apple Silicon Mac**: `docker build --platform linux/amd64` 必須（Cloud RunはX86_64）
 - **Secret更新後**: `gcloud run services update` で再起動しないと新Secretを読まない
 - **Cloud Run バックグラウンド処理**: `cpu_idle = false` を設定しないとリクエスト後にCPUが絞られデーモンスレッドが停止する
@@ -165,6 +169,7 @@ news_pipeline/
   - **通知経路にもゲートが要る**: `/recalculate` はスコアを下げるだけで行を削除しないため、`bq_client.get_unnotified_summaries` 側にも閾値条件がある。ここが抜けると、再採点で閾値割れした未通知記事がそのまま Slack に流れる。
   - **オフライン評価**: プロンプト品質はモック前提のユニットテストでは測れない。`scripts/eval_scoring.py` が正解セット（お気に入り＝keep／対象外指定＝drop）を実際に Claude で採点して正解率を出す。通過帯のサンプルは `--sample N`。**プロンプトを変えたらデプロイ前にこれを回す。**
 - **スコア再計算**: 採点ロジック（`summarizer._build_scoring_criteria` / `_DOMAIN_DEFINITION`）を変えたら `summarizer.SCORING_VERSION` を +1 してデプロイし、`POST /recalculate` を古い版が無くなるまで数回叩く。`summaries.scoring_version` で差分管理（既存行は NULL=旧版）。1回 `recalculate_limit`（既定50）件ずつ importance と relevance の両方を更新し、行は削除しない。移行中は新旧の版が混在して通知ランキングが乱れるため、`recalculate_limit` を一時的に 200〜300 に上げて短期間で流し切るとよい。
+  - **レスポンスの件数0で完了と判断しない**: `/recalculate` の戻り値は成功件数で、「対象なし」と「対象はあるが全件失敗」を区別できない。実際に Anthropic API のクレジット枯渇で全件失敗し、0 が返り続けたことがある（ログには `[recalculate] 50 outdated summaries` と `recalculated 0` が並ぶ）。**完了判定は BigQuery で `COUNTIF(scoring_version IS NULL OR scoring_version < N)` が 0 になったことを確認する**。0 が返ったら Cloud Run のログで `score failed` の有無を必ず見る。
 - **閾値未満の終端化**: `/collect` で要約したがゲート（`importance_threshold` または `relevance_threshold`）を通らなかった記事は `content_status='summarized'`（終端）で保存され、orphan にならない（新着は streaming buffer 制約を避けるため raw_articles 保存前に status を確定、繰り越し由来は DML でマーク）。
 - **通知失敗の再送**: Slack 送信に失敗したカテゴリは通知済みマークをスキップし、次回 `/notify` で再送される。パイプライン例外時は Slack にエラーアラートが飛ぶ。設定ロード失敗（feeds/config 空）は「成功・0件」ではなくエラーになる。
 - **dedup**: 既存URLとの照合は**全件スキャン**（url 列のみ・数MB規模でコスト無視できる）。過去に直近90日窓にしたところ、RSSに90日超の記事を残すフィードで窓落ち記事が再収集され重複通知が発生したため窓は使わない。同一実行内の重複（同じURLが複数フィードに載る）も排除する。収集URLは `utm_*`・`fbclid` 等のトラッキングパラメータと fragment を除去して正規化してから article_id を計算する。通知クエリ（`get_unnotified_summaries`）は summaries・raw_articles の両側を article_id ごとに1行へ絞り、raw 重複行による通知の増幅を防ぐ。

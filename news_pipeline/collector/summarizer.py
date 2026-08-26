@@ -7,7 +7,8 @@
 
 出力は tool use（tool_choice で強制）による structured output で受け取る。
 プロンプトで「JSONのみ返せ」と指示してパースする方式はモデルが余計な文を
-返すと落ちるため使わない。採点の一貫性のため temperature=0 を明示する。
+返すと落ちるため使わない。採点の一貫性のため temperature=0 を明示する
+（SDK 1.x で messages.create の引数から外れたため extra_body で送る）。
 """
 
 import logging
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 # スコアロジックの版。_build_scoring_criteria を変えたら +1 する。
 SCORING_VERSION = 3
 
-_MODEL = "claude-haiku-4-5-20251001"
+_MODEL = "claude-haiku-4-5"
 
 # 要約・採点に渡す本文の最大文字数。長い技術記事は結論が後半にあることが
 # 多いため、切り詰めすぎると価値を取りこぼす（Haiku なので費用影響は小さい）。
@@ -304,7 +305,9 @@ def _call_tool(
     message = client.messages.create(
         model=_MODEL,
         max_tokens=max_tokens,
-        temperature=0,
+        # temperature は SDK 1.x の signature から削除されたが Haiku 4.5 は
+        # まだ受け付ける。採点の一貫性のために extra_body で送り続ける。
+        extra_body={"temperature": 0},
         system=system_prompt,
         tools=[tool],
         tool_choice={"type": "tool", "name": tool["name"]},

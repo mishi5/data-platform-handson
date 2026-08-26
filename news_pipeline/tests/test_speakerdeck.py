@@ -134,3 +134,10 @@ def test_fetch_slide_text_api_400_is_skip(mocker):
     text, ok = fetch_slide_text("https://speakerdeck.com/u/talk", "key")
     assert text is None
     assert ok is True  # 400 はリトライ不要
+
+
+def test_model_id_has_no_date_suffix():
+    """モデルIDは日付サフィックスなしの正規形を使う。"""
+    from collector.speakerdeck import _MODEL
+
+    assert _MODEL == "claude-haiku-4-5"

@@ -17,7 +17,7 @@ from anthropic.types import TextBlock
 logger = logging.getLogger(__name__)
 
 # 書き起こしに使うモデル。summarizer と統一（Haiku 4.5・PDF/ビジョン対応・低コスト）。
-_MODEL = "claude-haiku-4-5-20251001"
+_MODEL = "claude-haiku-4-5"
 
 # Claude の PDF 入力上限（リクエスト 32MB）。超える PDF はスキップする。
 _MAX_PDF_BYTES = 32 * 1024 * 1024

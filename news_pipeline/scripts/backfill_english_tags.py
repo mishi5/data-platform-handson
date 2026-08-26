@@ -93,7 +93,7 @@ def translate_batch(client: anthropic.Anthropic, tags: list[str]) -> dict[str, s
     message = client.messages.create(
         model=MODEL,
         max_tokens=8192,
-        temperature=0,
+        extra_body={"temperature": 0},
         system=_SYSTEM_PROMPT,
         tools=[_TRANSLATE_TOOL],
         tool_choice={"type": "tool", "name": "record_translations"},

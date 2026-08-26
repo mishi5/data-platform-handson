@@ -1,4 +1,8 @@
-"""Claude Sonnet を使って記事を深堀り分析するモジュール。"""
+"""Claude Sonnet を使って記事を深堀り分析するモジュール。
+
+Sonnet 5 は adaptive thinking が既定で走るため、レスポンスの先頭ブロックが
+thinking になりうる。content[0] を決め打ちせず TextBlock を探すこと。
+"""
 import logging
 
 import anthropic
@@ -26,8 +30,10 @@ def deepdive_article(title: str, content: str, api_key: str) -> str | None:
     try:
         client = anthropic.Anthropic(api_key=api_key)
         message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
+            model="claude-sonnet-5",
+            # thinking + 本文の合算上限。1024 では thinking だけで使い切る
+            max_tokens=4096,
+            thinking={"type": "adaptive"},
             system=_SYSTEM_PROMPT,
             messages=[
                 {
@@ -36,8 +42,11 @@ def deepdive_article(title: str, content: str, api_key: str) -> str | None:
                 }
             ],
         )
-        block = message.content[0]
-        if not isinstance(block, TextBlock):
+        block = next(
+            (b for b in message.content if isinstance(b, TextBlock)),
+            None,
+        )
+        if block is None:
             return None
         return block.text.strip()
     except Exception as e:

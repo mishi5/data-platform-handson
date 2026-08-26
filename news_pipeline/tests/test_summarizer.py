@@ -1,11 +1,14 @@
 from unittest.mock import MagicMock, patch
+
 from anthropic.types import ToolUseBlock
+
 from collector.summarizer import (
-    summarize_article,
-    score_article,
-    _build_system_prompt,
     _build_scoring_criteria,
+    _build_system_prompt,
+    score_article,
+    summarize_article,
 )
+from tests.sdk_signature import assert_matches_sdk_signature
 
 
 def _mock_tool_response(mock_anthropic_class, tool_input: dict) -> MagicMock:
@@ -40,9 +43,11 @@ def test_summarize_article_returns_dict(mock_anthropic_class):
     assert "bigquery" in result["tags"]
     assert result["importance_score"] == 0.85
 
-    # tool use を強制し temperature=0 で呼び出す（structured output・採点の一貫性）
+    # tool use を強制し temperature=0 で呼び出す（structured output・採点の一貫性）。
+    # temperature は SDK 1.x の signature から外れたので extra_body で送る。
     call_kwargs = mock_client.messages.create.call_args.kwargs
-    assert call_kwargs["temperature"] == 0
+    assert call_kwargs["extra_body"] == {"temperature": 0}
+    assert_matches_sdk_signature(call_kwargs)
     assert call_kwargs["tool_choice"]["type"] == "tool"
     assert call_kwargs["tool_choice"]["name"] == "record_summary"
 
@@ -206,8 +211,9 @@ def test_score_article_returns_both_scores(mock_anthropic_class):
     assert result["relevance_score"] == 0.9
 
     call_kwargs = mock_client.messages.create.call_args.kwargs
-    assert call_kwargs["temperature"] == 0
+    assert call_kwargs["extra_body"] == {"temperature": 0}
     assert call_kwargs["tool_choice"]["name"] == "record_score"
+    assert_matches_sdk_signature(call_kwargs)
 
 
 @patch("collector.summarizer.anthropic.Anthropic")
@@ -404,3 +410,10 @@ def test_score_slide_relevance_prompt_omits_importance_guidance(mock_anthropic_c
     system_prompt = mock_client.messages.create.call_args.kwargs["system"]
     assert "適用対象" in system_prompt
     assert "importance_score" not in system_prompt
+
+
+def test_model_id_has_no_date_suffix():
+    """モデルIDは日付サフィックスなしの正規形を使う（SDK/API が推奨する形）。"""
+    from collector.summarizer import _MODEL
+
+    assert _MODEL == "claude-haiku-4-5"
