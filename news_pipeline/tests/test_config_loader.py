@@ -120,3 +120,93 @@ def test_load_feed_blocks_skips_rows_without_users():
         ],
     )
     assert _load_feed_blocks(ss) == {}
+
+
+# --- 一時障害へのリトライ ----------------------------------------------------
+
+from unittest.mock import patch
+
+import pytest
+
+
+def _api_error(code: int):
+    """gspread の APIError（.code を持つ）を組み立てる。"""
+    from gspread.exceptions import APIError
+
+    response = MagicMock()
+    response.json.return_value = {"error": {"code": code, "message": "boom"}}
+    return APIError(response)
+
+
+@patch("collector.config_loader.time.sleep")
+@patch("collector.config_loader._load_config_once")
+@patch("collector.config_loader.SHEET_ID", "sheet-1")
+def test_load_config_retries_transient_error(mock_once, mock_sleep):
+    """Sheets の 503（一時障害）は再試行する。
+
+    実際に JST 6:30 の /notify が 503 で丸ごと落ち、通知がスキップされた。
+    """
+    from collector.config_loader import load_config
+
+    mock_once.side_effect = [_api_error(503), {"feeds": {"u": "s"}}]
+
+    config = load_config()
+
+    assert config == {"feeds": {"u": "s"}}
+    assert mock_once.call_count == 2
+    mock_sleep.assert_called_once()
+
+
+@patch("collector.config_loader.time.sleep")
+@patch("collector.config_loader._load_config_once")
+@patch("collector.config_loader.SHEET_ID", "sheet-1")
+def test_load_config_gives_up_after_max_attempts(mock_once, mock_sleep):
+    """一時障害が続いたら諦めて空 dict（呼び出し側が設定ガードで落とす）。"""
+    from collector.config_loader import load_config
+
+    mock_once.side_effect = _api_error(503)
+
+    assert load_config() == {}
+    assert mock_once.call_count == 3
+    # 最終試行のあとは待たない
+    assert mock_sleep.call_count == 2
+
+
+@patch("collector.config_loader.time.sleep")
+@patch("collector.config_loader._load_config_once")
+@patch("collector.config_loader.SHEET_ID", "sheet-1")
+def test_load_config_does_not_retry_permanent_error(mock_once, mock_sleep):
+    """403（権限エラー）など恒久的な失敗はリトライしない（待つだけ無駄）。"""
+    from collector.config_loader import load_config
+
+    mock_once.side_effect = _api_error(403)
+
+    assert load_config() == {}
+    assert mock_once.call_count == 1
+    mock_sleep.assert_not_called()
+
+
+@patch("collector.config_loader.time.sleep")
+@patch("collector.config_loader._load_config_once")
+@patch("collector.config_loader.SHEET_ID", "sheet-1")
+def test_load_config_backoff_is_exponential(mock_once, mock_sleep):
+    from collector.config_loader import load_config
+
+    mock_once.side_effect = _api_error(503)
+    load_config()
+
+    assert [c.args[0] for c in mock_sleep.call_args_list] == [1.0, 2.0]
+
+
+@pytest.mark.parametrize("exc", [ConnectionError("net"), TimeoutError("slow")])
+@patch("collector.config_loader.time.sleep")
+@patch("collector.config_loader._load_config_once")
+@patch("collector.config_loader.SHEET_ID", "sheet-1")
+def test_load_config_retries_network_errors(mock_once, mock_sleep, exc):
+    """接続エラー・タイムアウトも一時障害として再試行する。"""
+    from collector.config_loader import load_config
+
+    mock_once.side_effect = [exc, {"feeds": {}}]
+
+    assert load_config() == {"feeds": {}}
+    assert mock_once.call_count == 2
