@@ -168,6 +168,9 @@ news_pipeline/
   - **判定不能は通す**: モデルが relevance を返さなかった場合（None・非数値）と、`summaries.relevance_score` が NULL の旧データはゲートを通す。取りこぼし防止を優先する。
   - **通知経路にもゲートが要る**: `/recalculate` はスコアを下げるだけで行を削除しないため、`bq_client.get_unnotified_summaries` 側にも閾値条件がある。ここが抜けると、再採点で閾値割れした未通知記事がそのまま Slack に流れる。
   - **オフライン評価**: プロンプト品質はモック前提のユニットテストでは測れない。`scripts/eval_scoring.py` が正解セット（お気に入り＝keep／対象外指定＝drop）を実際に Claude で採点して正解率を出す。通過帯のサンプルは `--sample N`。**プロンプトを変えたらデプロイ前にこれを回す。**
+- **上限到達時の即時中断と予算カウンタ**: クレジット枯渇・支出上限の到達（400 で `credit balance is too low` / `usage limits`）はリトライしても回復しない。`summarizer.QuotaExceededError` として送出し、`/recalculate`・`/resummarize` は残りを呼ばずにループを中断する。これが無いと1バッチ分（100件）を丸ごと無駄打ちする（実際に 2026-08-27 に 200 件分を空振りさせた）。
+  - **上限の残量は API から取れない**: レスポンスヘッダーの `anthropic-ratelimit-*` は分あたりのスループット枠（input/output/requests）であって支出枠ではない。Admin API（`/v1/organizations/cost_report`）は実在するが Admin キー（`sk-ant-admin...`）が必要で通常キーでは 401。そのため `summarizer.CostTracker` が各レスポンスの `usage` から実コストを自前で積算する。
+  - `general / batch_budget_usd`（既定 未設定＝無制限）を超えるとバッチはそこで停止する。大量の再採点・再要約を流す前に設定しておくと、月次の支出上限を一気に使い切る事故を防げる。単価は `summarizer._INPUT_USD_PER_MTOK` / `_OUTPUT_USD_PER_MTOK`（Haiku 4.5 の $1 / $5）。モデルを変えたらここも直すこと。
 - **スコア再計算**: 採点ロジック（`summarizer._build_scoring_criteria` / `_DOMAIN_DEFINITION`）を変えたら `summarizer.SCORING_VERSION` を +1 してデプロイし、`POST /recalculate` を古い版が無くなるまで数回叩く。`summaries.scoring_version` で差分管理（既存行は NULL=旧版）。1回 `recalculate_limit`（既定50）件ずつ importance と relevance の両方を更新し、行は削除しない。移行中は新旧の版が混在して通知ランキングが乱れるため、`recalculate_limit` を一時的に 200〜300 に上げて短期間で流し切るとよい。
   - **完了判定は `error_count` を見る**: `/recalculate`・`/resummarize` のレスポンスは `{"notified": 成功件数, "error_count": 失敗件数}`。`notified=0` だけでは「対象なし」と「対象はあるが全件失敗」を区別できない（実際に Anthropic API のクレジット枯渇で全件失敗し、0 が返り続けたのを完走と誤認したことがある）。**`notified=0` かつ `error_count=0` が真の完了**。`error_count>0` なら Cloud Run のログで `score failed` / `summarize failed` の原因を見る。念のため BigQuery 側でも `COUNTIF(scoring_version IS NULL OR scoring_version < N)` が 0 になったことを確認するとよい。
 - **閾値未満の終端化**: `/collect` で要約したがゲート（`importance_threshold` または `relevance_threshold`）を通らなかった記事は `content_status='summarized'`（終端）で保存され、orphan にならない（新着は streaming buffer 制約を避けるため raw_articles 保存前に status を確定、繰り越し由来は DML でマーク）。
@@ -215,6 +218,7 @@ news_pipeline/
   - `general / max_content_retries`: 本文取得の最大リトライ回数（未設定は 3）
   - `general / slide_prefilter_threshold`: Speaker Deck の PDF を取得する前の関連度フィルタ下限（未設定は 0.2）。低いほど通しやすい。採点基準にドメイン定義が入って判定が辛くなったため低めに設定している（`filtered` は終端で再取得されない）
   - `general / personalize_top_tags`: お気に入り記事のタグ頻度上位N個を採点の加点ヒントに使う（未設定は 5、`0` で無効）
+  - `general / batch_budget_usd`: 1回のバッチ（/recalculate・/resummarize）で使う API コストの上限（$）。未設定・0 で無制限。超えるとその時点で停止する
   - `general / recalculate_limit`: 1回の /recalculate で再採点する最大件数（未設定は 50）
   - `general / resummarize_limit`: 1回の /resummarize で再要約する最大件数（未設定は 50）
   - `general / resummarize_days`: /resummarize が対象とする収集日ウィンドウ（未設定は 7）

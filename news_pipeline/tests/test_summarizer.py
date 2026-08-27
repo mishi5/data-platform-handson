@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from anthropic.types import ToolUseBlock
 
 from collector.summarizer import (
@@ -417,3 +419,130 @@ def test_model_id_has_no_date_suffix():
     from collector.summarizer import _MODEL
 
     assert _MODEL == "claude-haiku-4-5"
+
+
+# --- 上限到達の即時中断 ------------------------------------------------------
+
+
+def _api_status_error(message: str):
+    """Anthropic の 400 エラーを本物と同じ形で組み立てる。"""
+    import anthropic
+    import httpx2
+
+    req = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    body = {"type": "error", "error": {"type": "invalid_request_error", "message": message}}
+    resp = httpx2.Response(400, request=req, json=body)
+    return anthropic.BadRequestError(message, response=resp, body=body)
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_summarize_raises_quota_error_on_credit_exhaustion(mock_anthropic_class):
+    """クレジット枯渇はリトライしても回復しないので専用例外で即座に知らせる。"""
+    from collector.summarizer import QuotaExceededError
+
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    mock_client.messages.create.side_effect = _api_status_error(
+        "Your credit balance is too low to access the Anthropic API."
+    )
+
+    with pytest.raises(QuotaExceededError):
+        summarize_article(title="T", content="C", api_key="k")
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_summarize_raises_quota_error_on_usage_limit(mock_anthropic_class):
+    """支出上限の到達も同じ扱い（今回 200 件を無駄に呼んだ原因）。"""
+    from collector.summarizer import QuotaExceededError
+
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    mock_client.messages.create.side_effect = _api_status_error(
+        "You have reached your specified API usage limits. "
+        "You will regain access on 2026-09-01 at 00:00 UTC."
+    )
+
+    with pytest.raises(QuotaExceededError):
+        summarize_article(title="T", content="C", api_key="k")
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_summarize_returns_none_on_other_bad_request(mock_anthropic_class):
+    """上限以外の 400 は従来どおり None（1件スキップして継続する）。"""
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    mock_client.messages.create.side_effect = _api_status_error(
+        "messages.0.content: Input should be a valid list"
+    )
+
+    assert summarize_article(title="T", content="C", api_key="k") is None
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_score_article_raises_quota_error(mock_anthropic_class):
+    from collector.summarizer import QuotaExceededError
+
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    mock_client.messages.create.side_effect = _api_status_error(
+        "Your credit balance is too low to access the Anthropic API."
+    )
+
+    with pytest.raises(QuotaExceededError):
+        score_article(title="T", content="C", api_key="k")
+
+
+# --- 予算カウンタ ------------------------------------------------------------
+
+
+def test_cost_tracker_accumulates_usage():
+    """レスポンスの usage からモデル単価で実コストを積算する。"""
+    from collector.summarizer import CostTracker
+
+    t = CostTracker(budget_usd=1.0)
+    # Haiku 4.5: input $1/MTok, output $5/MTok
+    t.add(input_tokens=1_000_000, output_tokens=0)
+    assert t.spent_usd == pytest.approx(1.0)
+    t.add(input_tokens=0, output_tokens=1_000_000)
+    assert t.spent_usd == pytest.approx(6.0)
+
+
+def test_cost_tracker_reports_exceeded():
+    from collector.summarizer import CostTracker
+
+    t = CostTracker(budget_usd=0.5)
+    assert t.exceeded() is False
+    t.add(input_tokens=600_000, output_tokens=0)  # $0.6 > $0.5
+    assert t.exceeded() is True
+
+
+def test_cost_tracker_without_budget_never_exceeds():
+    """予算未設定（None・0）なら無制限（従来どおりの挙動）。"""
+    from collector.summarizer import CostTracker
+
+    for budget in (None, 0):
+        t = CostTracker(budget_usd=budget)
+        t.add(input_tokens=10_000_000, output_tokens=10_000_000)
+        assert t.exceeded() is False
+
+
+@patch("collector.summarizer.anthropic.Anthropic")
+def test_summarize_records_usage_into_tracker(mock_anthropic_class):
+    """summarize_article に tracker を渡すと実使用量が積算される。"""
+    from collector.summarizer import CostTracker
+
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    block = MagicMock(spec=ToolUseBlock)
+    block.input = {"summary": "- x", "tags": [], "importance_score": 0.8,
+                   "relevance_score": 0.9}
+    message = mock_client.messages.create.return_value
+    message.content = [block]
+    message.usage.input_tokens = 2000
+    message.usage.output_tokens = 500
+
+    tracker = CostTracker(budget_usd=1.0)
+    summarize_article(title="T", content="C", api_key="k", tracker=tracker)
+
+    # 2000 * $1/1M + 500 * $5/1M = 0.002 + 0.0025
+    assert tracker.spent_usd == pytest.approx(0.0045)

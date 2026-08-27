@@ -22,7 +22,60 @@ logger = logging.getLogger(__name__)
 # スコアロジックの版。_build_scoring_criteria を変えたら +1 する。
 SCORING_VERSION = 3
 
+# クレジット枯渇・支出上限の到達を示す 400 のメッセージ断片。これらはリトライしても
+# 回復しないので、バッチ処理は次の記事に進まず即座に中断する必要がある。
+_QUOTA_MARKERS = ("credit balance is too low", "usage limits")
+
+
+class QuotaExceededError(Exception):
+    """API のクレジット枯渇・利用上限到達。
+
+    通常の失敗（None を返して次の記事へ）と違い、後続も必ず失敗するため
+    バッチ全体を中断させる目的で送出する。
+    """
+
+
+def _is_quota_error(error: Exception) -> bool:
+    """例外がクレジット枯渇・上限到達によるものかを判定する。"""
+    if not isinstance(error, anthropic.APIStatusError):
+        return False
+    text = str(error)
+    body = getattr(error, "body", None)
+    if isinstance(body, dict):
+        message = body.get("error", {})
+        if isinstance(message, dict):
+            text = f"{text} {message.get('message', '')}"
+    lowered = text.lower()
+    return any(marker in lowered for marker in _QUOTA_MARKERS)
+
 _MODEL = "claude-haiku-4-5"
+
+# _MODEL の単価（$ / 100万トークン）。予算カウンタの積算に使う。
+_INPUT_USD_PER_MTOK = 1.0
+_OUTPUT_USD_PER_MTOK = 5.0
+
+
+class CostTracker:
+    """1回のバッチで使った API コストを積算し、予算超過を判定する。
+
+    Anthropic は支出上限の残量を API で公開していない（レスポンスヘッダーの
+    anthropic-ratelimit-* は分あたりのスループット枠であって支出枠ではない）。
+    そこで実 usage から自前で積算し、バッチが暴走的に使い切るのを防ぐ。
+    budget_usd が None / 0 なら無制限（従来どおりの挙動）。
+    """
+
+    def __init__(self, budget_usd: float | None = None):
+        self.budget_usd = float(budget_usd) if budget_usd else None
+        self.spent_usd = 0.0
+
+    def add(self, input_tokens: int, output_tokens: int) -> None:
+        self.spent_usd += (
+            input_tokens * _INPUT_USD_PER_MTOK
+            + output_tokens * _OUTPUT_USD_PER_MTOK
+        ) / 1_000_000
+
+    def exceeded(self) -> bool:
+        return self.budget_usd is not None and self.spent_usd >= self.budget_usd
 
 # 要約・採点に渡す本文の最大文字数。長い技術記事は結論が後半にあることが
 # 多いため、切り詰めすぎると価値を取りこぼす（Haiku なので費用影響は小さい）。
@@ -299,6 +352,7 @@ def _call_tool(
     tool: dict,
     api_key: str,
     max_tokens: int,
+    tracker: "CostTracker | None" = None,
 ) -> dict | None:
     """tool_choice で指定ツールを強制呼び出しし、その入力（dict）を返す。"""
     client = anthropic.Anthropic(api_key=api_key)
@@ -313,6 +367,13 @@ def _call_tool(
         tool_choice={"type": "tool", "name": tool["name"]},
         messages=[{"role": "user", "content": user_content}],
     )
+    if tracker is not None:
+        usage = getattr(message, "usage", None)
+        if usage is not None:
+            tracker.add(
+                input_tokens=getattr(usage, "input_tokens", 0) or 0,
+                output_tokens=getattr(usage, "output_tokens", 0) or 0,
+            )
     block = next(
         (b for b in message.content if isinstance(b, ToolUseBlock)),
         None,
@@ -328,6 +389,7 @@ def summarize_article(
     api_key: str,
     keywords: list[str] | None = None,
     favorite_tags: list[str] | None = None,
+    tracker: CostTracker | None = None,
 ) -> dict | None:
     """Claude で記事を要約する。失敗時は None。keywords に基づいて importance_score を判定する。"""
     try:
@@ -337,6 +399,7 @@ def summarize_article(
             tool=_SUMMARY_TOOL,
             api_key=api_key,
             max_tokens=1024,
+            tracker=tracker,
         )
         if result is None:
             return None
@@ -356,6 +419,8 @@ def summarize_article(
         result["relevance_score"] = _as_float(result.get("relevance_score"))
         return result
     except Exception as e:
+        if _is_quota_error(e):
+            raise QuotaExceededError(str(e)) from e
         logger.error("[summarizer] failed: %s", e)
         return None
 
@@ -387,6 +452,8 @@ def score_slide_relevance(
             return None
         return float(result["relevance_score"])
     except Exception as e:
+        if _is_quota_error(e):
+            raise QuotaExceededError(str(e)) from e
         logger.error("[summarizer] slide prefilter failed: %s", e)
         return None
 
@@ -397,6 +464,7 @@ def score_article(
     api_key: str,
     keywords: list[str] | None = None,
     favorite_tags: list[str] | None = None,
+    tracker: CostTracker | None = None,
 ) -> dict | None:
     """記事のスコアを再計算する。失敗時は None。
 
@@ -411,6 +479,7 @@ def score_article(
             tool=_SCORE_TOOL,
             api_key=api_key,
             max_tokens=128,
+            tracker=tracker,
         )
         if result is None or result.get("importance_score") is None:
             return None
@@ -419,5 +488,7 @@ def score_article(
             "relevance_score": _as_float(result.get("relevance_score")),
         }
     except Exception as e:
+        if _is_quota_error(e):
+            raise QuotaExceededError(str(e)) from e
         logger.error("[summarizer] score failed: %s", e)
         return None

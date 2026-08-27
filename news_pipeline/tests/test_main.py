@@ -1132,3 +1132,97 @@ def test_resummarize_falls_back_to_settings(
     main_mod._run_resummarize()
 
     bq.get_unsummarized_articles.assert_called_once_with(7, 50)
+
+
+# --- 上限到達・予算超過での中断 ----------------------------------------------
+
+
+@patch("collector.main.summarize_article")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_resummarize_aborts_immediately_on_quota_error(
+    mock_bqclass, mock_load_config, mock_summarize
+):
+    """上限到達を検知したら残りを呼ばずに中断する（無駄打ちの防止）。
+
+    例外クラスは main が import したものを使う。main は bare import
+    （from summarizer import ...）なので collector.summarizer から取ると
+    別モジュールとして二重ロードされ except が一致しない。
+    """
+    QuotaExceededError = main_mod.QuotaExceededError
+
+    mock_load_config.return_value = _config(max_summarize="10")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_favorite_tag_counts.return_value = []
+    bq.get_unsummarized_articles.return_value = [
+        {"article_id": f"a{i}", "title": "T", "url": "u", "source": "s", "content": "c"}
+        for i in range(50)
+    ]
+    mock_summarize.side_effect = QuotaExceededError("usage limits")
+
+    recovered, error_count = main_mod._run_resummarize()
+
+    assert recovered == 0
+    # 50件あっても1件目で止まる
+    assert mock_summarize.call_count == 1
+
+
+@patch("collector.main.score_article")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_recalculate_aborts_immediately_on_quota_error(
+    mock_bqclass, mock_load_config, mock_score
+):
+    QuotaExceededError = main_mod.QuotaExceededError
+
+    mock_load_config.return_value = _config(max_summarize="10")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_favorite_tag_counts.return_value = []
+    bq.get_outdated_summaries.return_value = [
+        {"article_id": f"a{i}", "title": "T", "content": "c"} for i in range(50)
+    ]
+    mock_score.side_effect = QuotaExceededError("credit balance is too low")
+
+    recalculated, _ = main_mod._run_recalculate()
+
+    assert recalculated == 0
+    assert mock_score.call_count == 1
+
+
+@patch("collector.main.summarize_article")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_resummarize_stops_when_budget_exceeded(
+    mock_bqclass, mock_load_config, mock_summarize
+):
+    """1バッチの予算（settings: batch_budget_usd）を超えたら以降を処理しない。"""
+    config = _config(max_summarize="10")
+    config["settings"]["general"]["batch_budget_usd"] = "0.001"
+    mock_load_config.return_value = config
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_favorite_tag_counts.return_value = []
+    bq.get_unsummarized_articles.return_value = [
+        {"article_id": f"a{i}", "title": "T", "url": "u", "source": "s", "content": "c"}
+        for i in range(10)
+    ]
+
+    def _spend(*args, **kwargs):
+        # 1件で予算を超える量を積む
+        kwargs["tracker"].add(input_tokens=1_000_000, output_tokens=0)
+        return {"summary": "s", "tags": [], "importance_score": 0.9,
+                "relevance_score": 0.9}
+
+    mock_summarize.side_effect = _spend
+
+    main_mod._run_resummarize()
+
+    # 1件目で予算超過を検知し、2件目以降は呼ばない
+    assert mock_summarize.call_count == 1
+
+
+def test_default_batch_budget_is_unlimited():
+    """既定は無制限（既存挙動を変えない）。"""
+    assert main_mod._DEFAULT_BATCH_BUDGET_USD is None

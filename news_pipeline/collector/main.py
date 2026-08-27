@@ -45,6 +45,8 @@ from rss_fetcher import fetch_articles
 from speakerdeck import is_speakerdeck_url
 from summarizer import (
     SCORING_VERSION,
+    CostTracker,
+    QuotaExceededError,
     _as_float,
     score_article,
     score_slide_relevance,
@@ -72,6 +74,9 @@ _DEFAULT_IMPORTANCE_THRESHOLD = 0.65
 _DEFAULT_RELEVANCE_THRESHOLD = 0.55
 _DEFAULT_MAX_CONTENT_RETRIES = 3
 _DEFAULT_RECALCULATE_LIMIT = 50
+# batch_budget_usd: 1回のバッチで使う API コストの上限（$）。None で無制限。
+# Anthropic は支出上限の残量を API で公開していないため自前で積算して止める。
+_DEFAULT_BATCH_BUDGET_USD = None
 # resummarize: 要約漏れ記事（本文ありで summaries 無し）の復旧バッチ設定
 _DEFAULT_RESUMMARIZE_LIMIT = 50
 _DEFAULT_RESUMMARIZE_DAYS = 7
@@ -139,6 +144,14 @@ async def verify_slack(request: Request) -> None:
     )
     if not hmac.compare_digest(expected, request.headers.get("X-Slack-Signature", "")):
         raise HTTPException(status_code=403, detail="invalid signature")
+
+
+def _batch_budget(general: dict) -> float | None:
+    """settings の batch_budget_usd を読む。未設定なら無制限（None）。"""
+    value = general.get("batch_budget_usd", _DEFAULT_BATCH_BUDGET_USD)
+    if value in (None, "", 0, "0"):
+        return None
+    return float(value)
 
 
 def passes_thresholds(
@@ -622,6 +635,7 @@ def _run_recalculate(triggered_by: str = "manual") -> tuple[int, int]:
 
     try:
         favorite_tags = _load_favorite_tags(bq, general)
+        tracker = CostTracker(_batch_budget(general))
 
         rows = bq.get_outdated_summaries(SCORING_VERSION, recalculate_limit)
         logger.info(
@@ -632,13 +646,29 @@ def _run_recalculate(triggered_by: str = "manual") -> tuple[int, int]:
 
         recalculated = 0
         for row in rows:
-            scores = score_article(
-                title=row["title"],
-                content=row.get("content") or "",
-                api_key=ANTHROPIC_API_KEY,
-                keywords=keywords,
-                favorite_tags=favorite_tags,
-            )
+            if tracker.exceeded():
+                logger.warning(
+                    "[recalculate] batch budget $%.2f reached (spent $%.2f), stopping",
+                    tracker.budget_usd,
+                    tracker.spent_usd,
+                )
+                break
+            try:
+                scores = score_article(
+                    title=row["title"],
+                    content=row.get("content") or "",
+                    api_key=ANTHROPIC_API_KEY,
+                    keywords=keywords,
+                    favorite_tags=favorite_tags,
+                    tracker=tracker,
+                )
+            except QuotaExceededError as e:
+                # 後続も必ず失敗するので残りは呼ばずに中断する
+                logger.error("[recalculate] quota exceeded, aborting: %s", e)
+                log["status"] = "error"
+                log["error_message"] = f"quota exceeded: {e}"
+                log["error_count"] += 1
+                break
             if scores is None:
                 log["error_count"] += 1
                 continue
@@ -740,6 +770,7 @@ def _run_resummarize(
 
     try:
         favorite_tags = _load_favorite_tags(bq, general)
+        tracker = CostTracker(_batch_budget(general))
 
         orphans = bq.get_unsummarized_articles(resummarize_days, resummarize_limit)
         logger.info(
@@ -750,6 +781,13 @@ def _run_resummarize(
 
         recovered = 0
         for a in orphans:
+            if tracker.exceeded():
+                logger.warning(
+                    "[resummarize] batch budget $%.2f reached (spent $%.2f), stopping",
+                    tracker.budget_usd,
+                    tracker.spent_usd,
+                )
+                break
             try:
                 result = summarize_article(
                     title=a["title"],
@@ -757,7 +795,14 @@ def _run_resummarize(
                     api_key=ANTHROPIC_API_KEY,
                     keywords=keywords,
                     favorite_tags=favorite_tags,
+                    tracker=tracker,
                 )
+            except QuotaExceededError as e:
+                logger.error("[resummarize] quota exceeded, aborting: %s", e)
+                log["status"] = "error"
+                log["error_message"] = f"quota exceeded: {e}"
+                log["error_count"] += 1
+                break
             except Exception as e:
                 logger.warning("[resummarize] summarize failed for %s: %s", a["url"], e)
                 log["error_count"] += 1
