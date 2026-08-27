@@ -1090,3 +1090,45 @@ def test_pipeline_response_exposes_error_count():
     r = main_mod.PipelineResponse(status="ok", notified=5)
     assert r.error_count == 0
     assert main_mod.PipelineResponse(status="ok", notified=0, error_count=3).error_count == 3
+
+
+@patch("collector.main.summarize_article")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_resummarize_overrides_days_and_limit(
+    mock_bqclass, mock_load_config, mock_summarize
+):
+    """days/limit をリクエストで上書きできる（古い orphan の一括処理用）。"""
+    config = _config(max_summarize="10")
+    config["settings"]["general"]["resummarize_days"] = "7"
+    config["settings"]["general"]["resummarize_limit"] = "50"
+    mock_load_config.return_value = config
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_favorite_tag_counts.return_value = []
+    bq.get_unsummarized_articles.return_value = []
+
+    main_mod._run_resummarize("manual", days=120, limit=200)
+
+    bq.get_unsummarized_articles.assert_called_once_with(120, 200)
+
+
+@patch("collector.main.summarize_article")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_resummarize_falls_back_to_settings(
+    mock_bqclass, mock_load_config, mock_summarize
+):
+    """未指定なら従来どおり settings シートの値を使う。"""
+    config = _config(max_summarize="10")
+    config["settings"]["general"]["resummarize_days"] = "7"
+    config["settings"]["general"]["resummarize_limit"] = "50"
+    mock_load_config.return_value = config
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_favorite_tag_counts.return_value = []
+    bq.get_unsummarized_articles.return_value = []
+
+    main_mod._run_resummarize()
+
+    bq.get_unsummarized_articles.assert_called_once_with(7, 50)

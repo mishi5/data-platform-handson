@@ -93,6 +93,13 @@ class PipelineResponse(BaseModel):
     error_count: int = 0
 
 
+class ResummarizeRequest(BaseModel):
+    """/resummarize の任意パラメータ。未指定なら settings シートの値を使う。"""
+
+    days: int | None = None
+    limit: int | None = None
+
+
 class SlackResponse(BaseModel):
     response_type: str
     text: str
@@ -673,12 +680,19 @@ def _run_recalculate(triggered_by: str = "manual") -> tuple[int, int]:
             logger.error("[recalculate] failed to save pipeline log: %s", e)
 
 
-def _run_resummarize(triggered_by: str = "manual") -> tuple[int, int]:
+def _run_resummarize(
+    triggered_by: str = "manual",
+    days: int | None = None,
+    limit: int | None = None,
+) -> tuple[int, int]:
     """本文ありで summaries が無い記事（orphan）を再要約する。復旧（summaries挿入）件数を返す。
 
     要約失敗（クレジット枯渇等）で取り残された記事を救済する手動バッチ。閾値超えは
     summaries に保存し通常の未通知フローで通知される。閾値未満は content_status='summarized'
     にマークして以降の対象から除外する（冪等化）。
+
+    days / limit を渡すと settings シートの値を上書きする。既定の窓（7日）から外れた
+    古い orphan をまとめて処理するためのもので、通常運用では指定しない。
     """
     import uuid
     from datetime import datetime, timezone
@@ -711,10 +725,14 @@ def _run_resummarize(triggered_by: str = "manual") -> tuple[int, int]:
         general.get("relevance_threshold", _DEFAULT_RELEVANCE_THRESHOLD)
     )
     resummarize_limit: int = int(
-        general.get("resummarize_limit", _DEFAULT_RESUMMARIZE_LIMIT)
+        limit
+        if limit is not None
+        else general.get("resummarize_limit", _DEFAULT_RESUMMARIZE_LIMIT)
     )
     resummarize_days: int = int(
-        general.get("resummarize_days", _DEFAULT_RESUMMARIZE_DAYS)
+        days
+        if days is not None
+        else general.get("resummarize_days", _DEFAULT_RESUMMARIZE_DAYS)
     )
     log["keywords"] = keywords
 
@@ -870,9 +888,14 @@ async def recalculate():
 
 
 @app.post("/resummarize", response_model=PipelineResponse)
-async def resummarize():
-    """本文ありで summaries が無い記事を再要約し復旧する手動エンドポイント。"""
-    n, errors = await asyncio.to_thread(_run_resummarize)
+async def resummarize(req: ResummarizeRequest | None = None):
+    """本文ありで summaries が無い記事を再要約し復旧する手動エンドポイント。
+
+    body で days / limit を渡すと settings の既定を上書きする（古い orphan の一括処理用）。
+    """
+    days = req.days if req else None
+    limit = req.limit if req else None
+    n, errors = await asyncio.to_thread(_run_resummarize, "manual", days, limit)
     return PipelineResponse(status="ok", notified=n, error_count=errors)
 
 
