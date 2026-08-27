@@ -1161,7 +1161,7 @@ def test_resummarize_aborts_immediately_on_quota_error(
     ]
     mock_summarize.side_effect = QuotaExceededError("usage limits")
 
-    recovered, error_count = main_mod._run_resummarize()
+    recovered, _ = main_mod._run_resummarize()
 
     assert recovered == 0
     # 50件あっても1件目で止まる
