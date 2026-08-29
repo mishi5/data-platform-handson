@@ -60,6 +60,30 @@ uv run python scripts/digest/fetch_articles.py --ids id1,id2,id3 --out /tmp/dige
 **`svg-diagram` スキルを使う。** インライン SVG で描くこと（family-share は IAP 配下の静的配信で、
 外部 CDN が読める保証がない。mermaid.js などの外部 JS は使えない）。
 
+描いたら**必ず静的検査にかける**。テキストのはみ出しや矩形の重なりは目視では見落とす:
+
+```bash
+python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py <生成した html>
+```
+
+`0 errors` になるまで直す（warning のグリッドずれも直しておくと後で崩れにくい）。
+仕上げにライト/ダーク両方で実際にレンダリングして目視する:
+
+```bash
+uv run --with playwright python - <<'EOF'
+from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    b = p.chromium.launch(headless=True)
+    for scheme in ("light", "dark"):
+        page = b.new_page(color_scheme=scheme, viewport={"width": 900, "height": 1000})
+        page.goto("file:///tmp/digest.html"); page.wait_for_load_state("networkidle")
+        for i, svg in enumerate(page.locator("svg").all(), 1):
+            svg.screenshot(path=f"/tmp/svg{i}_{scheme}.png")
+        page.close()
+    b.close()
+EOF
+```
+
 図にする価値があるものだけ描く。以下は図解が効く:
 
 - 仕組み・データの流れが言葉だと追いにくいもの
