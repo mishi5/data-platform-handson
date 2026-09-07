@@ -1,0 +1,862 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ファクトの3型とファクトレス — データマート設計 02</title>
+<style>
+  :root { --bg:#ffffff; --fg:#1a1a1a; --muted:#666; --border:#e0e0e0;
+          --accent:#0b6bcb; --card:#f7f8fa; --code:#f3f4f6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171a; --fg:#e8e8e8; --muted:#9aa0a6; --border:#2c3136;
+            --accent:#6aa9ff; --card:#1b1f23; --code:#1f2429; }
+  }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+    line-height:1.8; max-width:900px; margin:0 auto; padding:24px 20px 64px; }
+  h1 { font-size:1.6rem; margin:0 0 4px; line-height:1.4; }
+  h2 { font-size:1.2rem; border-bottom:1px solid var(--border); padding-bottom:6px; margin:40px 0 16px; }
+  h3 { font-size:1.02rem; margin:24px 0 8px; }
+  .meta { color:var(--muted); font-size:.85rem; margin:0 0 24px; }
+  a { color:var(--accent); }
+  table { border-collapse:collapse; width:100%; margin:12px 0 20px; font-size:.9rem; }
+  th, td { border:1px solid var(--border); padding:6px 10px; vertical-align:top; text-align:left; }
+  th { background:var(--card); }
+  .table-wrap { overflow-x:auto; }
+  code { background:var(--code); border:1px solid var(--border); border-radius:4px; padding:1px 5px; font-size:.85em; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:8px; padding:14px 16px;
+        overflow-x:auto; font-size:.84rem; line-height:1.55; }
+  pre code { background:none; border:none; padding:0; font-size:inherit; }
+  .aside { border-left:3px solid var(--accent); background:var(--card); padding:10px 16px; margin:16px 0; font-size:.92rem; }
+  .kimball { border-left-color:#8a6d3b; }
+  .modern { border-left-color:#3b8a5a; }
+  details { border:1px solid var(--border); border-radius:8px; padding:8px 14px; margin:10px 0; background:var(--card); }
+  summary { cursor:pointer; font-weight:600; }
+  svg { max-width:100%; height:auto; display:block; margin:20px 0; }
+  ul, ol { padding-left:1.3em; }
+  .ref li { font-size:.88rem; }
+</style>
+</head>
+<body>
+
+<h1>ファクトの3型とファクトレス</h1>
+<p class="meta">データマート設計 02 ／ 参照: DWT ch.4, Fact Tables, Design Tip #43 #50 #77 #95 ／ 再解釈: Functional Data Engineering（snapshotting）, dbt BigQuery configs</p>
+
+<h2>1. この回が決めること</h2>
+
+<p>同じソースイベントから、どの型のファクトを作るか。<strong>型は問いで決まる。ソースの形では決まらない。</strong></p>
+
+<p><code>selection_events</code> という1本のテーブルから、トランザクションファクト（<code>fct_selection_event</code>）と累積スナップショット（<code>fct_application_pipeline</code>）の両方が出る。逆に <code>job_postings</code> という1本のマスタからは、定期スナップショット（<code>fct_job_posting_daily</code>）を毎日書き足さない限り「4/15 時点の掲載中件数」は二度と再現できない。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>決めること</th><th>この回の結論</th></tr></thead>
+<tbody>
+<tr><td>型の選び方</td><td>問いの時制で決める。「いつ何件」＝トランザクション／「その日いくつ」＝定期／「どこまで進んだ・何日かかった」＝累積</td></tr>
+<tr><td>型は排他か</td><td>排他ではない。1プロセスに3型が同居してよい（選考は <code>fct_selection_event</code> と <code>fct_application_pipeline</code> の両方）</td></tr>
+<tr><td>累積スナップショットの裏</td><td>必ず原子トランザクションファクトを置く。サマリーだけ持たない（DT#77）</td></tr>
+<tr><td>未達マイルストーン</td><td>日付キーは <code>-1</code>（<code>dim_date</code> に <code>-1</code> 行）。NULL の外部キーを作らない（DT#43）</td></tr>
+<tr><td>未達のラグ</td><td>メジャー側は NULL のままにする。<code>0</code> で埋めない（0日で到達した、と区別できなくなる）</td></tr>
+<tr><td>ヘッダ／明細</td><td><code>applications</code>（ヘッダ）の次元は <code>selection_events</code>（明細）に降ろす。<code>application_id</code> は退化ディメンション（DT#95）</td></tr>
+<tr><td>ファクトレス</td><td>イベント型 = <code>fct_page_view</code>、カバレッジ型 = 契約企業 × 月 × スカウト枠（DT#50）</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>4つの型を1枚の表で</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th></th><th>トランザクション</th><th>定期スナップショット</th><th>累積スナップショット</th><th>ファクトレス</th></tr></thead>
+<tbody>
+<tr><th>粒度</th><td>1事象</td><td>1エンティティ × 1期間</td><td>1プロセスインスタンス</td><td>1事象 または 1関係</td></tr>
+<tr><th>行の増え方</th><td>疎。事象があるときだけ</td><td>密。活動が無い期間も行が立つ</td><td>最小。プロセス開始時に1行</td><td>型による（イベント=疎／カバレッジ=密）</td></tr>
+<tr><th>行の更新</th><td>しない（不変）</td><td>しない（期間が閉じたら不変）</td><td><strong>する</strong>（マイルストーンごとに再訪）</td><td>しない</td></tr>
+<tr><th>日付キーの数</th><td>1</td><td>1</td><td>多い（マイルストーン数）</td><td>1〜2</td></tr>
+<tr><th>加法性</th><td>加法</td><td><strong>半加法</strong>（期間をまたいで足せない）</td><td>ラグは非加法、フラグは加法</td><td>件数のみ加法</td></tr>
+<tr><th>典型の問い</th><td>「日別の応募数は？」</td><td>「4/15 に掲載中だった求人は？」</td><td>「応募から内定まで何日？どこで落ちた？」</td><td>「反応が無かったスカウトは？枠を使わなかった企業は？」</td></tr>
+<tr><th>題材の例</th><td><code>fct_scout</code>, <code>fct_selection_event</code></td><td><code>fct_job_posting_daily</code>, <code>fct_contract_monthly</code></td><td><code>fct_application_pipeline</code>, <code>fct_scout_funnel</code></td><td><code>fct_page_view</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>CareerVoice の10ファクトを型に分類する</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>ファクト</th><th>型</th><th>粒度</th><th>行が更新される</th><th>日付キー数</th><th>これで答える問い</th></tr></thead>
+<tbody>
+<tr><td><code>fct_review</code></td><td>トランザクション</td><td>1投稿</td><td>しない</td><td>1</td><td>月別の投稿数、企業別の平均スコア</td></tr>
+<tr><td><code>fct_review_moderation</code></td><td>累積スナップショット</td><td>1クチコミの審査ライフサイクル</td><td><strong>する</strong></td><td>4</td><td>投稿から公開まで何時間か、却下率</td></tr>
+<tr><td><code>fct_page_view</code></td><td>トランザクション（イベント型ファクトレス）</td><td>1ページ表示</td><td>しない</td><td>1</td><td>閲覧数、閲覧されなかったクチコミ</td></tr>
+<tr><td><code>fct_job_posting_daily</code></td><td>定期スナップショット</td><td>1求人 × 掲載中の1日</td><td>しない</td><td>1</td><td>任意の日の掲載中件数、掲載日数の分布</td></tr>
+<tr><td><code>fct_scout</code></td><td>トランザクション</td><td>1送信</td><td>しない</td><td>1</td><td>日別・送信主体別の送信数</td></tr>
+<tr><td><code>fct_scout_funnel</code></td><td>累積スナップショット</td><td>1スカウトの送信→応募</td><td><strong>する</strong></td><td>4</td><td>開封率・返信率、開封までの時間</td></tr>
+<tr><td><code>fct_selection_event</code></td><td>トランザクション（原子）</td><td>1ステージ遷移</td><td>しない</td><td>1</td><td>いつどのステージが何件起きたか</td></tr>
+<tr><td><code>fct_application_pipeline</code></td><td>累積スナップショット</td><td>1応募のパイプライン</td><td><strong>する</strong></td><td>8</td><td>リードタイム、ステージ別歩留まり</td></tr>
+<tr><td><code>fct_contract_monthly</code></td><td>定期スナップショット</td><td>1契約 × 1月</td><td>しない</td><td>1</td><td>枠消化率、MRR、使わなかった企業</td></tr>
+<tr><td><code>fct_placement</code></td><td>トランザクション</td><td>1入社</td><td>しない</td><td>1</td><td>成果報酬売上、エージェント別実績</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>日付キーの数が型を裏切らない点に注目する。累積スナップショットだけが日付キーを 4〜8 本持ち、それ以外は 1 本しか持たない。<strong>日付キーが1本しか無いファクトを「累積スナップショット」と呼んでいるなら、それは型を取り違えている。</strong></p>
+
+<h2>2. どこで壊れるか</h2>
+
+<h3>(a) 定期スナップショットを作らず、ソースから「その日」を再構成する</h3>
+
+<p><code>fct_job_posting_daily</code> を作らずに、<code>job_postings</code> の <code>posted_at</code> / <code>closed_at</code> だけで「4/15 時点の掲載中求人数」を出そうとする。書けるクエリはこうなる。</p>
+
+<pre><code>-- 4/15 時点の掲載中件数（ソース再構成版・壊れている）
+SELECT COUNT(*)
+FROM {{ source('src_careervoice', 'job_postings') }}
+WHERE DATE(posted_at, 'Asia/Tokyo') &lt;= '2026-04-15'
+  AND (closed_at IS NULL OR DATE(closed_at, 'Asia/Tokyo') &gt; '2026-04-15')
+</code></pre>
+
+<p>これは「今の行の値から過去を推定している」だけで、「4/15 にそう見えた」ことの記録ではない。3通りに壊れる。</p>
+
+<ul>
+<li><strong>後から埋まる列を後から読む。</strong><code>closed_at</code> は掲載が閉じた瞬間に OLTP 側で埋まる。<code>J001</code>（<code>C001</code> のデータエンジニア、4/1 掲載）を 5月に閉じてから同じクエリを流せば 4/15 の答えは変わらないが、閉じたあとに<strong>再掲載</strong>されて <code>status</code> が <code>open</code> に戻り <code>closed_at</code> が NULL に上書きされると、閉じていた期間そのものが消える。</li>
+<li><strong>行が消えると過去も消える。</strong>論理削除（<code>deleted_at</code>）や物理削除が入った求人は、過去の日付の集計からも同時に消える。先月出したレポートと今月出したレポートで 4/15 の件数が違う、という説明できない差分になる。</li>
+<li><strong>その日限りの派生値を持てない。</strong><code>days_since_posted</code>、<code>application_count_cum</code>、<code>scout_count_cum</code> は「その日の時点で何日経過・何件累積か」であって、ソースには存在しない。毎回 <code>dim_date</code> との範囲結合で作り直すことになり、日次の推移を出すたびに全求人 × 全日を展開する。</li>
+</ul>
+
+<p>定期スナップショットを持てば、答えは <code>WHERE snapshot_date_key = 20260415</code> の1パーティション読みになり、<strong>いつクエリを流しても同じ数字が返る</strong>。これは性能の話ではなく再現性の話である。</p>
+
+<h3>(b) 累積スナップショットを UPDATE で運用する</h3>
+
+<p><code>fct_application_pipeline</code> を「応募が来たら INSERT し、ステージが進むたび UPDATE」で運用したくなる。OLTP の発想としては自然だが、BigQuery では次に当たる。</p>
+
+<ul>
+<li><strong>ストリーミングバッファの行は DML で触れない。</strong>ストリーミング挿入した直後の行はバッファがフラッシュされるまで <code>UPDATE</code> / <code>DELETE</code> / <code>MERGE</code> の対象にできない。応募当日に届いた <code>document</code> イベントを即座に反映しようとすると失敗する。</li>
+<li><strong>DML は行単位の更新に向かない。</strong>ステージ遷移1件ごとに <code>UPDATE ... WHERE application_id = 'P001'</code> を投げると、パーティション指定が無ければ表全体をスキャンして書き戻す。同一テーブルへの変更 DML は同時実行が制限されるため、件数が増えるほど詰まる。</li>
+<li><strong>冪等でない。</strong>同じイベントを二度流したときに何が起きるかが、UPDATE 文の書き方次第で変わる。</li>
+</ul>
+
+<p>この題材での決定は「更新しない実装で累積スナップショットを作る」。<code>selection_events</code> から毎回 <code>GROUP BY application_id</code> で全マイルストーンを畳み直せば、出力は入力の関数になり、何度流しても同じ表になる（§5）。差分だけを流す形（<code>merge</code> / <code>insert_overwrite</code>）と、そのときのルックバック幅は <strong>09回</strong>で扱う。</p>
+
+<h3>(c) <code>rejected</code> と <code>withdrawn</code> を「終了」に丸める</h3>
+
+<p><code>selection_events.stage</code> は8値（<code>document</code> / <code>first_interview</code> / <code>final_interview</code> / <code>offer</code> / <code>accepted</code> / <code>hired</code> / <code>rejected</code> / <code>withdrawn</code>）ある。ファクトを作るときに <code>rejected</code> と <code>withdrawn</code> をまとめて <code>is_closed = 1</code> にすると、次の問いが二度と答えられなくなる。</p>
+
+<ul>
+<li>最終面接まで進んで<strong>企業が見送った</strong>件数と、<strong>候補者が辞退した</strong>件数の比。前者は求人票と選考基準の問題、後者は年収レンジと他社競合の問題で、打ち手が真逆になる。</li>
+<li>チャネル別の辞退率。<code>scout_agent</code> 経由は <code>search</code> 経由より辞退が多いか、という <code>dim_channel</code> での切り口が消える。</li>
+</ul>
+
+<p>だから <code>fct_application_pipeline</code> は <code>is_hired</code> / <code>is_rejected</code> / <code>is_withdrawn</code> を<strong>別々のメジャー</strong>として持ち、終了日は <code>closed_date_key</code> 1本にまとめる。「終了」という粗い概念は BI 側で <code>is_rejected + is_withdrawn</code> と足せば作れる。</p>
+
+<p><strong>足して作れるものはファクトに置かない。足しても戻せないものだけをファクトに置く。</strong></p>
+
+<h2>3. Kimball の原則</h2>
+
+<h3>3型の定義</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>技法</th><th>定義（DWT ch.4 / Fact Tables）</th><th>使う条件</th></tr></thead>
+<tbody>
+<tr><td>トランザクションファクト</td><td>ある一瞬の測定。測られた値は「その瞬間・その事象にとってのみ有効」。外部キーの組合せは予測できず、疎にも密にもなる</td><td>事象が起きたことそのものを数えたい。最も細かい粒度が取れる</td></tr>
+<tr><td>定期スナップショットファクト</td><td>あらかじめ決めた期間（日・月）をまとめた測定。<strong>活動が無くても全エンティティの行が現れるという保証</strong>がある。予測どおりに密</td><td>残高・在庫・掲載中・契約中のような「状態」を期間で切って見たい</td></tr>
+<tr><td>累積スナップショットファクト</td><td>始まりと終わりがはっきりしたプロセスを1行で表す。<strong>プロセスが進むたびに行が再訪され上書きされる</strong>。行数は他の2型より小さい</td><td>パイプラインの通過・滞留・ラグを測りたい</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="aside kimball">
+<p><strong>Kimball の主張（Fact Tables, 2008）:</strong> 3型はどれかを選ぶものではなく、同じビジネスプロセスに対して並存しうる。粒度の宣言は「外部キーの列挙」ではなく<strong>1行が業務上何を表すかの言明</strong>であり、これを先に決めないと加法性の判断（単価は足せない、金額は足せる）ができない。</p>
+</div>
+
+<h3>定期スナップショットの半加法性</h3>
+
+<p>DWT ch.4（在庫）の中心はここにある。<code>fct_job_posting_daily.is_open</code> は求人をまたいでは足せる（＝その日の掲載中件数）が、<strong>日をまたいで足すと意味を失う</strong>（4/1〜4/30 の合計 = のべ掲載日数であって「4月の掲載件数」ではない）。<code>fct_contract_monthly.scouts_remaining</code> も同じで、企業をまたいでは足せるが月をまたいでは足せない。</p>
+
+<p>半加法メジャーの正しい時間方向の集約は<strong>平均か期末値</strong>である。「4月の平均掲載中件数」なら <code>AVG</code>、「4月末の掲載中件数」なら <code>snapshot_date_key = 20260430</code> の行を取る。この判断は BI 側の集計定義に閉じ込めず、メジャー名（<code>is_open</code>）と粒度宣言で読み手に伝える。</p>
+
+<h3>ファクトレス・ファクトの2種（DT#50）</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>種類</th><th>持つもの</th><th>答えられる問い</th><th>題材での例</th></tr></thead>
+<tbody>
+<tr><td>イベント記録型</td><td>事象が起きたという関係だけ（数値メジャーが無い）</td><td>「何回起きたか」＝行を数える</td><td><code>fct_page_view</code>。<code>view_count = 1</code> 以外にメジャーが無い</td></tr>
+<tr><td>カバレッジ型</td><td>「起こりえた組合せ」の関係</td><td><strong>「起きなかったこと」</strong>＝カバレッジ側にあってイベント側に無い組合せ</td><td>契約企業 × 月 × 付与されたスカウト枠</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="aside kimball">
+<p><strong>Kimball の主張（DT#50）:</strong> ファクトレス・ファクトはディメンション間の多対多の関係だけを捕まえ、数値も文字列のファクトも持たない。用途は2つ — 事象の記録（受講・出席・事故）と、カバレッジ（販促対象になった商品、施設の予約枠）。カバレッジ型の存在理由は「<strong>販促したのに売れなかった商品</strong>」のような、イベント表だけでは答えられない問いにある。</p>
+</div>
+
+<p><code>fct_page_view</code> はイベント記録型そのものである。1行 = 1ページ表示で、数値らしい数値は無い。それでも <code>page_context_key</code>（<code>page_type</code> × <code>device</code> × <code>referrer_type</code> × <code>is_unlocked</code>）と <code>company_key</code> を持つので、「iOS から <code>company_review</code> を閲覧権限なしで見た回数」が数えられる。</p>
+
+<p><strong>メジャーが無いことは、ファクトを作らない理由にならない。</strong></p>
+
+<p>カバレッジ型は「スカウト枠の付与」で必要になる。<code>fct_scout</code>（送信されたスカウト）だけでは、<strong>枠を持っていたのに1通も送らなかった企業</strong>が表から消える。分母が消えるので消化率が計算できない。</p>
+
+<p>この題材では純粋なファクトレス表を別に作らず、<code>fct_contract_monthly</code> に <code>scout_quota</code> / <code>scouts_sent</code> / <code>scouts_remaining</code> を載せて「契約している企業 × 月」の行を必ず立てる形にした。メジャーを持つので厳密にはファクトレスではないが、<strong>役割はカバレッジ型と同じ</strong>（<code>K001</code> が 2026-07 に0通しか送らなくても 2026-07 の行が存在する）。</p>
+
+<h3>ヘッダ／明細の扱い（DT#95）</h3>
+
+<p><code>applications</code>（ヘッダ: 誰がどの求人に、どのチャネルで応募したか）と <code>selection_events</code>（明細: そのステージ遷移）は、Kimball が名指しで警告するヘッダ／明細の関係にある。避けるべき2パターンはこうだ。</p>
+
+<ul>
+<li><strong>ヘッダをディメンションにする。</strong>応募ヘッダをそのままディメンション化すると、明細が1応募あたり数件しか無いので、ディメンションがファクトの数分の1という異常な比率になる。ディメンションはファクトよりはるかに小さいという前提が崩れる（だから正典に応募のディメンションは無い）。</li>
+<li><strong>ヘッダを別ファクトにして明細と結合する。</strong>大きいファクトともっと大きいファクトを結合することになる。会員属性や企業規模で選考イベントを切るたびにこの結合が要る。</li>
+</ul>
+
+<div class="aside kimball">
+<p><strong>Kimball の主張（DT#95）:</strong> ヘッダの次元性をすべて明細に降ろす。ヘッダの伝票番号は<strong>退化ディメンション</strong>としてファクトに残し、それ専用のディメンション表は作らない。ヘッダ単位の金額（送料など）は明細に按分するか、按分できないなら別ファクトにする。</p>
+</div>
+
+<p>この題材の決定: <code>fct_selection_event</code> は <code>member_key</code> / <code>company_key</code> / <code>job_posting_key</code> / <code>agent_key</code> / <code>job_category_key</code> / <code>channel_key</code> を<strong>全部自分で持つ</strong>（すべて <code>applications</code> 側から降りてきた次元）。<code>application_id</code> はディメンションを作らず退化ディメンションとして置く。<code>fct_application_pipeline</code> も同じ次元を持つので、両者は同じディメンションで drill across できる。</p>
+
+<h3>サマリー単独は危険（DT#77）</h3>
+
+<div class="aside kimball">
+<p><strong>Kimball の主張（DT#77）:</strong> 詳細データは予測できない形に丸められるが、逆は成り立たない — 「サマリーを魔法のように構成要素へ分解することはできない」。集約表は原子データの<strong>補完</strong>であって置き換えではない。</p>
+</div>
+
+<p><code>fct_application_pipeline</code> は8本の日付キーで応募のライフサイクルを畳んでいる。ここで失われるのは「同じステージを2回通った」情報である。<code>first_interview</code> が2回記録されている応募（面接をやり直した）は、<code>MIN()</code> で畳んだ瞬間に1回に見える。</p>
+
+<p>だから正典の固定判断として、<strong><code>fct_application_pipeline</code> の裏に <code>fct_selection_event</code> を必ず置く</strong>。累積スナップショットは「速く答えるための表」であり、真実は原子ファクトの側にある。<code>fct_review_moderation.moderation_rounds</code> のように「何周したか」をメジャーとして持ち上げるのは、この損失に対する部分的な埋め合わせでしかない。</p>
+
+<h2>4. 現代の再解釈</h2>
+
+<p>この回に割り当てられた再解釈記事は無い。3型の区別そのものは、列指向 DWH でも変わらずに残る（型は問いの形を写したものであって、ストレージの都合ではない）。変わるのは<strong>累積スナップショットの「行を更新する」という実装だけ</strong>である。</p>
+
+<div class="aside modern">
+<p><strong>Functional Data Engineering（snapshotting）:</strong> パーティションを<strong>不変オブジェクト</strong>として扱い、更新せず新しいスナップショットを積むだけにする。同じパーティションを何度作り直しても同じ結果になる（再現性）、ジョブを再実行しても副作用が無い（冪等性）、時系列は <code>GROUP BY</code> の日付で自然に取れる。代償はデータの重複だが、ディメンション規模なら工数に対して安い。</p>
+</div>
+
+<p>この主張は定期スナップショットと相性が完全に一致する。<code>fct_job_posting_daily</code> は「日付パーティションを1日1枚積む」だけで、Kimball の言う定期スナップショットの性質（密・不変・半加法）をそのまま満たす。dbt では <code>insert_overwrite</code> がこの形にあたる。</p>
+
+<pre><code>-- 定期スナップショット = 不変パーティションの積み上げ（詳細は 09回）
+{{ config(
+    materialized='incremental',
+    incremental_strategy='insert_overwrite',
+    partition_by={'field': 'snapshot_date', 'data_type': 'date', 'granularity': 'day'}
+) }}
+</code></pre>
+
+<p><code>partition_by</code> は <code>snapshot_date_key</code>（INT64）ではなく、正典どおり並べて持つ DATE 列 <code>snapshot_date</code> に張る。整数のレンジパーティションでも書けるが、日付関数がそのまま使えるほうが運用が素直になる。</p>
+
+<p>一方、累積スナップショットは原理的に「過去の行を書き換える」型なので、不変パーティションと正面から衝突する。BigQuery での実務上の答えは2つに割れる。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>方式</th><th>やること</th><th>向く条件</th><th>この題材での判断</th></tr></thead>
+<tbody>
+<tr><td>全再構築</td><td><code>selection_events</code> から毎回 <code>GROUP BY</code> で作り直す</td><td>行数が小さい（累積スナップショットは元々小さい）。完全に冪等</td><td><strong>これを既定にする</strong>。応募数規模なら全再構築で足りる</td></tr>
+<tr><td>差分マージ</td><td><code>incremental_strategy='merge'</code> + <code>unique_key='application_id'</code></td><td>行数が大きく全再構築のコストが無視できない</td><td>規模が問題になってから。ルックバック幅の設計込みで 09回</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><strong>残るもの／変わるもの:</strong> 型の選択（何を1行にするか、日付キーを何本持つか、何を <code>-1</code> にするか）は意味の設計なので変わらない。変わるのは「更新」を UPDATE 文で実現するか、パーティションの入れ替えで実現するかという物理の話だけである。<strong>Kimball の累積スナップショットは「行を UPDATE せよ」ではなく「1行がプロセス1件を表し、進捗を反映せよ」という要求だ</strong>と読めば、全再構築は原典への違反ではない。</p>
+
+<h2>5. BigQuery + dbt での実装</h2>
+
+<h3>日付キーのマクロ</h3>
+
+<p>8本の日付キーを書くので、<code>-1</code> の埋め方をマクロに閉じ込める。未達は <code>-1</code>、<code>dim_date</code> 側に <code>-1</code>（<code>full_date</code> = NULL、表示名「未到達」）の行がある前提（DT#43）。</p>
+
+<pre><code>-- macros/date_key.sql
+{% macro date_key(ts_expr) -%}
+    COALESCE(CAST(FORMAT_DATE('%Y%m%d', DATE({{ ts_expr }}, 'Asia/Tokyo')) AS INT64), -1)
+{%- endmacro %}
+</code></pre>
+
+<h3><code>fct_application_pipeline</code> — <code>selection_events</code> から畳む</h3>
+
+<p>ソースは <code>selection_events</code>（1行 = 1ステージ遷移）。これを <code>application_id</code> で <code>GROUP BY</code> し、ステージごとに条件付き <code>MIN()</code> でピボットする。<code>MIN()</code> なのは、同じステージが複数回記録されたときに<strong>最初の到達</strong>をマイルストーンとするため（何回通ったかは <code>fct_selection_event</code> 側で数える）。</p>
+
+<pre><code>-- models/marts/fct_application_pipeline.sql
+{{ config(materialized='table') }}
+
+WITH milestones AS (
+
+    SELECT
+        application_id,
+        MIN(IF(stage = 'document',        occurred_at, NULL)) AS document_at,
+        MIN(IF(stage = 'first_interview', occurred_at, NULL)) AS first_interview_at,
+        MIN(IF(stage = 'final_interview', occurred_at, NULL)) AS final_interview_at,
+        MIN(IF(stage = 'offer',           occurred_at, NULL)) AS offer_at,
+        MIN(IF(stage = 'accepted',        occurred_at, NULL)) AS accepted_at,
+        MIN(IF(stage = 'hired',           occurred_at, NULL)) AS hired_at,
+        MIN(IF(stage = 'rejected',        occurred_at, NULL)) AS rejected_at,
+        MIN(IF(stage = 'withdrawn',       occurred_at, NULL)) AS withdrawn_at
+    FROM {{ ref('stg_careervoice__selection_events') }}
+    GROUP BY application_id
+
+),
+
+applications AS (
+
+    SELECT
+        application_id,
+        member_id,
+        job_posting_id,
+        scout_id,
+        source_channel,
+        applied_at
+    FROM {{ ref('stg_careervoice__applications') }}
+
+),
+
+postings AS (
+
+    SELECT
+        job_posting_id,
+        company_id,
+        job_category_code
+    FROM {{ ref('stg_careervoice__job_postings') }}
+
+),
+
+scouts AS (                -- 応募のきっかけになったスカウト（担当エージェントはここから）
+
+    SELECT
+        scout_id,
+        sender_agent_id
+    FROM {{ ref('stg_careervoice__scouts') }}
+
+),
+
+audit AS (                 -- この実行の監査行（DT#164、10回）
+
+    SELECT audit_key
+    FROM {{ ref('dim_audit') }}
+    WHERE dbt_invocation_id = '{{ invocation_id }}'
+
+)
+
+SELECT
+    -- 日付キー: 未達は -1（NULL の外部キーを作らない）
+    {{ date_key('a.applied_at') }}                 AS applied_date_key,
+    {{ date_key('m.document_at') }}                AS document_date_key,
+    {{ date_key('m.first_interview_at') }}         AS first_interview_date_key,
+    {{ date_key('m.final_interview_at') }}         AS final_interview_date_key,
+    {{ date_key('m.offer_at') }}                   AS offer_date_key,
+    {{ date_key('m.accepted_at') }}                AS accepted_date_key,
+    {{ date_key('m.hired_at') }}                   AS hired_date_key,
+    {{ date_key('COALESCE(m.hired_at, m.rejected_at, m.withdrawn_at)') }} AS closed_date_key,
+    DATE(a.applied_at, 'Asia/Tokyo') AS applied_date,   -- パーティション用の DATE 列
+
+    -- ディメンションキー（応募時点の版を結ぶ。as-of の作法は 05回）
+    mem.member_key,
+    co.company_key,
+    jp.job_posting_key,
+    jc.job_category_key,
+    ch.channel_key,
+    COALESCE(ag.agent_key, -1) AS agent_key,   -- スカウト経由でなければ担当者なし = -1
+    aud.audit_key,                             -- 全ファクトが持つ（DT#164）
+
+    -- メジャー: 未達のラグは NULL のまま（0 で埋めない）
+    DATE_DIFF(DATE(m.offer_at, 'Asia/Tokyo'),
+              DATE(a.applied_at, 'Asia/Tokyo'), DAY) AS days_applied_to_offer,
+    DATE_DIFF(DATE(m.hired_at, 'Asia/Tokyo'),
+              DATE(m.offer_at, 'Asia/Tokyo'), DAY)   AS days_offer_to_hired,
+
+    CASE
+        WHEN m.hired_at            IS NOT NULL THEN 'hired'
+        WHEN m.withdrawn_at        IS NOT NULL THEN 'withdrawn'
+        WHEN m.rejected_at         IS NOT NULL THEN 'rejected'
+        WHEN m.accepted_at         IS NOT NULL THEN 'accepted'
+        WHEN m.offer_at            IS NOT NULL THEN 'offer'
+        WHEN m.final_interview_at  IS NOT NULL THEN 'final_interview'
+        WHEN m.first_interview_at  IS NOT NULL THEN 'first_interview'
+        WHEN m.document_at         IS NOT NULL THEN 'document'
+        ELSE 'applied'
+    END AS current_stage,
+
+    IF(m.hired_at     IS NOT NULL, 1, 0) AS is_hired,
+    IF(m.rejected_at  IS NOT NULL, 1, 0) AS is_rejected,
+    IF(m.withdrawn_at IS NOT NULL, 1, 0) AS is_withdrawn,
+
+    -- 退化ディメンション（DT#95）: 専用のディメンション表は作らない
+    a.application_id,
+    a.scout_id
+
+FROM applications AS a
+CROSS JOIN audit AS aud
+LEFT JOIN milestones AS m USING (application_id)
+LEFT JOIN postings   AS jp_src USING (job_posting_id)
+LEFT JOIN scouts     AS sc USING (scout_id)
+LEFT JOIN {{ ref('dim_member') }} AS mem
+    ON  mem.member_id = a.member_id
+    AND a.applied_at &gt;= mem.valid_from
+    AND a.applied_at &lt;  mem.valid_to
+LEFT JOIN {{ ref('dim_company') }} AS co
+    ON  co.company_id = jp_src.company_id
+    AND a.applied_at &gt;= co.valid_from
+    AND a.applied_at &lt;  co.valid_to
+LEFT JOIN {{ ref('dim_job_posting') }}  AS jp ON jp.job_posting_id  = a.job_posting_id
+LEFT JOIN {{ ref('dim_job_category') }} AS jc ON jc.job_category_code = jp_src.job_category_code
+LEFT JOIN {{ ref('dim_channel') }}      AS ch ON ch.source_channel  = a.source_channel
+LEFT JOIN {{ ref('dim_agent') }}        AS ag
+    ON  ag.agent_id = sc.sender_agent_id
+    AND a.applied_at &gt;= ag.valid_from
+    AND a.applied_at &lt;  ag.valid_to
+</code></pre>
+
+<p><code>member_profile_mini_key</code>（応募時点の年収帯 × 転職意欲）も同じ形で足す。ミニディメンションの解決は 03回、時点の合わせ方は 05回で扱う。</p>
+
+<h3>テストは「累積スナップショットであること」を検査する</h3>
+
+<pre><code># models/marts/schema.yml
+models:
+  - name: fct_application_pipeline
+    description: 1行 = 1応募のパイプライン（累積スナップショット）。行は再構築のたびに書き換わる。
+    columns:
+      - name: application_id
+        description: 退化ディメンション（DT#95）。粒度そのもの
+        tests: [unique, not_null]      # ← 粒度宣言のテスト
+      - name: applied_date_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+      - name: offer_date_key
+        description: 未達は -1
+        tests:
+          - not_null
+          - relationships:             # -1 行が dim_date に無いとここで落ちる
+              to: ref('dim_date')
+              field: date_key
+      - name: current_stage
+        tests:
+          - accepted_values:
+              values: ['applied', 'document', 'first_interview', 'final_interview',
+                       'offer', 'accepted', 'hired', 'rejected', 'withdrawn']
+      - name: days_applied_to_offer
+        description: 未達は NULL（0 ではない）
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              inclusive: true
+</code></pre>
+
+<p><code>offer_date_key</code> に <code>not_null</code> + <code>relationships</code> を両方張れるのが <code>-1</code> 方式の効用である。NULL 許容にすると、この2つのテストはどちらも書けない。</p>
+
+<h3><code>P001</code> の1行がどう埋まるか</h3>
+
+<p><code>P001</code>（<code>M001</code> → <code>J001</code>、<code>scout_company</code>）は 6/23 応募 → 7/1 書類 → 7/8 一次 → 7/15 最終 → 7/20 内定 → 7/22 承諾 → 8/1 入社。モデルを毎日再構築すると、<strong>同じ1行</strong>が次のように書き換わる。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr>
+<th>実行日</th><th><code>applied</code></th><th><code>document</code></th><th><code>first_iv</code></th><th><code>final_iv</code></th><th><code>offer</code></th><th><code>accepted</code></th><th><code>hired</code></th><th><code>closed</code></th><th><code>current_stage</code></th><th><code>days_applied_to_offer</code></th></tr></thead>
+<tbody>
+<tr><td>6/23</td><td>20260623</td><td>-1</td><td>-1</td><td>-1</td><td>-1</td><td>-1</td><td>-1</td><td>-1</td><td><code>applied</code></td><td>NULL</td></tr>
+<tr><td>7/1</td><td>20260623</td><td>20260701</td><td>-1</td><td>-1</td><td>-1</td><td>-1</td><td>-1</td><td>-1</td><td><code>document</code></td><td>NULL</td></tr>
+<tr><td>7/8</td><td>20260623</td><td>20260701</td><td>20260708</td><td>-1</td><td>-1</td><td>-1</td><td>-1</td><td>-1</td><td><code>first_interview</code></td><td>NULL</td></tr>
+<tr><td>7/15</td><td>20260623</td><td>20260701</td><td>20260708</td><td>20260715</td><td>-1</td><td>-1</td><td>-1</td><td>-1</td><td><code>final_interview</code></td><td>NULL</td></tr>
+<tr><td>7/20</td><td>20260623</td><td>20260701</td><td>20260708</td><td>20260715</td><td>20260720</td><td>-1</td><td>-1</td><td>-1</td><td><code>offer</code></td><td>27</td></tr>
+<tr><td>7/22</td><td>20260623</td><td>20260701</td><td>20260708</td><td>20260715</td><td>20260720</td><td>20260722</td><td>-1</td><td>-1</td><td><code>accepted</code></td><td>27</td></tr>
+<tr><td>8/1</td><td>20260623</td><td>20260701</td><td>20260708</td><td>20260715</td><td>20260720</td><td>20260722</td><td>20260801</td><td>20260801</td><td><code>hired</code></td><td>27</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><code>days_applied_to_offer</code> は 7/20 に初めて値を持ち（6/23 → 7/20 = 27日）、以後変わらない。<code>days_offer_to_hired</code> は 8/1 に 12 が入る。</p>
+
+<p><strong>ラグは「両端のマイルストーンが揃った時点で確定し、以後不変」</strong>という性質を持つので、部分的に埋まった行を含む平均を取ると必ず短い側に歪む。「内定までの平均日数」を出すときは <code>WHERE offer_date_key &lt;&gt; -1</code> が要る。</p>
+
+<h3>図: 累積スナップショットの1行が更新されていく</h3>
+
+<svg id="dg-acc" viewBox="0 0 800 384" width="100%"
+     style="max-width:800px;height:auto;display:block"
+     xmlns="http://www.w3.org/2000/svg"
+     role="img" aria-labelledby="dg-acc-t dg-acc-d">
+  <title id="dg-acc-t">累積スナップショットの1行が書き換わる様子</title>
+  <desc id="dg-acc-d">応募 P001 の1行が、6/23 から 8/1 までの各時点でマイルストーンの日付キーを1つずつ埋めながら、同じ行のまま current_stage を書き換えていく。</desc>
+  <style>
+    #dg-acc{
+      --paper:#fbfbfa; --ink:#22262e; --muted:#5b6472; --soft:#828b9a;
+      --rule:rgba(34,38,46,.14); --set:rgba(34,38,46,.30);
+      --accent:#c8571d;
+      --sans:system-ui,-apple-system,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+      --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    }
+    @media (prefers-color-scheme:dark){
+      #dg-acc{--paper:#1a1d23;--ink:#e9ecf1;--muted:#a6afbd;--soft:#7f8898;
+              --rule:rgba(233,236,241,.18);--set:rgba(233,236,241,.34);--accent:#f0894f;}
+    }
+    :root[data-theme="dark"] #dg-acc{--paper:#1a1d23;--ink:#e9ecf1;--muted:#a6afbd;--soft:#7f8898;
+              --rule:rgba(233,236,241,.18);--set:rgba(233,236,241,.34);--accent:#f0894f;}
+    :root[data-theme="light"] #dg-acc{--paper:#fbfbfa;--ink:#22262e;--muted:#5b6472;--soft:#828b9a;
+              --rule:rgba(34,38,46,.14);--set:rgba(34,38,46,.30);--accent:#c8571d;}
+    #dg-acc .bg{fill:var(--paper)}
+    #dg-acc .box{fill:var(--paper);stroke:var(--ink);stroke-width:1}
+    #dg-acc .zone{fill:none;stroke:var(--rule);stroke-width:1;stroke-dasharray:4 3}
+    #dg-acc .cell{fill:var(--paper);stroke:var(--rule);stroke-width:1}
+    #dg-acc .cell-set{fill:var(--set);stroke:var(--soft);stroke-width:1}
+    #dg-acc .cell-on{fill:var(--accent);stroke:var(--accent);stroke-width:1}
+    #dg-acc .name{fill:var(--ink);font:600 14px var(--sans)}
+    #dg-acc .sub{fill:var(--muted);font:400 11px var(--mono)}
+    #dg-acc .tag{fill:var(--soft);font:500 10px var(--mono);letter-spacing:.12em}
+    #dg-acc .lead{fill:none;stroke:var(--muted);stroke-width:1.4;marker-end:url(#dg-acc-a)}
+    #dg-acc .mask{fill:var(--paper)}
+    #dg-acc .mk{fill:var(--muted)}
+  </style>
+  <defs>
+    <marker id="dg-acc-a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <path class="mk" d="M0,0 L9,3.5 L0,7 Z"/></marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="800" height="384"/>
+
+  <!-- ゾーン: 同じ1行 -->
+  <rect class="zone" x="160" y="120" width="576" height="152" rx="8"/>
+
+  <!-- 線（時間方向のみ） -->
+  <line class="lead" x1="232" y1="96" x2="268" y2="96"/>
+  <line class="lead" x1="332" y1="96" x2="368" y2="96"/>
+  <line class="lead" x1="432" y1="96" x2="468" y2="96"/>
+  <line class="lead" x1="532" y1="96" x2="568" y2="96"/>
+  <line class="lead" x1="632" y1="96" x2="668" y2="96"/>
+
+  <!-- ラベル -->
+  <text class="sub" x="32" y="56">fct_application_pipeline の1行（application_id = P001）が時点ごとに書き換わる</text>
+  <text class="tag" x="32" y="123">DATE KEYS</text>
+  <rect class="mask" x="168" y="112" width="72" height="16" rx="2"/>
+  <text class="tag" x="176" y="123">SAME ROW</text>
+
+  <text class="sub" x="32" y="140">applied</text>
+  <text class="sub" x="32" y="164">document</text>
+  <text class="sub" x="32" y="188">first_interview</text>
+  <text class="sub" x="32" y="212">final_interview</text>
+  <text class="sub" x="32" y="236">offer</text>
+  <text class="sub" x="32" y="260">hired</text>
+  <text class="sub" x="32" y="288">current_stage</text>
+
+  <!-- セル: 6/23 -->
+  <rect class="cell-on" x="192" y="128" width="16" height="16" rx="2"/>
+  <rect class="cell"    x="192" y="152" width="16" height="16" rx="2"/>
+  <rect class="cell"    x="192" y="176" width="16" height="16" rx="2"/>
+  <rect class="cell"    x="192" y="200" width="16" height="16" rx="2"/>
+  <rect class="cell"    x="192" y="224" width="16" height="16" rx="2"/>
+  <rect class="cell"    x="192" y="248" width="16" height="16" rx="2"/>
+  <!-- セル: 7/1 -->
+  <rect class="cell-set" x="292" y="128" width="16" height="16" rx="2"/>
+  <rect class="cell-on"  x="292" y="152" width="16" height="16" rx="2"/>
+  <rect class="cell"     x="292" y="176" width="16" height="16" rx="2"/>
+  <rect class="cell"     x="292" y="200" width="16" height="16" rx="2"/>
+  <rect class="cell"     x="292" y="224" width="16" height="16" rx="2"/>
+  <rect class="cell"     x="292" y="248" width="16" height="16" rx="2"/>
+  <!-- セル: 7/8 -->
+  <rect class="cell-set" x="392" y="128" width="16" height="16" rx="2"/>
+  <rect class="cell-set" x="392" y="152" width="16" height="16" rx="2"/>
+  <rect class="cell-on"  x="392" y="176" width="16" height="16" rx="2"/>
+  <rect class="cell"     x="392" y="200" width="16" height="16" rx="2"/>
+  <rect class="cell"     x="392" y="224" width="16" height="16" rx="2"/>
+  <rect class="cell"     x="392" y="248" width="16" height="16" rx="2"/>
+  <!-- セル: 7/15 -->
+  <rect class="cell-set" x="492" y="128" width="16" height="16" rx="2"/>
+  <rect class="cell-set" x="492" y="152" width="16" height="16" rx="2"/>
+  <rect class="cell-set" x="492" y="176" width="16" height="16" rx="2"/>
+  <rect class="cell-on"  x="492" y="200" width="16" height="16" rx="2"/>
+  <rect class="cell"     x="492" y="224" width="16" height="16" rx="2"/>
+  <rect class="cell"     x="492" y="248" width="16" height="16" rx="2"/>
+  <!-- セル: 7/20 -->
+  <rect class="cell-set" x="592" y="128" width="16" height="16" rx="2"/>
+  <rect class="cell-set" x="592" y="152" width="16" height="16" rx="2"/>
+  <rect class="cell-set" x="592" y="176" width="16" height="16" rx="2"/>
+  <rect class="cell-set" x="592" y="200" width="16" height="16" rx="2"/>
+  <rect class="cell-on"  x="592" y="224" width="16" height="16" rx="2"/>
+  <rect class="cell"     x="592" y="248" width="16" height="16" rx="2"/>
+  <!-- セル: 8/1 -->
+  <rect class="cell-set" x="692" y="128" width="16" height="16" rx="2"/>
+  <rect class="cell-set" x="692" y="152" width="16" height="16" rx="2"/>
+  <rect class="cell-set" x="692" y="176" width="16" height="16" rx="2"/>
+  <rect class="cell-set" x="692" y="200" width="16" height="16" rx="2"/>
+  <rect class="cell-set" x="692" y="224" width="16" height="16" rx="2"/>
+  <rect class="cell-on"  x="692" y="248" width="16" height="16" rx="2"/>
+
+  <!-- 時点ノード -->
+  <rect class="box" x="168" y="80" width="64" height="32" rx="6"/>
+  <text class="name" x="200" y="100" text-anchor="middle">6/23</text>
+  <rect class="box" x="268" y="80" width="64" height="32" rx="6"/>
+  <text class="name" x="300" y="100" text-anchor="middle">7/1</text>
+  <rect class="box" x="368" y="80" width="64" height="32" rx="6"/>
+  <text class="name" x="400" y="100" text-anchor="middle">7/8</text>
+  <rect class="box" x="468" y="80" width="64" height="32" rx="6"/>
+  <text class="name" x="500" y="100" text-anchor="middle">7/15</text>
+  <rect class="box" x="568" y="80" width="64" height="32" rx="6"/>
+  <text class="name" x="600" y="100" text-anchor="middle">7/20</text>
+  <rect class="box" x="668" y="80" width="64" height="32" rx="6"/>
+  <text class="name" x="700" y="100" text-anchor="middle">8/1</text>
+
+  <!-- current_stage の値 -->
+  <text class="sub" x="200" y="288" text-anchor="middle">applied</text>
+  <text class="sub" x="300" y="288" text-anchor="middle">document</text>
+  <text class="sub" x="400" y="288" text-anchor="middle">first_<tspan x="400" dy="14">interview</tspan></text>
+  <text class="sub" x="500" y="288" text-anchor="middle">final_<tspan x="500" dy="14">interview</tspan></text>
+  <text class="sub" x="600" y="288" text-anchor="middle">offer</text>
+  <text class="sub" x="700" y="288" text-anchor="middle">hired</text>
+
+  <!-- 凡例 -->
+  <line x1="32" y1="320" x2="768" y2="320" stroke="var(--rule)" stroke-width="1"/>
+  <rect class="cell-on"  x="32" y="340" width="12" height="12" rx="2"/>
+  <text class="sub" x="52" y="350">この時点で埋まった</text>
+  <rect class="cell-set" x="272" y="340" width="12" height="12" rx="2"/>
+  <text class="sub" x="292" y="350">既に埋まっている</text>
+  <rect class="cell"     x="504" y="340" width="12" height="12" rx="2"/>
+  <text class="sub" x="524" y="350">未到達 = -1</text>
+  <text class="sub" x="32" y="376">行は増えず、同じ1行が上書きされる。accepted_date_key（7/22）は図では省略。日付は全て 2026 年。</text>
+</svg>
+
+<h3><code>fct_job_posting_daily</code> — <code>dim_date</code> との範囲結合で日次展開する</h3>
+
+<p>定期スナップショットは「行が存在すること」自体が情報なので、ソースを畳むのではなく<strong>掛け算で行を作る</strong>。<code>J001</code>（4/1 掲載、<code>closed_at</code> が NULL）なら 4/1 から今日まで毎日1行が立つ。</p>
+
+<pre><code>-- models/marts/fct_job_posting_daily.sql
+{{ config(materialized='table') }}
+
+WITH postings AS (
+
+    SELECT
+        job_posting_id,
+        company_id,
+        agency_id,
+        job_category_code,
+        DATE(posted_at, 'Asia/Tokyo')  AS posted_date,
+        DATE(closed_at, 'Asia/Tokyo') AS closed_date
+    FROM {{ ref('stg_careervoice__job_postings') }}
+
+),
+
+posting_days AS (          -- ここで行を作る（範囲結合）
+
+    SELECT
+        d.date_key AS snapshot_date_key,
+        d.full_date,
+        p.job_posting_id,
+        p.company_id,
+        p.agency_id,
+        p.job_category_code,
+        DATE_DIFF(d.full_date, p.posted_date, DAY) AS days_since_posted
+    FROM postings AS p
+    INNER JOIN {{ ref('dim_date') }} AS d
+        ON d.full_date BETWEEN p.posted_date
+                           AND COALESCE(p.closed_date, CURRENT_DATE('Asia/Tokyo'))
+
+),
+
+daily_applications AS (
+
+    SELECT
+        job_posting_id,
+        DATE(applied_at, 'Asia/Tokyo') AS event_date,
+        COUNT(*) AS application_count
+    FROM {{ ref('stg_careervoice__applications') }}
+    GROUP BY job_posting_id, event_date
+
+),
+
+daily_scouts AS (
+
+    SELECT
+        job_posting_id,
+        DATE(sent_at, 'Asia/Tokyo') AS event_date,
+        COUNT(*) AS scout_count
+    FROM {{ ref('stg_careervoice__scouts') }}
+    WHERE job_posting_id IS NOT NULL
+    GROUP BY job_posting_id, event_date
+
+),
+
+audit AS (
+
+    SELECT audit_key
+    FROM {{ ref('dim_audit') }}
+    WHERE dbt_invocation_id = '{{ invocation_id }}'
+
+)
+
+SELECT
+    pd.snapshot_date_key,
+    pd.full_date AS snapshot_date,               -- パーティション用の DATE 列
+    jp.job_posting_key,
+    co.company_key,
+    jc.job_category_key,
+    -- 求人が持つのは agency_id までで、担当者（agent_id）は求人だけでは決まらない。
+    -- 直接掲載も担当者未確定も -1（未知 = -1、DT#43）
+    -1 AS agent_key,
+    aud.audit_key,
+
+    1 AS is_open,                                -- 半加法: 日をまたいで足さない
+    pd.days_since_posted,
+    SUM(COALESCE(da.application_count, 0)) OVER (
+        PARTITION BY pd.job_posting_id ORDER BY pd.snapshot_date_key
+    ) AS application_count_cum,
+    SUM(COALESCE(ds.scout_count, 0)) OVER (
+        PARTITION BY pd.job_posting_id ORDER BY pd.snapshot_date_key
+    ) AS scout_count_cum,
+
+    pd.job_posting_id                            -- 退化ディメンション
+
+FROM posting_days AS pd
+CROSS JOIN audit AS aud
+LEFT JOIN daily_applications AS da
+    ON da.job_posting_id = pd.job_posting_id AND da.event_date = pd.full_date
+LEFT JOIN daily_scouts AS ds
+    ON ds.job_posting_id = pd.job_posting_id AND ds.event_date = pd.full_date
+LEFT JOIN {{ ref('dim_job_posting') }}  AS jp ON jp.job_posting_id    = pd.job_posting_id
+LEFT JOIN {{ ref('dim_job_category') }} AS jc ON jc.job_category_code = pd.job_category_code
+LEFT JOIN {{ ref('dim_company') }} AS co
+    ON  co.company_id = pd.company_id
+    AND pd.full_date &gt;= DATE(co.valid_from, 'Asia/Tokyo')
+    AND pd.full_date &lt;  DATE(co.valid_to,   'Asia/Tokyo')
+</code></pre>
+
+<p><code>agent_key</code> をここで <code>-1</code> に固定しているのは手抜きではない。<code>job_postings</code> が持つのは <code>agency_id</code>（会社としてのエージェンシー）までで、<code>dim_agent</code> の粒度である担当者は求人だけでは決まらないからである。</p>
+
+<p><code>agency_id</code> で結ぶと1求人 × 担当者数に行が増え、<strong>粒度宣言（1行 = 1求人 × 1日）が壊れる</strong>。担当者別に見たい問いは <code>fct_scout</code> / <code>fct_placement</code> 側で答える。</p>
+
+<p><code>dim_date</code> の <code>-1</code> 行は <code>full_date</code> が NULL なので <code>BETWEEN</code> に一致せず、勝手に混ざらない。<code>J001</code> の行はこうなる（<code>S001</code> は 6/20 送信、<code>P001</code> は 6/23 応募）。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th><code>snapshot_date_key</code></th><th><code>job_posting_id</code></th><th><code>is_open</code></th><th><code>days_since_posted</code></th><th><code>scout_count_cum</code></th><th><code>application_count_cum</code></th></tr></thead>
+<tbody>
+<tr><td>20260401</td><td>J001</td><td>1</td><td>0</td><td>0</td><td>0</td></tr>
+<tr><td>20260415</td><td>J001</td><td>1</td><td>14</td><td>0</td><td>0</td></tr>
+<tr><td>20260620</td><td>J001</td><td>1</td><td>80</td><td>1</td><td>0</td></tr>
+<tr><td>20260623</td><td>J001</td><td>1</td><td>83</td><td>1</td><td>1</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>「4/15 時点の掲載中求人数」は <code>SELECT SUM(is_open) FROM fct_job_posting_daily WHERE snapshot_date_key = 20260415</code> になる。<strong>ソースが後からどう変わっても、この行は変わらない。</strong></p>
+
+<h2>6. 判断基準</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>状況（問いの形）</th><th>選択</th><th>理由</th></tr></thead>
+<tbody>
+<tr><td>「日別の応募数は？」<br>いつ何件起きたか</td><td>トランザクション（<code>fct_selection_event</code>）</td><td>事象があるときだけ行が立てばよい。最も細かい粒度が取れる</td></tr>
+<tr><td>「4/15 に掲載中だった求人は？」<br>その日/その月の状態</td><td>定期スナップショット（<code>fct_job_posting_daily</code>）</td><td>活動が無い日も行が要る。ソース再構成では再現性が無い</td></tr>
+<tr><td>「応募から内定まで何日？」<br>開始と終了があるプロセスのラグ</td><td>累積スナップショット（<code>fct_application_pipeline</code>）</td><td>複数の日付キーを1行に並べないと差分が取れない</td></tr>
+<tr><td>「どのステージで落ちたか」<br>歩留まり</td><td>累積スナップショット</td><td>1行 = 1応募なので、行を数えるだけでファネルになる。イベント表だと重複計上しやすい</td></tr>
+<tr><td>「面接を2回やり直した応募は？」<br>再訪・順序</td><td>トランザクション（原子）</td><td>累積は <code>MIN()</code> で畳んでいるので回数が消えている（DT#77）</td></tr>
+<tr><td>「枠を使わなかった企業は？」<br>起きなかったこと</td><td>カバレッジ型（<code>fct_contract_monthly</code>）</td><td>分母（起こりえた組合せ）を行として持たないと数えられない（DT#50）</td></tr>
+<tr><td>「メジャーが1つも無いイベント」</td><td>イベント型ファクトレス（<code>fct_page_view</code>）</td><td>数えること自体がメジャー。<code>view_count = 1</code> だけ置く</td></tr>
+<tr><td>ヘッダ側の属性で明細を切りたい</td><td>ヘッダの次元を明細に降ろす</td><td>ファクト同士の結合を避ける。ヘッダ番号は退化ディメンション（DT#95）</td></tr>
+<tr><td>マイルストーンに未到達</td><td>日付キーは <code>-1</code>、ラグメジャーは NULL</td><td>FK に NULL を入れない（DT#43）。0日と未到達を混ぜない</td></tr>
+<tr><td>0/1 のフラグをどこに置くか</td><td>足して意味があるならメジャー、絞る・割るならディメンション属性</td><td><code>is_hired</code> は足すと入社数。<code>is_unlocked</code> は足しても意味が無く、切り口として使う</td></tr>
+<tr><td>3つの問いが全部ある</td><td>3型を全部作る</td><td>型は排他ではない。ただし真実は原子ファクト側に1つだけ置く</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>7. 演習</h2>
+
+<h3>(a) スカウト枠の消化は、定期スナップショットで持つべきか</h3>
+
+<p>「契約企業が月次のスカウト枠をどれだけ消化したか」を出したい。<code>fct_contract_monthly</code>（1行 = 1契約 × 1月）を作る必要があるか、それとも <code>fct_scout</code> を月で <code>GROUP BY</code> して <code>contracts.scout_quota_monthly</code> と突き合わせれば済むか。</p>
+
+<details>
+<summary>解答例</summary>
+<p>定期スナップショットが要る。<code>fct_scout</code> の集約では3つ落ちる。</p>
+<ul>
+<li><strong>送信ゼロの企業と月が消える。</strong>消化率の分母は「契約していた企業 × 月」であって「送信があった企業 × 月」ではない。0通の企業こそ解約予兆として見たい対象なので、これが消えるのは致命的（判断基準の表「起きなかったこと」の行 / DT#50 のカバレッジ型）。</li>
+<li><strong>枠がその月いくつだったかが分からない。</strong><code>scout_quota_monthly</code> は <code>contracts</code> の現在値で、プラン変更で上書きされる。<code>K001</code> が <code>premium</code>（枠 200）から途中で変われば、過去の月の消化率が遡って変わる。スナップショットに <code>scout_quota</code> を焼き込めば固定される。</li>
+<li><strong>残枠が半加法であることを表現できない。</strong><code>scouts_remaining</code> は企業をまたいでは足せるが月をまたいでは足せない。この性質はメジャーとして持って初めて明示できる。</li>
+</ul>
+<pre><code>-- 消化率（送信ゼロの企業も分母に残る）
+SELECT
+    month_date_key,
+    SAFE_DIVIDE(SUM(scouts_sent), SUM(scout_quota)) AS quota_usage_rate,
+    COUNTIF(scouts_sent = 0) AS companies_with_no_scout
+FROM {{ ref('fct_contract_monthly') }}
+WHERE is_active = 1
+GROUP BY month_date_key
+</code></pre>
+</details>
+
+<h3>(b) <code>S002</code>（未開封）は <code>fct_scout_funnel</code> でどの列がどう入るか</h3>
+
+<p><code>S002</code> は <code>AG01</code>（エージェント 佐藤、<code>A01</code> キャリアブリッジ）から <code>M003</code> へ、<code>J002</code> について 6/25 に送信され、未開封のまま。この1行を埋めよ。</p>
+
+<details>
+<summary>解答例</summary>
+<div class="table-wrap">
+<table>
+<thead><tr><th>列</th><th>値</th><th>理由</th></tr></thead>
+<tbody>
+<tr><td><code>sent_date_key</code></td><td>20260625</td><td>到達したマイルストーン</td></tr>
+<tr><td><code>opened_date_key</code></td><td>-1</td><td>未達。NULL FK を作らない（DT#43）</td></tr>
+<tr><td><code>replied_date_key</code></td><td>-1</td><td>同上</td></tr>
+<tr><td><code>applied_date_key</code></td><td>-1</td><td>同上</td></tr>
+<tr><td><code>member_key</code></td><td><code>M003</code> の送信時点の版</td><td>SCD2（05回）</td></tr>
+<tr><td><code>scout_sender_key</code></td><td><code>AG01</code>（<code>sender_type</code> = <code>agent</code>）</td><td>異種ディメンション（06回）</td></tr>
+<tr><td><code>job_posting_key</code></td><td><code>J002</code></td><td></td></tr>
+<tr><td><code>hours_to_open</code></td><td><strong>NULL</strong></td><td>メジャーは NULL でよい。0 にすると「即開封」と混ざる</td></tr>
+<tr><td><code>hours_to_reply</code></td><td><strong>NULL</strong></td><td>同上</td></tr>
+<tr><td><code>is_opened</code> / <code>is_replied</code> / <code>is_interested</code> / <code>is_applied</code></td><td>0 / 0 / 0 / 0</td><td>足して件数になるフラグなので 0 で埋める</td></tr>
+<tr><td><code>scout_id</code></td><td><code>S002</code></td><td>退化ディメンション</td></tr>
+</tbody>
+</table>
+</div>
+<p>この行の要点は「<strong>キーは <code>-1</code>、ラグは NULL、フラグは 0</strong>」という3種類の埋め方を1行の中で使い分けること。開封率は <code>SAFE_DIVIDE(SUM(is_opened), COUNT(*))</code>、平均開封時間は <code>AVG(hours_to_open)</code> で未開封が自動的に除外される。</p>
+</details>
+
+<h3>(c) <code>page_views.is_unlocked</code> はメジャーかディメンションか</h3>
+
+<p><code>is_unlocked</code>（閲覧権限ありで見たか）を <code>fct_page_view</code> のメジャーとして置くか、<code>dim_page_context</code> の属性として置くか。</p>
+
+<details>
+<summary>解答例</summary>
+<p><strong>ディメンション属性</strong>（<code>dim_page_context</code> のジャンク列）。判断基準の表「0/1 のフラグをどこに置くか」の行を適用する。</p>
+<ul>
+<li>粒度が 1行 = 1ページ表示なので、<code>SUM(is_unlocked)</code> は「権限ありの表示回数」になり、<code>COUNT(*)</code> との比で率が出せる — つまりメジャーに置いても数字は出る。それでもディメンションに置くのは、<strong>これが測定値ではなく表示の文脈だから</strong>である。<code>page_type</code> × <code>device</code> × <code>referrer_type</code> と同格の切り口で、単独で足す場面が無い。</li>
+<li>ジャンクディメンション（72行）に入れれば、他の3属性との組合せで <code>WHERE</code> と <code>GROUP BY</code> の両方に使え、ファクトの列も1本増えない。</li>
+<li>逆に <code>is_hired</code>（<code>fct_application_pipeline</code>）はメジャーでよい。足すと「入社数」という業務上の量になり、他のファクトと drill across する対象になる。</li>
+</ul>
+<pre><code>-- 閲覧権限あり比率（is_unlocked はディメンション側）
+SELECT
+    pc.page_type,
+    COUNTIF(pc.is_unlocked) AS unlocked_views,
+    COUNT(*)                AS total_views,
+    SAFE_DIVIDE(COUNTIF(pc.is_unlocked), COUNT(*)) AS unlocked_rate
+FROM {{ ref('fct_page_view') }} AS pv
+INNER JOIN {{ ref('dim_page_context') }} AS pc USING (page_context_key)
+GROUP BY pc.page_type
+</code></pre>
+</details>
+
+<h2>8. 参考: 手元の基盤ではどうか</h2>
+
+<div class="aside">
+<ul>
+<li><code>dbt_logs_analysis</code> の <code>mart_url_performance</code> は 1行 = URL × 日。型としてはトランザクション（アクセスログ）を日で畳んだ<strong>集約</strong>であって定期スナップショットではない。アクセスが0件の URL には行が立たないので、「その日 1度も叩かれなかった URL」は答えられない（DT#50 のカバレッジ型が要る問い）。</li>
+<li><code>mart_url_performance_incremental</code> は <code>unique_key=['url_path','date']</code> で MERGE するので、行を上書きするという意味では累積スナップショットと同じ挙動をする。ただし上書きしているのは過去日の再計算であってマイルストーンではないので、型は集約のまま。</li>
+<li><code>news_pipeline</code> の <code>raw_articles.content_status</code> は <code>pending → ok → summarized / failed / filtered</code> と1行を上書きしていく。粒度（1行 = 1記事のライフサイクル）は累積スナップショットそのものだが、<strong>各遷移の時刻を持たないので「収集から要約までのラグ」が測れない</strong>。残っているのは <code>retry_count</code> だけである。</li>
+<li>この回の基準で言えば、<code>raw_articles</code> は「日付キー1本 + 状態列」の形なので累積スナップショットとしては未完成。遷移ごとの時刻列（または遷移イベント表）を足せば <code>fct_review_moderation</code> と同じ構造になる。</li>
+<li><strong>試せる種:</strong> <code>summaries</code> のスコア上書き（Type 1）を、上書きせず <code>scoring_version</code> ごとに行を積む形に変えると、採点ロジック変更の影響が「同じ記事の版違い」として測れるようになる。</li>
+</ul>
+</div>
+
+<h2>参照文献</h2>
+
+<ul class="ref">
+<li>Kimball &amp; Ross, <em>The Data Warehouse Toolkit, 3rd ed.</em> ch.4（在庫: 定期スナップショット・半加法・3型の比較） — <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/data-warehouse-dw-toolkit/">kimballgroup.com</a></li>
+<li>Kimball Group, <em>Fact Tables</em>（2008） — <a href="https://www.kimballgroup.com/2008/11/fact-tables/">https://www.kimballgroup.com/2008/11/fact-tables/</a></li>
+<li>Design Tip #43, <em>Dealing With Nulls In The Dimensional Model</em> — <a href="https://www.kimballgroup.com/2003/02/design-tip-43-dealing-with-nulls-in-the-dimensional-model/">kimballgroup.com</a></li>
+<li>Design Tip #50, <em>Factless Fact Tables? Sounds Like Jumbo Shrimp</em> — <a href="https://decisionworks.com/2003/10/design-tip-50-factless-fact-tables-sounds-like-jumbo-shrimp/">decisionworks.com</a></li>
+<li>Design Tip #77, <em>Warning: Summary Data Alone Is Hazardous To Your Health</em> — <a href="https://decisionworks.com/2006/03/design-tip-77-warning-summary-data-alone-is-hazardous-to-your-health/">decisionworks.com</a></li>
+<li>Design Tip #95, <em>Patterns to Avoid when Modeling Header/Line Item Transactions</em> — <a href="https://www.kimballgroup.com/2007/10/design-tip-95-patterns-to-avoid-when-modeling-headerline-item-transactions/">kimballgroup.com</a></li>
+<li>Simon Späti, <em>Snapshotting</em>（Functional Data Engineering の解説） — <a href="https://www.ssp.sh/brain/snapshotting/">https://www.ssp.sh/brain/snapshotting/</a></li>
+<li>dbt, <em>BigQuery configurations</em>（<code>merge</code> / <code>insert_overwrite</code> / <code>partition_by</code>） — <a href="https://docs.getdbt.com/reference/resource-configs/bigquery-configs">docs.getdbt.com</a></li>
+</ul>
+
+</body>
+</html>

@@ -13,3 +13,5 @@
 - batch2 dispatch: 04, 05, 06, 07 の執筆エージェント（opus）を並列起動。01 のレビュー（opus）起動
 - 00 執筆完了（DONE, svg 0 errors）。00 のレビュー（opus）起動
 - 03 執筆完了（DONE_WITH_CONCERNS）。Ruling: `dim_date` の役割数はブリーフの「7」ではなく正典 FK 列どおり「8（7マイルストーン + closed）」を正とする／`dim_date.date_label` を正典に追加／STRING キーの未知値は `'-1'` と正典に明記 — 誤りなら 02/05 との表記差が横断レビューで出る
+- 02 執筆完了（DONE_WITH_CONCERNS）。Ruling: `dim_agency`（`dim_agent` の縮約ディメンション, Type2）を正典に追加し、`fct_job_posting_daily` と `fct_placement` は `agency_key` を持つ。`fct_placement.agent_key` は scout 経由で解決（無ければ -1）。`current_stage` 初期値 `applied` を正典に明記 — 担当者粒度のディメンションに求人を結ぶと粒度が壊れるため — 誤りなら 06/08/10 で agency の扱いが揺れる（横断レビューで検出）。02 本文の `agent_key=-1` 固定は修正ラウンドで `agency_key` に差し替える
+- 01 レビュー REVISE（critical=2 important=5 minor=8）→ 修正ラウンド 1/3 を執筆エージェントに送付

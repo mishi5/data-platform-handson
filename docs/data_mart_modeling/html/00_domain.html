@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>題材と簡易データモデル — データマート設計 00</title>
+<style>
+  :root { --bg:#ffffff; --fg:#1a1a1a; --muted:#666; --border:#e0e0e0;
+          --accent:#0b6bcb; --card:#f7f8fa; --code:#f3f4f6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171a; --fg:#e8e8e8; --muted:#9aa0a6; --border:#2c3136;
+            --accent:#6aa9ff; --card:#1b1f23; --code:#1f2429; }
+  }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+    line-height:1.8; max-width:900px; margin:0 auto; padding:24px 20px 64px; }
+  h1 { font-size:1.6rem; margin:0 0 4px; line-height:1.4; }
+  h2 { font-size:1.2rem; border-bottom:1px solid var(--border); padding-bottom:6px; margin:40px 0 16px; }
+  h3 { font-size:1.02rem; margin:24px 0 8px; }
+  .meta { color:var(--muted); font-size:.85rem; margin:0 0 24px; }
+  a { color:var(--accent); }
+  table { border-collapse:collapse; width:100%; margin:12px 0 20px; font-size:.9rem; }
+  th, td { border:1px solid var(--border); padding:6px 10px; vertical-align:top; text-align:left; }
+  th { background:var(--card); }
+  .table-wrap { overflow-x:auto; }
+  code { background:var(--code); border:1px solid var(--border); border-radius:4px; padding:1px 5px; font-size:.85em; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:8px; padding:14px 16px;
+        overflow-x:auto; font-size:.84rem; line-height:1.55; }
+  pre code { background:none; border:none; padding:0; font-size:inherit; }
+  .aside { border-left:3px solid var(--accent); background:var(--card); padding:10px 16px; margin:16px 0; font-size:.92rem; }
+  .kimball { border-left-color:#8a6d3b; }
+  .modern { border-left-color:#3b8a5a; }
+  details { border:1px solid var(--border); border-radius:8px; padding:8px 14px; margin:10px 0; background:var(--card); }
+  summary { cursor:pointer; font-weight:600; }
+  svg { max-width:100%; height:auto; display:block; margin:20px 0; }
+  ul, ol { padding-left:1.3em; }
+  .ref li { font-size:.88rem; }
+  .cap { color:var(--muted); font-size:.85rem; margin:-8px 0 20px; }
+</style>
+</head>
+<body>
+
+<h1>題材と簡易データモデル</h1>
+<p class="meta">データマート設計 00 ／ 参照: DWT ch.1（4ステップ設計）, ch.18（設計プロセス）, 10 Rules, Manifesto, Design Tip #3 ／ 再解釈: Reis（概念/論理/物理）, Hightouch Part 1</p>
+
+<p>このシリーズは DMBOK シリーズ（総論）と扱う範囲を分ける。総論はガバナンス・品質・メタデータ・組織まで含む「データマネジメント全体」を扱うが、こちらは<strong>マートを1本作るときにその場で下す判断</strong>だけを扱う。粒度をどこに置くか、履歴をどう持つか、star にするか One Big Table にするか — 手を動かす直前に必ず迷う地点を、Kimball の原典と現代の再解釈の両方から詰める。</p>
+
+<h2>1. このシリーズが扱うこと</h2>
+
+<p>全11回。各回は「中心の判断」を1つ持ち、その判断を題材の具体テーブル・具体 ID で下しきる。原典（Kimball）の主張・現代の列指向 DWH での再解釈・この題材での決定、の3段で書く。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>#</th><th>タイトル</th><th>中心の判断</th><th>図</th></tr></thead>
+<tbody>
+<tr><td>00</td><td>題材と簡易データモデル</td><td>シリーズの位置づけ、CareerVoice のソースモデルとビジネスプロセス、概念→論理→物理</td><td>OLTP ER 図</td></tr>
+<tr><td>01</td><td>粒度を宣言する</td><td>1行の意味を一文で。バスマトリクス。粒度をテストで固定</td><td>—</td></tr>
+<tr><td>02</td><td>ファクトの3型とファクトレス</td><td>トランザクション/定期/累積スナップショット、ファクトレス。型は問いで決まる</td><td>累積スナップショット更新</td></tr>
+<tr><td>03</td><td>ディメンションの設計</td><td>サロゲートキーが要る条件、退化・ロールプレイング・ジャンク・ミニ・監査・<code>-1</code></td><td>—</td></tr>
+<tr><td>04</td><td>加法性と派生指標</td><td>加法/半加法/非加法。率と平均は持たず分子分母を持つ</td><td>平均の平均 vs 和と件数</td></tr>
+<tr><td>05</td><td>履歴を持つ：SCD とスナップショット</td><td>Type 0〜7、as-of join、SCD2 vs 日次スナップショット</td><td>as-of join</td></tr>
+<tr><td>06</td><td>多対多・不揃い階層・異種ディメンション</td><td>ブリッジ+重み / ARRAY、階層ブリッジ / 平坦化、supertype</td><td>ブリッジ vs ARRAY</td></tr>
+<tr><td>07</td><td>star か One Big Table か</td><td>star は意味のため。star 正本 + OBT 配布。パーティション/クラスタ</td><td>スキャン範囲の比較</td></tr>
+<tr><td>08</td><td>コンフォームドとドリルアクロス</td><td>同じ軸で複数ファクトを並べる。集約を持つ条件。ECM 風エンティティ表</td><td>—</td></tr>
+<tr><td>09</td><td>増分・遅延到着・冪等性</td><td>insert_overwrite / merge、ルックバック、遅延到着ディメンションの修復</td><td>遅延到着とルックバック</td></tr>
+<tr><td>10</td><td>レイヤ・命名・契約・テスト・監査</td><td>層と命名、粒度/参照整合性/加法性テスト、contract、改版、監査ディメンション</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="aside kimball">
+<strong>Kimball（10 Rules, Rule #10）</strong>: 次元モデラーは常に「業務側の要求」と「ソースデータの現実」の間に立つ、と書かれている。要求だけを聞けば実装できないモデルになり、ソースだけを見ればレポートが作れないモデルになる。このシリーズが毎回「判断基準の表」で終わるのはそのためで、正解を1つ配るのではなく、状況→選択→理由の対応を置く。
+</div>
+
+<h2>2. 題材: CareerVoice</h2>
+
+<p>架空のサービス <strong>CareerVoice</strong>。社員・元社員の企業クチコミを軸に、求人掲載・直接スカウト・エージェントスカウト・応募選考を1つのプラットフォームで提供する。収益源が4種類あり、それぞれ別のビジネスプロセスから発生する点が設計上の要になる。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>機能</th><th>概要</th><th>収益</th></tr></thead>
+<tbody>
+<tr><td>クチコミ</td><td>会員が在籍/退職した企業を8軸で採点しテキストを書く。審査を通ると公開</td><td>閲覧権限（投稿するか課金するか）で会員を集める</td></tr>
+<tr><td>求人</td><td>企業（またはエージェント）が求人を掲載</td><td>掲載プラン月額</td></tr>
+<tr><td>直接スカウト</td><td>企業の採用担当が会員へ直接スカウト</td><td>契約プランの月次スカウト枠</td></tr>
+<tr><td>エージェントスカウト</td><td>転職エージェントの担当者が会員へスカウト</td><td>入社時の成果報酬（年収 × 料率）</td></tr>
+<tr><td>応募・選考</td><td>検索/スカウト経由で応募、書類→面接→内定→入社</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="aside kimball">
+<strong>Kimball（DWT ch.18 / Techniques「Gather Business Requirements and Data Realities」）</strong>: 設計に入る前に、業務側の要求とソースデータの現実を<strong>同時に</strong>掴めと言う。要求は業務代表との対話で KPI・意思決定プロセス・分析ニーズとして引き出し、データの現実はソース側の担当者への聞き取りと高レベルのプロファイリングで確かめる。片側だけで進めると、実装できないモデルか、誰も使わないモデルのどちらかになる。以下の5つが CareerVoice での「要求」側、§3 が「現実」側にあたる。
+</div>
+
+<h3>分析側が答えたい問い</h3>
+
+<ul>
+<li>クチコミ数・評価スコアの推移と、求人応募率・スカウト返信率への影響</li>
+<li>スカウト送信主体（企業 vs エージェント）別の開封→返信→応募→入社ファネル</li>
+<li>応募から入社までのリードタイムと歩留まり（職種・企業規模・チャネル別）</li>
+<li>契約枠の消化率、MRR、成果報酬売上</li>
+<li>会員属性（年収帯・転職意欲）の<strong>変化前後</strong>での行動差</li>
+</ul>
+
+<p>この5つは全回の演習の種になる。5つ目だけが他と質的に違い、「今の属性」ではなく「そのイベントが起きた時点の属性」を要求する。これが 05回（SCD と as-of join）の存在理由で、サンプル値の <code>M001</code> が 2026-06-15 に <code>job_change_intent</code> を <code>passive</code> → <code>active</code> へ変え、06-20 に <code>S001</code> を受け取り、06-23 に応募する、という並びで検証する。</p>
+
+<h2>3. ソースシステムの簡易モデル</h2>
+
+<p>OLTP は BigQuery の <code>src_careervoice</code> データセットに Datastream（CDC）で複製されている前提。全テーブルが <code>updated_at</code> を持ち、マスタ系は論理削除 <code>deleted_at</code> を持つ。<strong>列は以下が全てで、以降の回もこれ以外を持ち出さない。</strong></p>
+
+<h3>会員・企業（マスタ）</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>テーブル</th><th>主キー</th><th>列</th></tr></thead>
+<tbody>
+<tr><td><code>members</code></td><td><code>member_id</code></td><td><code>email_hash</code>, <code>birth_year</code>, <code>gender</code>, <code>prefecture_code</code>, <code>current_company_id</code>(nullable), <code>current_job_category_code</code>, <code>annual_income_band</code>(<code>lt400</code>/<code>400_600</code>/<code>600_800</code>/<code>800_1000</code>/<code>ge1000</code>), <code>job_change_intent</code>(<code>active</code>/<code>passive</code>/<code>none</code>), <code>registered_at</code>, <code>updated_at</code>, <code>deleted_at</code></td></tr>
+<tr><td><code>member_desired_job_categories</code></td><td>(<code>member_id</code>,<code>job_category_code</code>)</td><td><code>priority</code>(1..3), <code>updated_at</code></td></tr>
+<tr><td><code>companies</code></td><td><code>company_id</code></td><td><code>name</code>, <code>corporate_number</code>(法人番号13桁), <code>industry_code</code>, <code>employee_size_band</code>(<code>lt50</code>/<code>50_299</code>/<code>300_999</code>/<code>ge1000</code>), <code>listing_status</code>(<code>listed</code>/<code>unlisted</code>), <code>hq_prefecture_code</code>, <code>parent_company_id</code>(nullable, 自己参照), <code>founded_year</code>, <code>updated_at</code></td></tr>
+<tr><td><code>agencies</code></td><td><code>agency_id</code></td><td><code>name</code>, <code>tier</code>(<code>gold</code>/<code>silver</code>/<code>standard</code>), <code>contract_start_date</code>, <code>updated_at</code></td></tr>
+<tr><td><code>agents</code></td><td><code>agent_id</code></td><td><code>agency_id</code>, <code>name</code>, <code>joined_at</code>, <code>left_at</code>(nullable), <code>updated_at</code></td></tr>
+<tr><td><code>job_categories</code></td><td><code>job_category_code</code></td><td><code>name</code>, <code>parent_code</code>(nullable), <code>level</code>(1..3) — <strong>不揃い階層</strong>（level 2 で終わる枝がある）</td></tr>
+<tr><td><code>industries</code></td><td><code>industry_code</code></td><td><code>name</code>, <code>sector_code</code></td></tr>
+<tr><td><code>prefectures</code></td><td><code>prefecture_code</code></td><td><code>name</code>, <code>region</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>クチコミ</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>テーブル</th><th>主キー</th><th>列</th></tr></thead>
+<tbody>
+<tr><td><code>reviews</code></td><td><code>review_id</code></td><td><code>company_id</code>, <code>member_id</code>, <code>employment_status</code>(<code>current</code>/<code>former</code>), <code>employment_type</code>(<code>fulltime</code>/<code>contract</code>/<code>parttime</code>), <code>job_category_code</code>, <code>years_of_service_band</code>(<code>lt1</code>/<code>1_3</code>/<code>3_5</code>/<code>5_10</code>/<code>ge10</code>), 8軸スコア(各1.0〜5.0, 0.5刻み) <code>score_compensation</code>, <code>score_morale</code>, <code>score_openness</code>, <code>score_respect</code>, <code>score_growth_20s</code>, <code>score_long_term_dev</code>, <code>score_compliance</code>, <code>score_eval_fairness</code>, <code>overall_score</code>(8軸平均ではなく別入力), <code>title</code>, <code>body_text</code>, <code>submitted_at</code>, <code>status</code>(<code>submitted</code>/<code>screening</code>/<code>published</code>/<code>rejected</code>), <code>published_at</code>(nullable), <code>updated_at</code></td></tr>
+<tr><td><code>review_moderation_events</code></td><td><code>event_id</code></td><td><code>review_id</code>, <code>from_status</code>, <code>to_status</code>, <code>moderator_id</code>, <code>reason_code</code>(nullable: <code>defamation</code>/<code>pii</code>/<code>duplicate</code>/<code>low_quality</code>), <code>occurred_at</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>求人・スカウト・応募</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>テーブル</th><th>主キー</th><th>列</th></tr></thead>
+<tbody>
+<tr><td><code>job_postings</code></td><td><code>job_posting_id</code></td><td><code>company_id</code>, <code>agency_id</code>(nullable=エージェント経由求人), <code>job_category_code</code>, <code>title</code>, <code>salary_min</code>, <code>salary_max</code>, <code>prefecture_code</code>, <code>employment_type</code>, <code>posted_at</code>, <code>closed_at</code>(nullable), <code>status</code>(<code>open</code>/<code>closed</code>), <code>updated_at</code></td></tr>
+<tr><td><code>scouts</code></td><td><code>scout_id</code></td><td><code>member_id</code>, <code>job_posting_id</code>(nullable), <code>sender_type</code>(<code>company</code>/<code>agent</code>), <code>sender_company_id</code>(nullable), <code>sender_agent_id</code>(nullable), <code>template_id</code>, <code>sent_at</code>, <code>opened_at</code>(nullable), <code>replied_at</code>(nullable), <code>reply_type</code>(nullable: <code>interested</code>/<code>declined</code>)</td></tr>
+<tr><td><code>applications</code></td><td><code>application_id</code></td><td><code>member_id</code>, <code>job_posting_id</code>, <code>scout_id</code>(nullable), <code>source_channel</code>(<code>search</code>/<code>scout_company</code>/<code>scout_agent</code>/<code>agent_referral</code>), <code>applied_at</code></td></tr>
+<tr><td><code>selection_events</code></td><td><code>event_id</code></td><td><code>application_id</code>, <code>stage</code>(<code>document</code>/<code>first_interview</code>/<code>final_interview</code>/<code>offer</code>/<code>accepted</code>/<code>hired</code>/<code>rejected</code>/<code>withdrawn</code>), <code>occurred_at</code>, <code>note</code></td></tr>
+<tr><td><code>placements</code></td><td><code>placement_id</code></td><td><code>application_id</code>, <code>agency_id</code>, <code>hired_at</code>, <code>annual_income</code>, <code>fee_rate</code>, <code>fee_amount</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>契約・閲覧</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>テーブル</th><th>主キー</th><th>列</th></tr></thead>
+<tbody>
+<tr><td><code>contracts</code></td><td><code>contract_id</code></td><td><code>company_id</code>, <code>plan_code</code>(<code>basic</code>/<code>standard</code>/<code>premium</code>), <code>scout_quota_monthly</code>, <code>monthly_fee</code>, <code>start_date</code>, <code>end_date</code>(nullable), <code>status</code>, <code>updated_at</code></td></tr>
+<tr><td><code>page_views</code></td><td><code>event_id</code></td><td><code>member_id</code>(nullable=未ログイン), <code>session_id</code>, <code>page_type</code>(<code>company_top</code>/<code>company_review</code>/<code>job_posting</code>), <code>company_id</code>(nullable), <code>job_posting_id</code>(nullable), <code>review_id</code>(nullable), <code>device</code>(<code>ios</code>/<code>android</code>/<code>web</code>), <code>referrer_type</code>(<code>organic</code>/<code>paid</code>/<code>direct</code>/<code>email</code>), <code>is_unlocked</code>(閲覧権限あり), <code>viewed_at</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>ER 図（主要9テーブル）</h3>
+
+<svg id="dg-er" viewBox="0 0 960 520" width="100%"
+     style="max-width:900px;height:auto;display:block"
+     xmlns="http://www.w3.org/2000/svg"
+     role="img" aria-labelledby="dg-er-t dg-er-d">
+  <title id="dg-er-t">CareerVoice の OLTP 簡易 ER 図</title>
+  <desc id="dg-er-d">会員側・企業側・エージェント側のマスタと、その間で発生する4つのイベントテーブル（クチコミ・スカウト・応募・選考）を、外部キーの向き（子から親）だけで結んだ図。</desc>
+  <style>
+    #dg-er{
+      --paper:#fbfbfa; --ink:#22262e; --muted:#5b6472; --soft:#828b9a;
+      --rule:rgba(34,38,46,.14); --accent:#c8571d; --tint:rgba(200,87,29,.10);
+      --sans:system-ui,-apple-system,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+      --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    }
+    @media (prefers-color-scheme:dark){
+      #dg-er{--paper:#1a1d23;--ink:#e9ecf1;--muted:#a6afbd;--soft:#7f8898;
+            --rule:rgba(233,236,241,.18);--accent:#f0894f;--tint:rgba(240,137,79,.14);}
+    }
+    :root[data-theme="dark"] #dg-er{--paper:#1a1d23;--ink:#e9ecf1;--muted:#a6afbd;--soft:#7f8898;
+            --rule:rgba(233,236,241,.18);--accent:#f0894f;--tint:rgba(240,137,79,.14);}
+    :root[data-theme="light"] #dg-er{--paper:#fbfbfa;--ink:#22262e;--muted:#5b6472;--soft:#828b9a;
+            --rule:rgba(34,38,46,.14);--accent:#c8571d;--tint:rgba(200,87,29,.10);}
+    #dg-er .bg{fill:var(--paper)}
+    #dg-er .box{fill:var(--paper);stroke:var(--ink);stroke-width:1}
+    #dg-er .box-focal{fill:var(--tint);stroke:var(--accent);stroke-width:1.4}
+    #dg-er .zone{fill:none;stroke:var(--rule);stroke-width:1;stroke-dasharray:4 3}
+    #dg-er .sep{fill:none;stroke:var(--rule);stroke-width:1}
+    #dg-er .tbl{fill:var(--ink);font:600 14px var(--mono)}
+    #dg-er .jp{fill:var(--muted);font:400 12px var(--sans)}
+    #dg-er .zlabel{fill:var(--soft);font:600 12px var(--sans);letter-spacing:.08em}
+    #dg-er .lead{fill:none;stroke:var(--muted);stroke-width:1.4;marker-end:url(#dg-er-a)}
+    #dg-er .mask{fill:var(--paper)}
+    #dg-er .mk{fill:var(--muted)}
+  </style>
+  <defs>
+    <marker id="dg-er-a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <path class="mk" d="M0,0 L9,3.5 L0,7 Z"/></marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="960" height="520"/>
+
+  <rect class="zone" x="24" y="32" width="208" height="104" rx="8"/>
+  <rect class="zone" x="264" y="32" width="208" height="104" rx="8"/>
+  <rect class="zone" x="24" y="328" width="688" height="104" rx="8"/>
+
+  <path class="lead" d="M88,208 V120"/>
+  <path class="lead" d="M168,208 V184 Q168,176 176,176 H316 Q324,176 324,168 V120"/>
+  <path class="lead" d="M368,208 V120"/>
+  <path class="lead" d="M812,208 V168 Q812,160 804,160 H420 Q412,160 412,152 V120"/>
+  <path class="lead" d="M520,236 H456"/>
+  <path class="lead" d="M280,236 H216"/>
+  <path class="lead" d="M100,264 V360"/>
+  <path class="lead" d="M168,264 V308 Q168,316 176,316 H564 Q572,316 572,324 V360"/>
+  <path class="lead" d="M396,264 V284 Q396,292 404,292 H628 Q636,292 636,300 V360"/>
+  <path class="lead" d="M884,264 V444 Q884,452 876,452 H136 Q128,452 128,444 V416"/>
+  <path class="lead" d="M280,388 H216"/>
+  <path class="lead" d="M608,416 V428 Q608,436 600,436 H180 Q172,436 172,428 V416"/>
+
+  <rect class="mask" x="36" y="24" width="96" height="16"/>
+  <text class="zlabel" x="40" y="36">エージェント側</text>
+  <rect class="mask" x="276" y="24" width="52" height="16"/>
+  <text class="zlabel" x="280" y="36">会員側</text>
+  <rect class="mask" x="36" y="320" width="52" height="16"/>
+  <text class="zlabel" x="40" y="332">企業側</text>
+
+  <rect class="box" x="40" y="64" width="176" height="56" rx="6"/>
+  <text class="tbl" x="128" y="90" text-anchor="middle">agents</text>
+  <text class="jp" x="128" y="108" text-anchor="middle">エージェント担当者</text>
+
+  <rect class="box" x="280" y="64" width="176" height="56" rx="6"/>
+  <text class="tbl" x="368" y="90" text-anchor="middle">members</text>
+  <text class="jp" x="368" y="108" text-anchor="middle">会員マスタ</text>
+
+  <rect class="box-focal" x="40" y="208" width="176" height="56" rx="6"/>
+  <text class="tbl" x="128" y="234" text-anchor="middle">scouts</text>
+  <text class="jp" x="128" y="252" text-anchor="middle">スカウト送信</text>
+
+  <rect class="box-focal" x="280" y="208" width="176" height="56" rx="6"/>
+  <text class="tbl" x="368" y="234" text-anchor="middle">applications</text>
+  <text class="jp" x="368" y="252" text-anchor="middle">応募</text>
+
+  <rect class="box-focal" x="520" y="208" width="176" height="56" rx="6"/>
+  <text class="tbl" x="608" y="234" text-anchor="middle">selection_events</text>
+  <text class="jp" x="608" y="252" text-anchor="middle">選考ステージ遷移</text>
+
+  <rect class="box-focal" x="760" y="208" width="176" height="56" rx="6"/>
+  <text class="tbl" x="848" y="234" text-anchor="middle">reviews</text>
+  <text class="jp" x="848" y="252" text-anchor="middle">クチコミ投稿・審査</text>
+
+  <rect class="box" x="40" y="360" width="176" height="56" rx="6"/>
+  <text class="tbl" x="128" y="386" text-anchor="middle">companies</text>
+  <text class="jp" x="128" y="404" text-anchor="middle">企業マスタ</text>
+
+  <rect class="box" x="280" y="360" width="176" height="56" rx="6"/>
+  <text class="tbl" x="368" y="386" text-anchor="middle">contracts</text>
+  <text class="jp" x="368" y="404" text-anchor="middle">契約（スカウト枠）</text>
+
+  <rect class="box" x="520" y="360" width="176" height="56" rx="6"/>
+  <text class="tbl" x="608" y="386" text-anchor="middle">job_postings</text>
+  <text class="jp" x="608" y="404" text-anchor="middle">求人掲載</text>
+
+  <line class="sep" x1="40" y1="472" x2="920" y2="472"/>
+  <rect class="box-focal" x="40" y="484" width="20" height="12" rx="2"/>
+  <text class="jp" x="68" y="494">イベント行が積まれるテーブル（白は状態を上書き更新するテーブル）</text>
+  <text class="jp" x="608" y="494">矢印 = 外部キー（子 → 親）</text>
+</svg>
+
+<p class="cap">図に出していない外部キーが3本ある。<code>members.current_company_id</code> → <code>companies</code>、<code>companies.parent_company_id</code> → <code>companies</code>（自己参照、<code>C003</code> の親が <code>C001</code>）、<code>agents.agency_id</code> → <code>agencies</code>。参照マスタ（<code>job_categories</code>, <code>industries</code>, <code>prefectures</code>）、多値の <code>member_desired_job_categories</code>、審査ログの <code>review_moderation_events</code>、成果報酬の <code>placements</code>、イベントログの <code>page_views</code> も図からは省いた。</p>
+
+<h3>OLTP としての設計意図</h3>
+
+<p>この形はアプリケーションの都合で正しい。<code>job_categories</code> は <code>parent_code</code> による自己参照で階層を持ち、<code>industries</code> や <code>prefectures</code> はコード表に切り出されている。重複を消して更新を1箇所に閉じる、正規化の教科書どおりの形だ。</p>
+
+<p>状態は列で持つ。<code>reviews.status</code>、<code>job_postings.status</code>、<code>contracts.status</code>、<code>scouts.opened_at</code>/<code>replied_at</code> はいずれも行を上書きして遷移する。削除は <code>deleted_at</code> による論理削除で、行は消えない。<strong>つまり OLTP を素直に読むと「今」しか分からない</strong>。<code>C002</code> の <code>employee_size_band</code> が 2026-05-01 に <code>50_299</code> から <code>300_999</code> へ変わったとき、その前に投稿された <code>R001</code> を「当時の規模」で集計する手段はソース側に無い。</p>
+
+<div class="aside kimball">
+<strong>Kimball（Manifesto, 1997）</strong>: ER モデリングはトランザクション処理には適切で、そこでは最高のトランザクション性能とデータ整合性が得られる。しかしデータがエンドユーザーに届く前に、理解しやすさと性能の両方のために次元モデルへ変換しなければならない、と主張する。<br>
+Manifesto が次元モデルの強みとして挙げるのは4つ — 予測可能な枠組み、対称性（どのディメンションからでも等しく入れる）、優雅な拡張性（行や列を足すだけで既存クエリを壊さない）、そして緩やかに変化するディメンションやファクトレスファクトのような<strong>定型の対処法が揃っていること</strong>。このシリーズが扱うのは4つ目の「定型」の中身である。
+</div>
+
+<h2>4. ビジネスプロセスの棚卸し</h2>
+
+<p>次元モデルの行は<strong>ビジネスプロセス</strong>であって部門ではない（DT#3）。CareerVoice の場合、「マーケ部のマート」「エージェント事業部のマート」を作ると、スカウトも応募も両方に複製されて数字が食い違う。</p>
+
+<div class="aside kimball">
+<strong>Kimball（Design Tip #3）</strong>: 「データマートは部門で定義される」は業界で最も広く流布した誤りの一つだと断じている。マーケのマートにも受注が入り、セールスのマートにも受注が入れば、同じ情報が複数箇所に存在し、真実のバージョンが割れる。開発も保守もストレージも重複する。<strong>プロセス単位で一度だけ公開し、コンフォームドディメンションで各部門から参照させる。</strong> バスマトリクスの行がプロセスであってレポート名でも部門名でもないのはこのためだ。
+</div>
+
+<p>プロセスの見つけ方は2方向から挟む。業務側が口にするパフォーマンス指標を聞き（「返信率」「歩留まり」「枠消化率」）、ソースシステムの側でそれを生む操作を探す（<code>scouts</code> の insert、<code>selection_events</code> の insert、<code>contracts</code> の月次判定）。CareerVoice では10個に棚卸しした。</p>
+
+<h3>バスマトリクス（予告）</h3>
+
+<p>行＝ビジネスプロセス、列＝コンフォームドディメンション。この表の読み方と作り方は 01回で扱う。ここでは「これから11回でこの10行を埋めていく」という地図として置く。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>プロセス</th><th>ファクト</th><th>型</th><th>粒度宣言</th><th>date</th><th>member</th><th>company</th><th>job_posting</th><th>agent</th><th>job_category</th><th>channel/junk</th></tr></thead>
+<tbody>
+<tr><td>クチコミ投稿</td><td><code>fct_review</code></td><td>トランザクション</td><td>1行 = 投稿された1クチコミ</td><td>投稿日</td><td>✗（§6参照）</td><td>✓</td><td></td><td></td><td>✓</td><td><code>dim_review_attributes</code></td></tr>
+<tr><td>クチコミ審査</td><td><code>fct_review_moderation</code></td><td>累積スナップショット</td><td>1行 = 1クチコミの審査ライフサイクル</td><td>投稿/一次/公開/却下</td><td></td><td>✓</td><td></td><td></td><td></td><td><code>dim_moderation_reason</code></td></tr>
+<tr><td>クチコミ閲覧</td><td><code>fct_page_view</code></td><td>トランザクション（イベント・ファクトレス）</td><td>1行 = 1ページ表示</td><td>閲覧日</td><td>✓(nullable)</td><td>✓</td><td>✓</td><td></td><td></td><td><code>dim_page_context</code></td></tr>
+<tr><td>求人掲載</td><td><code>fct_job_posting_daily</code></td><td>定期スナップショット</td><td>1行 = 1求人 × 掲載中の1日</td><td>日</td><td></td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td></td></tr>
+<tr><td>スカウト送信</td><td><code>fct_scout</code></td><td>トランザクション</td><td>1行 = 送信された1スカウト</td><td>送信日</td><td>✓</td><td>✓(送信主体)</td><td>✓</td><td>✓(送信主体)</td><td></td><td><code>dim_scout_sender</code></td></tr>
+<tr><td>スカウト反応</td><td><code>fct_scout_funnel</code></td><td>累積スナップショット</td><td>1行 = 1スカウトの送信→開封→返信→応募</td><td>送信/開封/返信/応募</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td></td><td></td></tr>
+<tr><td>選考イベント</td><td><code>fct_selection_event</code></td><td>トランザクション</td><td>1行 = 1選考ステージ遷移</td><td>発生日</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td><code>dim_channel</code></td></tr>
+<tr><td>応募〜入社</td><td><code>fct_application_pipeline</code></td><td>累積スナップショット</td><td>1行 = 1応募のパイプライン</td><td>応募/書類/一次/最終/内定/承諾/入社</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td><code>dim_channel</code></td></tr>
+<tr><td>契約・枠消化</td><td><code>fct_contract_monthly</code></td><td>定期スナップショット</td><td>1行 = 1契約 × 1月</td><td>月</td><td></td><td>✓</td><td></td><td></td><td></td><td><code>dim_contract_plan</code></td></tr>
+<tr><td>成果報酬</td><td><code>fct_placement</code></td><td>トランザクション</td><td>1行 = 1入社（エージェント経由）</td><td>入社日</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td></td></tr>
+</tbody>
+</table>
+</div>
+
+<p>10行のうち3行が累積スナップショット、2行が定期スナップショットである点に注意する。CareerVoice の問いの半分は「ファネル」と「リードタイム」なので、トランザクションファクトだけでは答えられない。型の選び方は 02回。</p>
+
+<div class="aside modern">
+<strong>再解釈（Hightouch, Part 1）</strong>: 現代の構成は raw（Fivetran などが同期したソースそのまま）→ staging（列名の整理・重複排除・JSON 展開・クレンジング、raw と 1:1）→ reporting models（結合してビジネスの問いに答える）の3層で、<strong>raw を直接使ってレポート層を作らない</strong>ことを原則に置く。バスマトリクスはこの3層目の設計図であって、staging の設計図ではない。命名規約もこの層に対応する（<code>stg_careervoice__reviews</code> / <code>int_review_member_link</code> / <code>fct_review</code>）。
+</div>
+
+<h2>5. 概念 → 論理 → 物理</h2>
+
+<div class="aside modern">
+<strong>再解釈（Joe Reis, Practical Data Modeling ch.14）</strong>: 概念モデル（CDM）は業務側と共有する「町の地図」で、名詞（エンティティ）と動詞（関係）だけを置き、実装の詳細を持たない。論理モデル（LDM）は属性・主キー・外部キー・多重度まで書くがストレージ技術は選ばない。物理モデルで初めて具体的な技術に落とす。Reis はこの順を飛ばすと<strong>「セマンティックな衝突」</strong>—— 業務と IT が用語の定義で合意できない状態 —— が起きると言い、CDM を最も価値のある成果物と位置づける。
+</div>
+
+<p>Kimball の4ステップは、この階層のうち概念と論理にまたがる。ステップ1が概念、ステップ2〜4が論理で、物理は4ステップの<strong>後</strong>に来る。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>段階（Reis）</th><th>問い</th><th>DWT の4ステップ（ch.1）</th><th>この題材での成果物</th></tr></thead>
+<tbody>
+<tr><td>概念（CDM）</td><td>この組織は何をしているか</td><td>① ビジネスプロセスを選ぶ</td><td>§4 のプロセス10行、バスマトリクスの行</td></tr>
+<tr><td>論理（LDM）</td><td>1行は何を意味するか / 何で切れるか / 何を測るか</td><td>② 粒度を宣言する<br>③ ディメンションを特定する<br>④ ファクトを特定する</td><td>「1行 = 1スカウトの送信→開封→返信→応募」、<code>dim_*</code> と <code>fct_*</code> の列</td></tr>
+<tr><td>物理（PDM）</td><td>BigQuery でどう置くか</td><td>（4ステップの外側）</td><td><code>partition_by</code> / <code>cluster_by</code>、dbt の materialization、増分戦略、contract</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="aside kimball">
+<strong>Kimball（Techniques, Four-Step Dimensional Design Process）</strong>: 4つの決定は「① プロセスを選ぶ → ② 粒度を宣言する → ③ ディメンションを特定する → ④ ファクトを特定する」。<strong>粒度は必ずディメンションとファクトより先に宣言する</strong>。候補になるディメンションもファクトも、粒度と整合していなければならないからだ。粒度宣言は設計に対する拘束力のある契約であり、異なる粒度は同じファクトテーブルに混ぜてはならない。
+</div>
+
+<p>各回がどの段階に属するかを先に置く。物理の回（07, 09）だけを読んでも設計は決まらない。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>回</th><th>概念</th><th>論理</th><th>物理</th><th>主な決定物</th></tr></thead>
+<tbody>
+<tr><td>00 題材と簡易データモデル</td><td>◎</td><td>—</td><td>—</td><td>プロセス一覧、固定判断</td></tr>
+<tr><td>01 粒度を宣言する</td><td>○</td><td>◎</td><td>—</td><td>粒度宣言文、バスマトリクス</td></tr>
+<tr><td>02 ファクトの3型とファクトレス</td><td>—</td><td>◎</td><td>○</td><td>ファクトの型、マイルストーン列</td></tr>
+<tr><td>03 ディメンションの設計</td><td>—</td><td>◎</td><td>○</td><td>サロゲートキー、<code>-1</code>、ジャンク/ミニ</td></tr>
+<tr><td>04 加法性と派生指標</td><td>—</td><td>◎</td><td>—</td><td>メジャーの持ち方（和と件数）</td></tr>
+<tr><td>05 履歴を持つ</td><td>—</td><td>◎</td><td>○</td><td>SCD 型、as-of join</td></tr>
+<tr><td>06 多対多・不揃い階層・異種ディメンション</td><td>—</td><td>◎</td><td>○</td><td>ブリッジ / ARRAY / supertype</td></tr>
+<tr><td>07 star か One Big Table か</td><td>—</td><td>○</td><td>◎</td><td>配布形式、パーティション/クラスタ</td></tr>
+<tr><td>08 コンフォームドとドリルアクロス</td><td>○</td><td>◎</td><td>—</td><td>共有ディメンション、集約の条件</td></tr>
+<tr><td>09 増分・遅延到着・冪等性</td><td>—</td><td>—</td><td>◎</td><td>増分戦略、ルックバック</td></tr>
+<tr><td>10 レイヤ・命名・契約・テスト・監査</td><td>—</td><td>○</td><td>◎</td><td>層と命名、テスト、contract</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>6. 判断基準: このシリーズで固定した設計判断</h2>
+
+<p>回をまたいで守る決定。以降の回はこの表を前提にし、覆すときは理由を明示する。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>論点</th><th>決定</th><th>理由</th><th>扱う回</th></tr></thead>
+<tbody>
+<tr><td>クチコミの匿名性</td><td><code>fct_review</code> は <code>member_key</code> を<strong>持たない</strong>。会員属性は投稿時点の <code>dim_member_profile_mini</code> 相当をジャンク化した <code>dim_review_attributes</code> に落とす。会員×クチコミの結合が要る分析は <code>int_review_member_link</code>（アクセス制限データセット）に隔離</td><td>公開分析からの個人特定リスク（少人数企業では属性で特定できる）</td><td>00, 01, 03</td></tr>
+<tr><td>企業属性の時点</td><td>ファクトには<strong>イベント時点</strong>の <code>company_key</code>（SCD2 版）を持つ。現在値で見たい場合は <code>dim_company</code> の <code>is_current</code> 版へ <code>company_id</code> で再結合</td><td>「投稿当時の規模」と「現在の規模」を両方答えられる</td><td>05</td></tr>
+<tr><td>集約テーブルの平均</td><td><code>avg_*</code> を持たず <code>sum_*</code> + <code>count</code> を持つ</td><td>再集約可能性</td><td>04, 08</td></tr>
+<tr><td>累積スナップショットの裏に原子ファクト</td><td><code>fct_application_pipeline</code> の裏に <code>fct_selection_event</code> を必ず置く</td><td>サマリーだけは危険（DT#77）</td><td>02</td></tr>
+<tr><td>未達マイルストーン</td><td><code>date_key = -1</code>、<code>dim_date</code> に <code>-1</code> 行（<code>full_date</code> = NULL, 表示名 <code>未到達</code>）</td><td>NULL 外部キー禁止（DT#43）</td><td>02, 03</td></tr>
+<tr><td>ディメンションの雪片化</td><td>しない（agency は <code>dim_agent</code> に平坦化、job_category も平坦化）</td><td>BigQuery の結合コストより可読性</td><td>03, 06</td></tr>
+<tr><td>増分の単位</td><td>パーティション単位の <code>insert_overwrite</code>、ルックバック 3 日</td><td>冪等性（Functional DE）</td><td>09</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>1行目だけが Kimball の原則と正面から衝突する。10 Rules の Rule #1 は「原子の詳細を入れよ」、Rule #5 は「外部キーを NULL にするな」と言うが、<code>fct_review</code> から <code>member_key</code> を落とすのは<strong>原子性を意図的に下げる</strong>判断だ。理由は性能でも簡潔さでもなく、少人数企業では「30代・男性・在籍3〜5年・エンジニア」だけで投稿者が特定できてしまう点にある。原子ファクトが要る分析は <code>int_review_member_link</code> に隔離し、公開マートには出さない。この衝突の扱いは 01回と 03回で詰める。</p>
+
+<h2>7. 演習</h2>
+
+<h3>(a) プロセスの棚卸し</h3>
+
+<p>自分の担当システムでビジネスプロセスを5つ挙げよ。挙げたそれぞれについて、(1) 部門名・チーム名・レポート名になっていないか、(2) ソース側でそれを生む具体的な操作（どのテーブルへの insert / update）を1つ書けるか、(3) 業務側が口にするパフォーマンス指標を1つ書けるか、を確認する。3つとも満たせないものはプロセスではない。</p>
+
+<details>
+<summary>解答例（CareerVoice）</summary>
+<div class="table-wrap">
+<table>
+<thead><tr><th>プロセス</th><th>ソース側の操作</th><th>業務側の指標</th><th>部門名になっていないか</th></tr></thead>
+<tbody>
+<tr><td>スカウト送信</td><td><code>scouts</code> へ insert</td><td>送信数、枠消化率</td><td>OK（「エージェント事業部」は不可）</td></tr>
+<tr><td>スカウト反応</td><td><code>scouts.opened_at</code> / <code>replied_at</code> を update</td><td>開封率、返信率</td><td>OK</td></tr>
+<tr><td>クチコミ審査</td><td><code>review_moderation_events</code> へ insert</td><td>審査リードタイム、却下率</td><td>OK（「モデレーションチーム」は不可）</td></tr>
+<tr><td>選考イベント</td><td><code>selection_events</code> へ insert</td><td>ステージ間歩留まり</td><td>OK</td></tr>
+<tr><td>契約・枠消化</td><td><code>contracts</code> を月次で評価</td><td>MRR、枠消化率</td><td>OK（「営業ダッシュボード」は不可）</td></tr>
+</tbody>
+</table>
+</div>
+<p>落とした候補: 「カスタマーサクセス」（部門名）、「月次経営レポート」（レポート名）、「会員」（プロセスではなくエンティティ＝ディメンション候補）。<code>scouts</code> の insert と update を別プロセスに分けたのは、前者がトランザクション、後者が累積スナップショットになり<strong>粒度も更新頻度も違う</strong>ため（<code>fct_scout</code> と <code>fct_scout_funnel</code>）。</p>
+</details>
+
+<h3>(b) <code>reviews.status</code> の遷移を分類する</h3>
+
+<p><code>reviews.status</code> は <code>submitted</code> / <code>screening</code> / <code>published</code> / <code>rejected</code> の4値をとる。遷移を列挙し、それぞれの情報がファクト側（メジャーまたは日付キー）に行くのか、ディメンション側に行くのかを分類せよ。サンプル値は <code>R001</code>（<code>M001</code> → <code>C002</code>、2026-03-10 投稿、03-12 公開）と <code>R002</code>（<code>M002</code> → <code>C001</code>、2026-04-02 投稿、却下 <code>defamation</code>）。</p>
+
+<details>
+<summary>解答例</summary>
+<div class="table-wrap">
+<table>
+<thead><tr><th>遷移 / 情報</th><th>行き先</th><th>具体</th><th>理由</th></tr></thead>
+<tbody>
+<tr><td><code>submitted</code> → <code>screening</code></td><td>ファクト（日付キー）</td><td><code>fct_review_moderation.screening_date_key</code></td><td>時点を持つ測定イベント。マイルストーン列になる</td></tr>
+<tr><td><code>screening</code> → <code>published</code></td><td>ファクト（日付キー + メジャー）</td><td><code>published_date_key</code>, <code>is_published</code>(0/1)</td><td>同上。到達したか否かは 0/1 の加法メジャー</td></tr>
+<tr><td><code>screening</code> → <code>rejected</code></td><td>ファクト（日付キー + メジャー）</td><td><code>rejected_date_key</code>, <code>is_rejected</code></td><td>同上</td></tr>
+<tr><td>遷移の所要時間</td><td>ファクト（メジャー）</td><td><code>hours_to_screening</code>, <code>hours_to_decision</code></td><td>数値の測定値。粒度（1クチコミの審査ライフサイクル）と整合する</td></tr>
+<tr><td>差し戻し回数</td><td>ファクト（メジャー）</td><td><code>moderation_rounds</code></td><td>加法。原子行は <code>review_moderation_events</code> 側に残る</td></tr>
+<tr><td>却下理由 <code>reason_code</code></td><td><strong>ディメンション</strong></td><td><code>dim_moderation_reason</code>（<code>reason_name</code>, <code>severity</code>）</td><td>フィルタ・グループ化に使う記述的な文脈。コードのままファクトに置かない（10 Rules #7）</td></tr>
+<tr><td>投稿時の会員属性<br>(<code>employment_status</code> ほか)</td><td><strong>ディメンション</strong></td><td><code>dim_review_attributes</code>（2×3×5 = 30行）</td><td>低カーディナリティの組合せ。ジャンクディメンションにまとめる</td></tr>
+<tr><td>現在の <code>status</code> そのもの</td><td>どちらでもない</td><td>—</td><td>4つの日付キーと <code>is_published</code> / <code>is_rejected</code> で完全に表現できる。状態列を別に持つと二重管理になる</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>R001</code> は <code>submitted_date_key</code>=20260310, <code>published_date_key</code>=20260312, <code>rejected_date_key</code>=<code>-1</code>, <code>moderation_reason_key</code>=<code>-1</code>, <code>is_published</code>=1。<code>R002</code> は <code>rejected_date_key</code> に却下日、<code>published_date_key</code>=<code>-1</code>, <code>moderation_reason_key</code>=<code>defamation</code> の代理キー、<code>is_rejected</code>=1。<strong>未達マイルストーンを NULL ではなく <code>-1</code> にする</strong>のは §6 の固定判断（DT#43）で、<code>dim_date</code> 側に <code>full_date</code> = NULL・表示名「未到達」の行を1本置く。</p>
+<p>判断の分かれ目は「時点か、記述か」の一点。時点を持つものはファクト、フィルタ軸になるものはディメンション。<code>status</code> のような<strong>状態そのものはどちらでもない</strong> — 累積スナップショットでは到達済みマイルストーンの集合が状態を含意する。</p>
+</details>
+
+<h2>8. 参考: 手元の基盤ではどうか</h2>
+
+<p><code>dbt_logs_analysis</code> はマートを<strong>データソース起点</strong>で切っている。<code>mart_url_performance</code> はビジネスプロセス名ではなくソーステーブル（アクセスログ）に対する集計軸の名前で、<code>mart_error_analysis</code> も同じソースを別の切り口で見ているだけだ。DT#3 の基準を当てれば、行が「プロセス」ではなく「レポートの見出し」になっている状態にあたる。</p>
+
+<p><code>news_pipeline</code> は逆で、収集（<code>raw_articles</code>）・要約と採点（<code>summaries</code>）・通知（<code>notified_at</code>）・お気に入り（<code>favorites</code>）がそれぞれ別のプロセスに対応し、自然にプロセス起点になっている。設計意図というより、Cloud Run のエンドポイントを <code>/collect</code> と <code>/notify</code> に分けた結果としてそうなった。<strong>アプリの処理境界がプロセス境界と一致していると、マートの行も自然に揃う。</strong></p>
+
+<p>チュートリアルの種: <code>dbt_logs_analysis</code> のアクセスログを「ページ表示」という1プロセスとして粒度宣言し直し、<code>mart_url_performance</code> をその上の集約として置き換えると、01回の粒度テストと 08回のドリルアクロスがそのまま試せる。</p>
+
+<h2>参照文献</h2>
+
+<ul class="ref">
+<li>Ralph Kimball, Margy Ross, <em>The Data Warehouse Toolkit, 3rd ed.</em> (Wiley, 2013) ch.1（4ステップ設計）, ch.18（設計プロセス） — <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/data-warehouse-dw-toolkit/">kimballgroup.com</a></li>
+<li>Kimball Group, <em>Kimball Dimensional Modeling Techniques</em> (2013) — <a href="https://www.kimballgroup.com/wp-content/uploads/2013/08/2013.09-Kimball-Dimensional-Modeling-Techniques11.pdf">PDF</a></li>
+<li>Ralph Kimball, <em>The 10 Essential Rules of Dimensional Modeling</em> (2009) — <a href="https://www.kimballgroup.com/2009/05/the-10-essential-rules-of-dimensional-modeling/">kimballgroup.com</a></li>
+<li>Ralph Kimball, <em>A Dimensional Modeling Manifesto</em> (1997) — <a href="https://www.kimballgroup.com/1997/08/a-dimensional-modeling-manifesto/">kimballgroup.com</a></li>
+<li>Design Tip #3, <em>Focus On Business Process, Not Business Departments!</em> — <a href="https://decisionworks.com/2000/01/design-tip-3-focus-on-business-process-not-business-departments/">decisionworks.com</a></li>
+<li>Design Tip #43, <em>Dealing With Nulls In The Dimensional Model</em> — <a href="https://www.kimballgroup.com/2003/02/design-tip-43-dealing-with-nulls-in-the-dimensional-model/">kimballgroup.com</a></li>
+<li>Design Tip #77, <em>Warning: Summary Data Alone Is Hazardous To Your Health</em> — <a href="https://decisionworks.com/2006/03/design-tip-77-warning-summary-data-alone-is-hazardous-to-your-health/">decisionworks.com</a></li>
+<li>Joe Reis, <em>Practical Data Modeling</em> ch.14: The Levels of Data Modeling — <a href="https://practicaldatamodeling.substack.com/p/ch-14-the-levels-of-data-modeling">practicaldatamodeling.substack.com</a></li>
+<li>Hightouch, <em>A Guide to Modern Data Warehouse Modelling — Part 1</em> — <a href="https://hightouch.com/blog/data-warehouse-modelling-part-1">hightouch.com</a></li>
+</ul>
+
+</body>
+</html>
