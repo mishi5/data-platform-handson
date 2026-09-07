@@ -10,3 +10,6 @@
 ## 進捗
 - 2026-09-07 batch1 dispatch: 00, 01, 02, 03 の執筆エージェント（opus）を並列起動
 - 01 執筆完了（DONE_WITH_CONCERNS）。Ruling: report の提案 1〜3 を正典に採用（SCD2 列名の統一 / 全ファクト audit_key / パーティション用 `<role>_date` 列）— 以降の回の一貫性のため — 誤りなら 00/02/03 との差異が横断レビューで出る。提案 4（`fct_review_vote`）は演習内に隔離のまま、正典に入れない
+- batch2 dispatch: 04, 05, 06, 07 の執筆エージェント（opus）を並列起動。01 のレビュー（opus）起動
+- 00 執筆完了（DONE, svg 0 errors）。00 のレビュー（opus）起動
+- 03 執筆完了（DONE_WITH_CONCERNS）。Ruling: `dim_date` の役割数はブリーフの「7」ではなく正典 FK 列どおり「8（7マイルストーン + closed）」を正とする／`dim_date.date_label` を正典に追加／STRING キーの未知値は `'-1'` と正典に明記 — 誤りなら 02/05 との表記差が横断レビューで出る

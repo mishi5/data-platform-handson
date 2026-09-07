@@ -85,7 +85,7 @@ BigQuery には Datastream（CDC）で `src_careervoice` データセットに�
 
 命名: staging `stg_careervoice__<table>`、intermediate `int_<entity>_<verb>`、marts `dim_*` / `fct_*` / `agg_*` / `br_*`（ブリッジ）、dbt snapshot `snap_*`。
 サロゲートキーは `<entity>_key`（INT64 ハッシュではなく `FARM_FINGERPRINT` 由来の INT64、または dbt_utils `generate_surrogate_key` の STRING — **03回で判断を扱う。それ以外の回は `_key` と書くだけで型に踏み込まない**）。
-自然キーはソースの `<entity>_id` をそのまま持つ。日付キーは `date_key` INT64 `YYYYMMDD`（DT#5）。未知/未達は `-1`（DT#43）。
+自然キーはソースの `<entity>_id` をそのまま持つ。日付キーは `date_key` INT64 `YYYYMMDD`（DT#5）。未知/未達は `-1`（DT#43。キーが STRING 型のディメンションでは `'-1'`）。
 SCD2 のディメンション（`dim_member` / `dim_company` / `dim_agent` / `dim_scout_sender`）は一律に `<entity>_key`, `valid_from`(TIMESTAMP), `valid_to`(TIMESTAMP, 現行行は `9999-12-31`), `is_current`(BOOL) を持つ。
 **全ファクトは `audit_key` を持つ**（下表の FK 列では省略している）。
 パーティション用に、ファクトは主要な日付キーと並べて DATE 型の `<role>_date`（例: `sent_date_key` と `sent_date`）を持つ。`partition_by` はこの DATE 列に張る。
@@ -94,7 +94,7 @@ SCD2 のディメンション（`dim_member` / `dim_company` / `dim_agent` / `di
 
 | テーブル | 自然キー | SCD | 主な属性 | 備考 |
 |---|---|---|---|---|
-| `dim_date` | `date_key` | 0 | `full_date`, `year`, `quarter`, `month`, `iso_week`, `day_of_week`, `is_holiday_jp`, `fiscal_year`(4月始まり) | ロールプレイングで `submitted_date`, `published_date` 等に |
+| `dim_date` | `date_key` | 0 | `full_date`, `year`, `quarter`, `month`, `iso_week`, `day_of_week`, `is_holiday_jp`, `fiscal_year`(4月始まり), `date_label`(表示名。`-1` 行は `未到達`) | ロールプレイングで `submitted_date`, `published_date` 等に |
 | `dim_member` | `member_id` | **2** | `birth_year`, `gender`, `prefecture`, `region`, `current_company_id`, `current_job_category`, `registered_date` | `member_key`, `valid_from`, `valid_to`, `is_current` |
 | `dim_member_profile_mini` | (`annual_income_band`,`job_change_intent`) | — | 5 × 3 = 15行 | **ミニディメンション**（DT#127）。速く変わる属性を `dim_member` から分離 |
 | `dim_company` | `company_id` | **2** | `name`(Type1で上書き), `industry`, `sector`, `employee_size_band`, `listing_status`, `hq_prefecture`, `parent_company_id`, `founded_year` | **Type 6 相当**: `name` は Type1、他は Type2 |
