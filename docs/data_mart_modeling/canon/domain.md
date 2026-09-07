@@ -83,7 +83,7 @@ BigQuery には Datastream（CDC）で `src_careervoice` データセットに�
 
 ## 4. DWH 側の正典（名前・キー・SCD）
 
-命名: staging `stg_careervoice__<table>`、intermediate `int_<entity>_<verb>`、marts `dim_*` / `fct_*` / `agg_*` / `br_*`（ブリッジ）、dbt snapshot `snap_*`。
+命名: staging `stg_careervoice__<table>`、intermediate `int_<entity>_<verb>`、marts `dim_*` / `fct_*` / `agg_*` / `br_*`（ブリッジ）/ `obt_*`（結合済み配布テーブル。star の下流に置く。正典: `obt_scout_funnel`）、dbt snapshot `snap_*`。
 サロゲートキーは `<entity>_key`（INT64 ハッシュではなく `FARM_FINGERPRINT` 由来の INT64、または dbt_utils `generate_surrogate_key` の STRING — **03回で判断を扱う。それ以外の回は `_key` と書くだけで型に踏み込まない**）。
 自然キーはソースの `<entity>_id` をそのまま持つ。日付キーは `date_key` INT64 `YYYYMMDD`（DT#5）。未知/未達は `-1`（DT#43。キーが STRING 型のディメンションでは `'-1'`）。
 SCD2 のディメンション（`dim_member` / `dim_company` / `dim_agent` / `dim_scout_sender`）は一律に `<entity>_key`, `valid_from`(TIMESTAMP), `valid_to`(TIMESTAMP, 現行行は `9999-12-31`), `is_current`(BOOL) を持つ。
@@ -125,8 +125,8 @@ SCD2 のディメンション（`dim_member` / `dim_company` / `dim_agent` / `di
 | `fct_selection_event` | `event_date_key`, `application_key`(退化でよい), `member_key`, `company_key`, `job_posting_key`, `agent_key`, `job_category_key`, `channel_key` | `event_count`(=1) | `application_id`, `event_id`, `stage` | 原子粒度（DT#77）。累積の裏付け |
 | `fct_application_pipeline` | `applied_date_key`, `document_date_key`, `first_interview_date_key`, `final_interview_date_key`, `offer_date_key`, `accepted_date_key`, `hired_date_key`, `closed_date_key`, `member_key`, `member_profile_mini_key`(応募時点), `company_key`, `job_posting_key`, `agent_key`, `job_category_key`, `channel_key` | `days_applied_to_offer`, `days_offer_to_hired`, `current_stage`(初期値 `applied`、以降は `selection_events.stage` の値), `is_hired`, `is_rejected`, `is_withdrawn` | `application_id`, `scout_id` | 累積スナップショット |
 | `fct_contract_monthly` | `month_date_key`(月初), `company_key`, `contract_plan_key` | `scout_quota`, `scouts_sent`, `scouts_remaining`, `monthly_fee`, `is_active` | `contract_id` | **半加法**（枠残高は月をまたいで足せない、企業をまたいでは足せる） |
-| `fct_placement` | `hired_date_key`, `member_key`, `company_key`, `job_posting_key`, `agency_key`, `agent_key`(`applications.scout_id`→`scouts.sender_agent_id` で解決、無ければ -1), `job_category_key` | `annual_income`, `fee_rate`, `fee_amount` | `placement_id`, `application_id` | `fee_amount` 加法、`fee_rate` 非加法 |
-| `agg_company_rating_daily` | `date_key`, `company_key` | `review_count`, `sum_score_*`(8軸), `sum_overall_score` | | 04回: **平均を持たず和と件数を持つ** |
+| `fct_placement` | `hired_date_key`, `member_key`, `company_key`, `job_posting_key`, `agency_key`, `agent_key`(`applications.scout_id`→`scouts.sender_agent_id` で解決、無ければ -1), `job_category_key` | `annual_income`, `fee_rate`, `fee_amount`(= `annual_income` × `fee_rate`) | `placement_id`, `application_id` | `fee_amount` 加法、`fee_rate` 非加法（加重平均は `SUM(fee_amount)/SUM(annual_income)`） |
+| `agg_company_rating_daily` | `date_key`, `rating_date`(DATE, パーティション列), `company_key` | `review_count`, `sum_score_*`(8軸), `sum_overall_score` | | 04回: **平均を持たず和と件数を持つ** |
 | `agg_company_entity` | `company_key` | `review_count_total`, `avg_overall_score_90d`, `open_postings`, `scouts_sent_30d`, `applications_30d`, `hires_90d`, `mrr` | | 08回: ECM 風のエンティティ集約 |
 
 ## 5. サンプル値（全回で共通に使う）

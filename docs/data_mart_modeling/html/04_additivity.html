@@ -1,0 +1,697 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>加法性と派生指標 — データマート設計 04</title>
+<style>
+  :root { --bg:#ffffff; --fg:#1a1a1a; --muted:#666; --border:#e0e0e0;
+          --accent:#0b6bcb; --card:#f7f8fa; --code:#f3f4f6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171a; --fg:#e8e8e8; --muted:#9aa0a6; --border:#2c3136;
+            --accent:#6aa9ff; --card:#1b1f23; --code:#1f2429; }
+  }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+    line-height:1.8; max-width:900px; margin:0 auto; padding:24px 20px 64px; }
+  h1 { font-size:1.6rem; margin:0 0 4px; line-height:1.4; }
+  h2 { font-size:1.2rem; border-bottom:1px solid var(--border); padding-bottom:6px; margin:40px 0 16px; }
+  h3 { font-size:1.02rem; margin:24px 0 8px; }
+  .meta { color:var(--muted); font-size:.85rem; margin:0 0 24px; }
+  a { color:var(--accent); }
+  table { border-collapse:collapse; width:100%; margin:12px 0 20px; font-size:.9rem; }
+  th, td { border:1px solid var(--border); padding:6px 10px; vertical-align:top; text-align:left; }
+  th { background:var(--card); }
+  .table-wrap { overflow-x:auto; }
+  code { background:var(--code); border:1px solid var(--border); border-radius:4px; padding:1px 5px; font-size:.85em; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:8px; padding:14px 16px;
+        overflow-x:auto; font-size:.84rem; line-height:1.55; }
+  pre code { background:none; border:none; padding:0; font-size:inherit; }
+  .aside { border-left:3px solid var(--accent); background:var(--card); padding:10px 16px; margin:16px 0; font-size:.92rem; }
+  .kimball { border-left-color:#8a6d3b; }
+  .modern { border-left-color:#3b8a5a; }
+  details { border:1px solid var(--border); border-radius:8px; padding:8px 14px; margin:10px 0; background:var(--card); }
+  summary { cursor:pointer; font-weight:600; }
+  svg { max-width:100%; height:auto; display:block; margin:20px 0; }
+  ul, ol { padding-left:1.3em; }
+  .ref li { font-size:.88rem; }
+</style>
+</head>
+<body>
+
+<h1>加法性と派生指標</h1>
+<p class="meta">データマート設計 04 ／ 参照: DWT ch.1, ch.4（加法・半加法・非加法）, Design Tip #77 ／ 再解釈: MetricFlow（ratio metric）</p>
+
+<h2>1. この回が決めること</h2>
+
+<p>決めるのは1つ。<strong>そのメジャーは再集約できるか</strong>。日次の行を月次に、企業の行を企業グループに足し上げたとき、同じ列に同じ意味が残るかどうかで、マートに持つ形が決まる。</p>
+
+<p>結論は固定判断としてシリーズ全体に効く。<strong>率・平均・ユニーク数はマートに持たず、分子・分母・和・件数を持つ</strong>。半加法メジャー（残高・在庫）は「どの軸で足せないか」をモデル側で宣言する。</p>
+
+<h3>メジャーの3分類（DWT ch.4）</h3>
+
+<div class="table-wrap">
+<table>
+<tr><th>分類</th><th>定義</th><th>足せる軸</th><th>集約表に持つ形</th></tr>
+<tr>
+  <td>加法（additive）</td>
+  <td>ファクトに紐づく<strong>すべての</strong>ディメンションで合計できる</td>
+  <td>全部</td>
+  <td>そのまま <code>SUM</code></td>
+</tr>
+<tr>
+  <td>半加法（semi-additive）</td>
+  <td>一部の軸では合計できるが、少なくとも1軸では合計が無意味。残高・在庫・枠残が典型で、足せないのはたいてい時間軸</td>
+  <td>時間以外</td>
+  <td>値はそのまま。<strong>時間で足すなという宣言</strong>を付ける。時間方向は期末値か期中平均で潰す</td>
+</tr>
+<tr>
+  <td>非加法（non-additive）</td>
+  <td>どの軸でも合計が無意味。率・平均・比・パーセンタイル・ユニーク数</td>
+  <td>なし</td>
+  <td><strong>持たない。</strong>加法な構成要素（分子・分母、和・件数）に分解して持つ</td>
+</tr>
+</table>
+</div>
+
+<h3>CareerVoice のメジャー分類</h3>
+
+<div class="table-wrap">
+<table>
+<tr><th>メジャー</th><th>ファクト</th><th>分類</th><th>マートに持つ形</th></tr>
+<tr><td><code>review_count</code></td><td><code>fct_review</code></td><td>加法</td><td>そのまま</td></tr>
+<tr><td><code>score_*</code>（8軸）, <code>overall_score</code></td><td><code>fct_review</code></td><td>非加法（平均のみ意味がある）</td><td>原子は素の値。集約では <code>sum_score_*</code> + <code>review_count</code></td></tr>
+<tr><td><code>avg_overall_score</code></td><td>—</td><td>非加法</td><td><strong>持たない</strong>（§2a）</td></tr>
+<tr><td><code>scouts_remaining</code>, <code>scout_quota</code></td><td><code>fct_contract_monthly</code></td><td>半加法（企業 ○ / 時間 ✗）</td><td>月次の値のまま。時間方向は期末値（§5）</td></tr>
+<tr><td><code>monthly_fee</code></td><td><code>fct_contract_monthly</code></td><td>加法（時間で足すと期間売上）</td><td>そのまま</td></tr>
+<tr><td><code>is_active</code></td><td><code>fct_contract_monthly</code></td><td>半加法</td><td>時間で足すと「延べ稼働月数」という<strong>別のメジャー</strong>になる</td></tr>
+<tr><td><code>is_open</code></td><td><code>fct_job_posting_daily</code></td><td>半加法（求人 ○ / 時間 ✗）</td><td>時間で足すと「延べ掲載日数」（§7b）</td></tr>
+<tr><td><code>application_count_cum</code>, <code>scout_count_cum</code></td><td><code>fct_job_posting_daily</code></td><td>半加法（累積値は時間で足せない）</td><td>同日内は求人をまたいで足せる</td></tr>
+<tr><td><code>fee_amount</code>, <code>annual_income</code></td><td><code>fct_placement</code></td><td>加法</td><td>そのまま</td></tr>
+<tr><td><code>fee_rate</code></td><td><code>fct_placement</code></td><td>非加法（比率）</td><td>分子 <code>fee_amount</code> と分母 <code>annual_income</code> を持ち、BI で割る</td></tr>
+<tr><td><code>hours_to_reply</code>, <code>days_applied_to_offer</code></td><td><code>fct_scout_funnel</code>, <code>fct_application_pipeline</code></td><td>非加法（平均のみ）</td><td>原子は素の値。集約では和と件数</td></tr>
+<tr><td><code>is_opened</code>, <code>is_replied</code>, <code>is_applied</code></td><td><code>fct_scout_funnel</code></td><td>加法（0/1 の件数）</td><td>そのまま。率はここから <code>SUM/SUM</code></td></tr>
+<tr><td><code>COUNT(DISTINCT member_key)</code></td><td>—</td><td>非加法かつ分解不能</td><td><strong>持たない</strong>。スケッチ（<code>HLL_COUNT.INIT</code>）か原子から都度計算（§2c）</td></tr>
+</table>
+</div>
+
+<p><code>agg_company_entity.avg_overall_score_90d</code> だけは平均を列で持つ。あれは1企業1行の<strong>終端の表示用</strong>で、さらに足し上げる前提が無いという別の型（08回）。再集約される集約表には平均を置かない、という本回の判断とは矛盾しない。</p>
+
+<h2>2. どこで壊れるか</h2>
+
+<h3>(a) 平均の平均 — <code>agg_company_rating_daily</code> に <code>avg_overall_score</code> を持つ</h3>
+
+<p><code>C002</code>（ネクスト技研）の3日分。日次の集約表が件数と一緒に平均も持っていて、月次レポートがその平均をさらに <code>AVG</code> する。</p>
+
+<div class="table-wrap">
+<table>
+<tr><th><code>date_key</code></th><th><code>review_count</code></th><th><code>sum_overall_score</code></th><th>日次の <code>avg_overall_score</code></th></tr>
+<tr><td>20260310</td><td>1</td><td>3.5</td><td>3.5</td></tr>
+<tr><td>20260311</td><td>1</td><td>5.0</td><td>5.0</td></tr>
+<tr><td>20260312</td><td>10</td><td>25.0</td><td>2.5</td></tr>
+<tr><td><strong>合計</strong></td><td><strong>12</strong></td><td><strong>33.5</strong></td><td>—</td></tr>
+</table>
+</div>
+
+<ul>
+<li>平均の平均: <code>(3.5 + 5.0 + 2.5) / 3 = 11.0 / 3 = 3.67</code></li>
+<li>正しい平均: <code>33.5 / 12 = 2.79</code></li>
+</ul>
+
+<p><strong>0.88 ポイントずれる。</strong>ずれの向きは常に「件数の少ない日を過大評価する側」。3/12 に炎上して 10 件の低評価が入ったのに、レポートは 3.67 という良い値を返す。この表が四半期に上がるとさらに 1 段平均され、ずれは累積する。</p>
+
+<h3>(b) 半加法を足す — <code>scouts_remaining</code> を四半期で <code>SUM</code></h3>
+
+<p>契約 <code>K001</code>（<code>C001</code> アオゾラ商事、<code>premium</code>、枠 200/月）。<code>fct_contract_monthly</code> は 1契約 × 1月の定期スナップショットなので、行は素直に3行ある。</p>
+
+<div class="table-wrap">
+<table>
+<tr><th><code>month_date_key</code></th><th><code>scout_quota</code></th><th><code>scouts_sent</code></th><th><code>scouts_remaining</code></th></tr>
+<tr><td>20260101</td><td>200</td><td>20</td><td>180</td></tr>
+<tr><td>20260201</td><td>200</td><td>60</td><td>140</td></tr>
+<tr><td>20260301</td><td>200</td><td>80</td><td>120</td></tr>
+<tr><td><strong><code>SUM</code></strong></td><td><strong>600</strong></td><td><strong>160</strong></td><td><strong>440</strong></td></tr>
+</table>
+</div>
+
+<p><code>SUM(scouts_sent) = 160</code> は正しい（1〜3月に送った総数）。<code>SUM(scouts_remaining) = 440</code> は<strong>存在しない枠</strong>で、上限まで積んでも <code>200 × 3 = 600</code> にしかならない量を「残枠」として報告している。実在するのは 3月末の 120 だけ。</p>
+
+<p>企業軸では足せる。<code>C001</code> と <code>C003</code> の同月の残枠を足した「グループ全体の残枠」は意味がある。<strong>足せない軸が時間だけ</strong>、というのが半加法の定義そのもの。</p>
+
+<h3>(c) ユニーク数を足す — 日次の <code>COUNT(DISTINCT member_key)</code></h3>
+
+<p><code>fct_scout</code> から「日次のスカウト受信ユニーク会員数」を集約表に焼き、週次レポートがそれを <code>SUM</code> する。<code>M001</code> と <code>M003</code> が 6/20・6/21・6/22 の各日にスカウトを受けたとする。</p>
+
+<ul>
+<li>日次のユニーク数: 2 / 2 / 2 → 週次に足すと <strong>6</strong></li>
+<li>3日間の実ユニーク数: <strong>2</strong>（<code>M001</code>, <code>M003</code>）</li>
+</ul>
+
+<p><strong>3倍の過大計上。</strong>(a) と違うのは、和と件数に分解しても直らないこと。ユニーク数は加法な構成要素を持たないので、<strong>集計済みの数値からは復元できない</strong>。原子ファクトを残すか、集約可能なスケッチ（HyperLogLog）を持つかの二択になる。</p>
+
+<svg id="dg-avg" viewBox="0 0 800 392" width="100%"
+     style="max-width:800px;height:auto;display:block"
+     xmlns="http://www.w3.org/2000/svg"
+     role="img" aria-labelledby="dg-avg-t dg-avg-d">
+  <title id="dg-avg-t">平均の平均 vs 和と件数</title>
+  <desc id="dg-avg-d">同じ12件のクチコミでも、日次に平均を持って月次で平均し直すと3.67、日次に和と件数を持って月次で和どうしを割ると2.79になる。</desc>
+  <style>
+    #dg-avg{
+      --paper:#fbfbfa; --ink:#22262e; --muted:#5b6472; --soft:#828b9a;
+      --rule:rgba(34,38,46,.14); --accent:#c8571d; --tint:rgba(200,87,29,.10);
+      --sans:system-ui,-apple-system,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+      --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    }
+    @media (prefers-color-scheme:dark){
+      #dg-avg{--paper:#1a1d23;--ink:#e9ecf1;--muted:#a6afbd;--soft:#7f8898;
+            --rule:rgba(233,236,241,.18);--accent:#f0894f;--tint:rgba(240,137,79,.14);}
+    }
+    :root[data-theme="dark"] #dg-avg{--paper:#1a1d23;--ink:#e9ecf1;--muted:#a6afbd;--soft:#7f8898;
+            --rule:rgba(233,236,241,.18);--accent:#f0894f;--tint:rgba(240,137,79,.14);}
+    :root[data-theme="light"] #dg-avg{--paper:#fbfbfa;--ink:#22262e;--muted:#5b6472;--soft:#828b9a;
+            --rule:rgba(34,38,46,.14);--accent:#c8571d;--tint:rgba(200,87,29,.10);}
+    #dg-avg .bg{fill:var(--paper)}
+    #dg-avg .box-soft{fill:var(--paper);stroke:var(--rule);stroke-width:1}
+    #dg-avg .box-focal{fill:var(--tint);stroke:var(--accent);stroke-width:1.4}
+    #dg-avg .zone{fill:none;stroke:var(--rule);stroke-width:1;stroke-dasharray:4 3}
+    #dg-avg .name{fill:var(--ink);font:600 14px var(--sans)}
+    #dg-avg .sub{fill:var(--muted);font:400 11px var(--mono)}
+    #dg-avg .subj{fill:var(--muted);font:400 11px var(--sans)}
+    #dg-avg .tag{fill:var(--soft);font:500 10px var(--mono);letter-spacing:.12em}
+    #dg-avg .tag-accent{fill:var(--accent);font:500 10px var(--mono);letter-spacing:.12em}
+    #dg-avg .note{fill:var(--muted);font:400 12px var(--sans)}
+    #dg-avg .lead{fill:none;stroke:var(--muted);stroke-width:1.4;marker-end:url(#dg-avg-a)}
+    #dg-avg .lead-focal{fill:none;stroke:var(--accent);stroke-width:1.8;marker-end:url(#dg-avg-af)}
+    #dg-avg .mask{fill:var(--paper)}
+    #dg-avg .mk{fill:var(--muted)} #dg-avg .mkf{fill:var(--accent)}
+  </style>
+  <defs>
+    <marker id="dg-avg-a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <path class="mk" d="M0,0 L9,3.5 L0,7 Z"/></marker>
+    <marker id="dg-avg-af" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <path class="mkf" d="M0,0 L9,3.5 L0,7 Z"/></marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="800" height="392"/>
+
+  <rect class="zone" x="32" y="56" width="336" height="288" rx="8"/>
+  <rect class="mask" x="48" y="48" width="152" height="16"/>
+  <text class="tag" x="52" y="59">A - AVG OF AVG</text>
+
+  <rect class="zone" x="432" y="56" width="336" height="288" rx="8"/>
+  <rect class="mask" x="448" y="48" width="184" height="16"/>
+  <text class="tag" x="452" y="59">B - SUM AND COUNT</text>
+
+  <line class="lead" x1="200" y1="152" x2="200" y2="184"/>
+  <line class="lead" x1="200" y1="248" x2="200" y2="280"/>
+  <line class="lead" x1="600" y1="152" x2="600" y2="184"/>
+  <line class="lead-focal" x1="600" y1="248" x2="600" y2="280"/>
+
+  <rect class="box-soft" x="64" y="88" width="272" height="64" rx="6"/>
+  <text class="name" x="200" y="110" text-anchor="middle">日次に平均を持つ</text>
+  <text class="sub" x="200" y="128" text-anchor="middle">avg_overall_score</text>
+  <text class="sub" x="200" y="144" text-anchor="middle">3.5 / 5.0 / 2.5</text>
+
+  <rect class="box-soft" x="64" y="184" width="272" height="64" rx="6"/>
+  <text class="name" x="200" y="206" text-anchor="middle">月次で AVG し直す</text>
+  <text class="sub" x="200" y="224" text-anchor="middle">AVG(avg_overall_score)</text>
+  <text class="subj" x="200" y="240" text-anchor="middle">件数 1 / 1 / 10 は消える</text>
+
+  <rect class="box-soft" x="64" y="280" width="272" height="56" rx="6"/>
+  <text class="name" x="200" y="306" text-anchor="middle">月次平均 3.67</text>
+  <text class="sub" x="200" y="324" text-anchor="middle">11.0 / 3</text>
+  <text class="tag" x="336" y="272" text-anchor="end">UNWEIGHTED</text>
+
+  <rect class="box-soft" x="464" y="88" width="272" height="64" rx="6"/>
+  <text class="name" x="600" y="110" text-anchor="middle">日次に和と件数を持つ</text>
+  <text class="sub" x="600" y="128" text-anchor="middle">sum_overall_score / review_count</text>
+  <text class="sub" x="600" y="144" text-anchor="middle">3.5 / 5.0 / 25.0 - 1 / 1 / 10</text>
+
+  <rect class="box-soft" x="464" y="184" width="272" height="64" rx="6"/>
+  <text class="name" x="600" y="206" text-anchor="middle">月次で SUM / SUM</text>
+  <text class="sub" x="600" y="224" text-anchor="middle">SUM(sum_overall_score)</text>
+  <text class="sub" x="600" y="240" text-anchor="middle">/ SUM(review_count)</text>
+
+  <rect class="box-focal" x="464" y="280" width="272" height="56" rx="6"/>
+  <text class="name" x="600" y="306" text-anchor="middle">月次平均 2.79</text>
+  <text class="sub" x="600" y="324" text-anchor="middle">33.5 / 12</text>
+  <text class="tag-accent" x="736" y="272" text-anchor="end">WEIGHTED</text>
+
+  <text class="note" x="32" y="372">同じ 12 件のクチコミ。件数の重みを捨てると 0.88 ポイント高く出る。</text>
+</svg>
+
+<h2>3. Kimball の原則</h2>
+
+<div class="table-wrap">
+<table>
+<tr><th>技法</th><th>定義</th><th>使う条件</th></tr>
+<tr>
+  <td>加法・半加法・非加法の分類（DWT ch.4）</td>
+  <td>ファクトの数値メジャーは3種に分かれる。全軸で足せる／一部の軸だけ足せる／どの軸でも足せない</td>
+  <td>ファクト設計のたびに全メジャーへ適用する。粒度宣言（01回）の直後の作業</td>
+</tr>
+<tr>
+  <td>非加法メジャーの分解</td>
+  <td>非加法メジャーは、可能な限り<strong>加法な構成要素</strong>を格納し、集計後に最後の計算をする</td>
+  <td>率・平均・比のすべて。最後の割り算は BI 層／OLAP キューブで行う</td>
+</tr>
+<tr>
+  <td>定期スナップショット（DWT ch.4）</td>
+  <td>1行が「期間」を要約する。粒度は期間であってトランザクションではない。FK は密（活動が無くても行が立つ）</td>
+  <td>残高・在庫・枠残。<code>fct_contract_monthly</code>, <code>fct_job_posting_daily</code></td>
+</tr>
+<tr>
+  <td>残高の扱い</td>
+  <td>残高は時間以外の全軸で加法。時間方向は<strong>期末値</strong>か<strong>期中平均</strong>で潰す</td>
+  <td>半加法メジャーを期間集計するとき。どちらを出すかを指標定義として決めておく</td>
+</tr>
+<tr>
+  <td>集約ファクト（aggregate fact table）</td>
+  <td>原子ファクトの単純な数値ロールアップ。<strong>クエリ性能のためだけ</strong>に作り、原子ファクトと同時に BI へ公開する</td>
+  <td>「性能のため」なので、原子から出る答えと<strong>一致しなければならない</strong>。平均を焼くと一致しなくなる</td>
+</tr>
+<tr>
+  <td>サマリーだけを持たない（DT#77）</td>
+  <td>詳細データは予測不能な形にロールアップできるが、逆は不可能。サマリーを構成要素へ「爆発」させることはできない</td>
+  <td>パーセンタイル・中央値・ユニーク数のように、そもそも分解して持てないメジャーの置き場所を決めるとき</td>
+</tr>
+</table>
+</div>
+
+<div class="aside kimball">
+<p><strong>DWT / Kimball Dimensional Modeling Techniques（加法性）</strong></p>
+<p>&ldquo;Semi-additive measures can be summed across some dimensions, but not all; balance amounts are common semi-additive facts because they are additive across all dimensions except time. Finally, some measures are completely non-additive, such as ratios. A good approach for non-additive facts is, where possible, to store the fully additive components of the non-additive measure and sum these components into the final answer set before calculating the final non-additive fact. This final calculation is often done in the BI layer or OLAP cube.&rdquo;</p>
+<p>本回の固定判断（<code>avg_*</code> を持たず <code>sum_*</code> + <code>count</code> を持つ）は、この一文をそのままテーブル設計規約にしたもの。</p>
+</div>
+
+<div class="aside kimball">
+<p><strong>Design Tip #77（Margy Ross, 2006）</strong></p>
+<p>&ldquo;you can roll up detailed data in unpredictable ways, the converse is not true &ndash; you can't magically explode summary data into its underlying components.&rdquo;</p>
+<p>&ldquo;Summary data naturally pre-supposes the typical business questions. When the business requirements change, as they inevitably will, then both the data model and ETL system must change.&rdquo;</p>
+<p>加法性の議論は突き詰めると DT#77 に落ちる。<strong>集約表は原子ファクトの代替ではなく高速化の手段</strong>で、原子が残っている限り「持つ形を間違えた」は後から直せる。中央値やユニーク数を集約表に焼き、原子を捨てた瞬間に直せなくなる。</p>
+</div>
+
+<p>パーセンタイルが再集約不可なのは、原典の定義から出る帰結。分位点は「値の分布」に対する関数で、分位点どうしの和にも平均にも分布の情報は残らない。日次 p95 を7日ぶん平均した数字は、週次 p95 とは別物であり、対応する定義が存在しない。</p>
+
+<h2>4. 現代の再解釈 — MetricFlow の ratio metric</h2>
+
+<p>dbt Semantic Layer（MetricFlow）は、この回の判断をテーブルの外側で表現する道具。メトリクスを YAML で宣言し、クエリのたびに「その粒度で分子と分母を集計してから割る」SQL を生成する。ratio metric は <code>numerator</code> / <code>denominator</code> を metric 名で受け取るので、<strong>率そのものを列として持つ場所がどこにも無い</strong>。</p>
+
+<pre><code># models/marts/schema.yml（dbt v1.12+ の spec）
+semantic_models:
+  - name: scout_funnel
+    description: "1行 = 1スカウトの送信→開封→返信→応募"
+    model: ref('fct_scout_funnel')
+    defaults:
+      agg_time_dimension: sent_date
+    primary_entity: scout
+    entities:
+      - name: member
+        type: foreign
+        expr: member_key
+      - name: scout_sender
+        type: foreign
+        expr: scout_sender_key
+    dimensions:
+      - name: sent_date
+        type: time
+        type_params:
+          time_granularity: day
+    metrics:
+      - name: scouts_sent
+        label: スカウト送信数
+        type: simple
+        agg: count_distinct
+        expr: scout_id
+      - name: scouts_replied
+        label: スカウト返信数
+        type: simple
+        agg: sum
+        expr: is_replied
+
+metrics:
+  - name: reply_rate
+    label: スカウト返信率
+    description: "返信数 ÷ 送信数。どの粒度で切っても分子分母を先に集計してから割る"
+    type: ratio
+    numerator: scouts_replied
+    denominator: scouts_sent
+</code></pre>
+
+<p>半加法も宣言できる。<code>non_additive_dimension</code> は「このメジャーはこの時間ディメンションでは集約するな」という指定で、<code>window_choice: max</code> が期末値、<code>min</code> が期首値にあたる。Kimball が運用ルールとして書いていた「残高は期末値で潰す」が、そのままメタデータになった。</p>
+
+<pre><code>semantic_models:
+  - name: contract_monthly
+    model: ref('fct_contract_monthly')
+    defaults:
+      agg_time_dimension: month_date
+    primary_entity: contract
+    dimensions:
+      - name: month_date
+        type: time
+        type_params:
+          time_granularity: month
+    metrics:
+      - name: scouts_remaining
+        label: スカウト残枠（期末）
+        type: simple
+        agg: sum
+        expr: scouts_remaining
+        non_additive_dimension:
+          name: month_date
+          window_choice: max      # 期間内の最終月の値だけを採る
+      - name: scouts_sent
+        label: スカウト送信数
+        type: simple
+        agg: sum
+        expr: scouts_sent         # こちらは素直に加法
+</code></pre>
+
+<div class="aside modern">
+<p><strong>何が変わり、何が残るか</strong></p>
+<ul>
+<li><strong>残る:</strong> 「率と平均をテーブルに焼かない」という判断そのもの。MetricFlow は分子分母が列として存在することを前提にしており、<code>fct_scout_funnel</code> に <code>is_replied</code> が無ければ ratio metric は定義できない。物理設計の要求は変わらない</li>
+<li><strong>変わる:</strong> 割り算のロジックの置き場所。かつては BI ツール／ダッシュボードごとに散っていた「SUM してから割る」が、リポジトリ内の1定義に集まる。「返信率」の定義が2つに割れる事故（03回の conformed の話と同じ構図）が減る</li>
+<li><strong>変わる:</strong> 半加法の宣言が実行可能になった。テーブルのコメントや Wiki に書いてあった「時間で足すな」が、集計エンジンが従う指定になる</li>
+<li><strong>変わらない危険:</strong> Semantic Layer を通らない経路（アドホック SQL、直接 BigQuery を叩く BI、Reverse ETL）が1本でもあるなら、<code>metrics.yml</code> は守ってくれない。<strong>テーブル側で和と件数を持つ規律は依然として必要</strong>で、Semantic Layer はその上の層</li>
+</ul>
+</div>
+
+<h2>5. BigQuery + dbt での実装</h2>
+
+<h3>集約ファクト（DWT ch.4 の aggregate fact table）: 平均を持たず和と件数を持つ</h3>
+
+<pre><code>-- models/marts/agg_company_rating_daily.sql
+{{ config(materialized='table') }}
+
+WITH review AS (
+    SELECT * FROM {{ ref('fct_review') }}
+)
+
+SELECT
+    submitted_date_key AS date_key,
+    company_key,
+    COUNT(*) AS review_count,
+    SUM(score_compensation)   AS sum_score_compensation,
+    SUM(score_morale)         AS sum_score_morale,
+    SUM(score_openness)       AS sum_score_openness,
+    SUM(score_respect)        AS sum_score_respect,
+    SUM(score_growth_20s)     AS sum_score_growth_20s,
+    SUM(score_long_term_dev)  AS sum_score_long_term_dev,
+    SUM(score_compliance)     AS sum_score_compliance,
+    SUM(score_eval_fairness)  AS sum_score_eval_fairness,
+    SUM(overall_score)        AS sum_overall_score
+FROM review
+GROUP BY date_key, company_key
+</code></pre>
+
+<p>この表には <code>avg_</code> で始まる列が1つも無い。<code>review_count</code> と <code>sum_*</code> だけが並ぶ。列名の規約を「集約表に <code>avg_</code>・<code>rate_</code>・<code>pct_</code>・<code>unique_</code> を出さない」とすると、レビューで機械的に弾ける。</p>
+
+<pre><code># models/marts/schema.yml
+models:
+  - name: agg_company_rating_daily
+    description: |
+      1行 = 1企業 × 1日。fct_review の単純ロールアップ（性能のための集約ファクト）。
+      平均・率は列に持たない。avg は SAFE_DIVIDE(SUM(sum_*), SUM(review_count)) で都度計算する。
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [date_key, company_key]
+    columns:
+      - name: date_key
+        data_tests: [not_null]
+      - name: company_key
+        data_tests: [not_null]
+      - name: review_count
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1
+              inclusive: true
+      - name: sum_overall_score
+        data_tests: [not_null]
+</code></pre>
+
+<h3>月次へ再集約する</h3>
+
+<pre><code>SELECT
+    d.year,
+    d.month,
+    a.company_key,
+    SUM(a.review_count)      AS review_count,
+    SUM(a.sum_overall_score) AS sum_overall_score,
+    SAFE_DIVIDE(SUM(a.sum_overall_score), SUM(a.review_count)) AS avg_overall_score
+FROM {{ ref('agg_company_rating_daily') }} AS a
+JOIN {{ ref('dim_date') }} AS d
+    ON a.date_key = d.date_key
+WHERE d.year = 2026 AND d.month = 3
+GROUP BY d.year, d.month, a.company_key
+</code></pre>
+
+<p><code>C002</code> の3日分に対して <code>33.5 / 12 = 2.79</code>。<code>SAFE_DIVIDE</code> にしておくと、その企業のその月にクチコミが 0 件でも（分母 0 でも）エラーではなく <code>NULL</code> が返る。</p>
+
+<h3>企業グループへ再集約する（<code>br_company_hierarchy</code> 経由）</h3>
+
+<pre><code>SELECT
+    b.ancestor_company_key,
+    d.year,
+    SUM(a.review_count)      AS review_count,
+    SAFE_DIVIDE(SUM(a.sum_overall_score), SUM(a.review_count)) AS avg_overall_score
+FROM {{ ref('agg_company_rating_daily') }} AS a
+JOIN {{ ref('br_company_hierarchy') }} AS b
+    ON a.company_key = b.descendant_company_key
+JOIN {{ ref('dim_date') }} AS d
+    ON a.date_key = d.date_key
+WHERE d.year = 2026
+GROUP BY b.ancestor_company_key, d.year
+</code></pre>
+
+<p><code>C001</code>（アオゾラ商事）を <code>ancestor</code> とする行には、自分自身（<code>depth = 0</code>）と子会社 <code>C003</code>（ヒノデ物流、<code>depth = 1</code>）が入る。<strong>集計式が月次のときと1文字も変わらない</strong>のが、和と件数で持つことの実利。もし日次に平均を持っていたら、時間方向とグループ方向で別々の重み付けロジックを書くことになり、片方を必ず間違える。</p>
+
+<h3>半加法を期末値で潰す</h3>
+
+<pre><code>-- 四半期末（3月）時点の残枠。QUALIFY で行を絞る
+SELECT
+    company_key,
+    contract_id,
+    month_date_key,
+    scouts_remaining
+FROM {{ ref('fct_contract_monthly') }}
+WHERE month_date_key BETWEEN 20260101 AND 20260301
+QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY contract_id
+    ORDER BY month_date_key DESC
+) = 1
+</code></pre>
+
+<p><code>K001</code> について <code>scouts_remaining = 120</code>（3月の行）が返る。<code>SUM</code> の 440 ではない。期中平均が欲しいなら同じ窓で <code>AVG(scouts_remaining)</code>（= <code>440 / 3 = 146.67</code>）。<strong>どちらを「残枠」と呼ぶかは指標定義であって、SQL の都合ではない。</strong>決めて名前を分ける。</p>
+
+<pre><code>SELECT
+    contract_id,
+    AVG(scouts_remaining) AS avg_scouts_remaining,   -- 期中平均残枠
+    SUM(scouts_sent)      AS scouts_sent             -- こちらは素直に加法
+FROM {{ ref('fct_contract_monthly') }}
+WHERE month_date_key BETWEEN 20260101 AND 20260301
+GROUP BY contract_id
+</code></pre>
+
+<h3>パーセンタイルは原子ファクトから直接（DT#77）</h3>
+
+<pre><code>SELECT
+    r.company_key,
+    d.year,
+    COUNT(*) AS review_count,
+    APPROX_QUANTILES(r.overall_score, 100)[OFFSET(50)] AS p50_overall_score,
+    APPROX_QUANTILES(r.overall_score, 100)[OFFSET(90)] AS p90_overall_score
+FROM {{ ref('fct_review') }} AS r
+JOIN {{ ref('dim_date') }} AS d
+    ON r.submitted_date_key = d.date_key
+GROUP BY r.company_key, d.year
+</code></pre>
+
+<p>指針: <strong>パーセンタイルを集約表に列として焼くのは、その粒度でしか使わないと確定している場合だけ</strong>。焼いた <code>p50</code> は上位粒度へ持ち上げられないので、年次が要るなら年次でもう一度原子から計算する。<code>fct_review</code> は 1行 = 1クチコミなので、企業 × 年程度の集計ならスキャン量は問題にならない。</p>
+
+<h3>ユニーク数はスケッチで持つ</h3>
+
+<pre><code>-- HLL スケッチなら「日次で作って週次でマージ」ができる
+WITH daily AS (
+    SELECT
+        sent_date_key,
+        HLL_COUNT.INIT(member_key) AS member_sketch
+    FROM {{ ref('fct_scout') }}
+    WHERE sent_date BETWEEN DATE '2026-06-20' AND DATE '2026-06-26'
+    GROUP BY sent_date_key
+)
+
+SELECT
+    HLL_COUNT.MERGE(member_sketch) AS weekly_unique_members
+FROM daily
+</code></pre>
+
+<p><code>HLL_COUNT.INIT</code> が返す <code>BYTES</code> のスケッチは<strong>マージ可能</strong>で、これが「ユニーク数の加法な構成要素」にあたる。誤差は数 % 入るので、正確な値が要る監査系の数字には使わない。厳密さが要るなら原子ファクトから <code>COUNT(DISTINCT ...)</code> を都度回す。</p>
+
+<h2>6. 判断基準</h2>
+
+<div class="table-wrap">
+<table>
+<tr><th>メジャー</th><th>分類</th><th>マートに持つ形</th><th>BI / クエリ側で計算する形</th></tr>
+<tr>
+  <td><code>review_count</code>, <code>scout_count</code>, <code>view_count</code>, <code>fee_amount</code></td>
+  <td>加法</td>
+  <td>そのまま1列</td>
+  <td><code>SUM(x)</code></td>
+</tr>
+<tr>
+  <td>平均スコア（<code>overall_score</code>, <code>score_*</code>）</td>
+  <td>非加法</td>
+  <td><code>sum_overall_score</code> + <code>review_count</code></td>
+  <td><code>SAFE_DIVIDE(SUM(sum_overall_score), SUM(review_count))</code></td>
+</tr>
+<tr>
+  <td>率（返信率・応募率・公開率）</td>
+  <td>非加法</td>
+  <td>分子 <code>is_replied</code> の和 と 分母の件数</td>
+  <td><code>SAFE_DIVIDE(SUM(is_replied), COUNT(*))</code> / MetricFlow の ratio metric</td>
+</tr>
+<tr>
+  <td>加重比率（<code>fee_rate</code>）</td>
+  <td>非加法</td>
+  <td><code>fee_amount</code> と <code>annual_income</code></td>
+  <td><code>SAFE_DIVIDE(SUM(fee_amount), SUM(annual_income))</code>。<code>AVG(fee_rate)</code> ではない</td>
+</tr>
+<tr>
+  <td>平均リードタイム（<code>days_applied_to_offer</code>）</td>
+  <td>非加法</td>
+  <td>原子は素の値。集約するなら和と件数</td>
+  <td><code>SAFE_DIVIDE(SUM(days), COUNT(*))</code>。<code>NULL</code>（未達）を分母に含めるかを定義で決める</td>
+</tr>
+<tr>
+  <td>残高（<code>scouts_remaining</code>）</td>
+  <td>半加法（時間 ✗）</td>
+  <td>スナップショットの値のまま。<code>non_additive_dimension</code> で時間軸を宣言</td>
+  <td>期末値 = <code>QUALIFY ROW_NUMBER() ... ORDER BY 期 DESC = 1</code>／期中平均 = <code>AVG</code></td>
+</tr>
+<tr>
+  <td>在籍フラグ（<code>is_open</code>, <code>is_active</code>）</td>
+  <td>半加法（時間 ✗）</td>
+  <td>0/1 のまま</td>
+  <td>時点数 = 期末行の <code>SUM</code>／延べ日数 = 期間の <code>SUM</code>。<strong>名前を分ける</strong></td>
+</tr>
+<tr>
+  <td>中央値・p95</td>
+  <td>非加法・分解不能</td>
+  <td><strong>持たない</strong>（原子ファクトを残す）</td>
+  <td><code>APPROX_QUANTILES(x, 100)[OFFSET(50)]</code> を原子から都度</td>
+</tr>
+<tr>
+  <td>ユニーク数</td>
+  <td>非加法・分解不能</td>
+  <td><strong>持たない</strong>。必要なら <code>HLL_COUNT.INIT</code> のスケッチ列</td>
+  <td><code>COUNT(DISTINCT x)</code> を原子から／<code>HLL_COUNT.MERGE</code></td>
+</tr>
+<tr>
+  <td>1エンティティ1行の終端テーブル（<code>agg_company_entity</code>）</td>
+  <td>—</td>
+  <td>平均・率を持ってよい（再集約しない契約）</td>
+  <td>そのまま表示。<strong>この表を足し上げる分析を書かない</strong>のが条件（08回）</td>
+</tr>
+</table>
+</div>
+
+<p>運用の落とし所を1つ。<strong>集約表の列名から <code>avg_</code> / <code>rate_</code> / <code>pct_</code> / <code>median_</code> / <code>unique_</code> を禁止する</strong>。分類の議論は設計時にしかできないが、列名の検査は CI でできる。例外を作るのは「終端テーブル」だと宣言した <code>agg_company_entity</code> だけ。</p>
+
+<h2>7. 演習</h2>
+
+<h3>(a) <code>fct_review.overall_score</code> の「企業別・年別の中央値」を出すために何を持つか</h3>
+
+<details>
+<summary>解答例</summary>
+<p><strong>何も新しく持たない。</strong><code>fct_review</code>（1行 = 1クチコミ）を残しておくことが答え。<code>agg_company_rating_daily</code> の <code>sum_overall_score</code> と <code>review_count</code> からは中央値を復元できない（和と件数は分布の情報を持たない）。判断基準表の「中央値・p95 → 分解不能 → 持たない」の行。</p>
+<pre><code>SELECT
+    r.company_key,
+    d.year,
+    APPROX_QUANTILES(r.overall_score, 100)[OFFSET(50)] AS median_overall_score
+FROM {{ ref('fct_review') }} AS r
+JOIN {{ ref('dim_date') }} AS d
+    ON r.submitted_date_key = d.date_key
+GROUP BY r.company_key, d.year
+</code></pre>
+<p>「毎朝ダッシュボードで見るので焼きたい」なら、<strong>企業 × 年の粒度で専用の集約表を作る</strong>。ただしその表の中央値は四半期にも全期間にも持ち上げられない、と明記する。粒度ごとに別テーブルが増えるのを避けたいなら、原子から都度計算する方を選ぶ（DT#77）。</p>
+</details>
+
+<h3>(b) <code>fct_job_posting_daily.is_open</code> を月で <code>SUM</code> したら何を意味するか。「月末時点の掲載数」はどう出すか</h3>
+
+<details>
+<summary>解答例</summary>
+<p><code>SUM(is_open)</code> は<strong>延べ掲載日数（posting-days）</strong>。求人 <code>J001</code>（<code>C001</code> のデータエンジニア、2026-04-01 掲載、4月中は <code>open</code>）なら 4月の <code>SUM(is_open) = 30</code>。これは「30 件の求人」ではない。1件の求人 × 30 日。</p>
+<p>延べ日数それ自体は意味のあるメジャー（掲載枠の消化量、掲載単価の分母）なので、間違いなのは値ではなく<strong>名前</strong>。<code>open_posting_days</code> のように別名にすれば加法なメジャーとして扱える。</p>
+<pre><code>-- 月末時点の掲載数: 足せない軸（日）を先に潰してから、足せる軸（求人）で足す
+WITH month_end AS (
+    SELECT
+        f.company_key,
+        f.is_open,
+        d.year,
+        d.month
+    FROM {{ ref('fct_job_posting_daily') }} AS f
+    JOIN {{ ref('dim_date') }} AS d
+        ON f.snapshot_date_key = d.date_key
+    WHERE d.year = 2026 AND d.month = 4
+    -- QUALIFY は集約の前に評価されるので、GROUP BY は外側の SELECT に置く
+    QUALIFY f.snapshot_date_key = MAX(f.snapshot_date_key) OVER (PARTITION BY d.year, d.month)
+)
+
+SELECT
+    company_key,
+    year,
+    month,
+    SUM(is_open) AS open_postings_month_end
+FROM month_end
+GROUP BY company_key, year, month
+</code></pre>
+<p><code>J001</code> だけなら <code>open_postings_month_end = 1</code>。<code>QUALIFY</code> で行を 4/30 に絞ってから求人をまたいで足す＝<strong>足せる軸（求人）でだけ足している</strong>。半加法の扱いは「足せない軸を先に潰す」で常に同じ形になる。</p>
+</details>
+
+<h3>(c) 返信率を「スカウト送信主体別」に見るとき、分子分母をどの粒度で持つか</h3>
+
+<details>
+<summary>解答例</summary>
+<p>分子分母は<strong>同じ行から出す</strong>のが原則。<code>fct_scout_funnel</code>（1行 = 1スカウトの送信→開封→返信→応募）は <code>scout_sender_key</code> を FK に持ち、<code>is_replied</code> を 0/1 で持つので、分母 = 行数、分子 = <code>SUM(is_replied)</code> で足りる。集約表を作るなら粒度は <code>sent_date_key × scout_sender_key</code>、列は「送信件数」と「返信件数」の2つだけ。<strong>率の列は作らない。</strong></p>
+<pre><code>SELECT
+    s.sender_type,
+    COUNT(*)                                  AS scouts_sent,
+    SUM(f.is_replied)                         AS scouts_replied,
+    SAFE_DIVIDE(SUM(f.is_replied), COUNT(*))  AS reply_rate
+FROM {{ ref('fct_scout_funnel') }} AS f
+JOIN {{ ref('dim_scout_sender') }} AS s
+    ON f.scout_sender_key = s.scout_sender_key
+GROUP BY s.sender_type
+</code></pre>
+<p>注意点が2つ。</p>
+<ul>
+<li><strong>返信日ではなく送信日で数える。</strong>分子を <code>replied_date_key</code> 基準、分母を <code>sent_date_key</code> 基準にすると、月をまたいだ返信の分だけ率がずれる（月末に送ったスカウトの返信は翌月に入る）。累積スナップショットは送信の行が更新されていく形なので、両方を送信日で数えれば整合する。</li>
+<li><strong>送信主体別の率を平均しない。</strong><code>C001</code>（company）が 100 通送って 12 返信 = 12%、<code>AG01</code>（agent）が 50 通送って 12 返信 = 24%。この2つを平均すると 18% だが、全体の返信率は <code>24 / 150 = 16%</code>。§2a と同じ壊れ方が、時間軸ではなく送信主体軸で起きる。</li>
+</ul>
+<p>なお <code>dim_scout_sender</code> は SCD2 なので、<code>scout_sender_key</code> は送信時点の版を指す。「エージェント <code>AG01</code> の <code>agency_tier</code> が <code>gold</code> だった期間の返信率」はそのまま出る。現在の tier で束ねたいなら <code>is_current</code> の行へ自然キーで再結合する（05回）。</p>
+</details>
+
+<h2>8. 参考: 手元の基盤ではどうか</h2>
+
+<div class="aside">
+<ul>
+<li><code>mart_url_performance</code> は <code>url_path × date</code> 粒度で <code>avg_response_time</code>・<code>error_rate_percent</code>・<code>unique_visitors</code>（<code>COUNT(DISTINCT client_ip)</code>）を持つ。週次に上げると §2 の (a)(b)(c) が3つとも同時に起きる形になっている。</li>
+<li>この回の基準なら、<code>error_rate_percent</code> は分子（<code>client_error_count + server_error_count</code>）も分母（<code>total_requests</code>）も既に列にあるので、率の列を落としても情報は 1 ビットも失われない。<code>avg_response_time</code> は <code>sum(response_time_sec)</code> を並べて初めて同じ状態になる。</li>
+<li><code>percentile()</code> マクロの <code>APPROX_QUANTILES(x, 100)[OFFSET(p)]</code> を日次テーブルに焼くと、その <code>p95</code> は週次へ持ち上げられない。原子（<code>stg_access_logs</code>）から都度計算する経路を残しておくかどうかが、この回の判断が効く分岐点。</li>
+<li>種: <code>unique_visitors</code> を <code>HLL_COUNT.INIT(client_ip)</code> のスケッチ列に置き換え、<code>HLL_COUNT.MERGE</code> で週次・月次を出して <code>COUNT(DISTINCT)</code> の実測値と誤差を比べてみる。</li>
+</ul>
+</div>
+
+<h2>参照文献</h2>
+
+<ul class="ref">
+<li>Ralph Kimball, Margy Ross, <em>The Data Warehouse Toolkit</em>, 3rd ed.（2013）ch.1, ch.4 — <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/data-warehouse-dw-toolkit/">kimballgroup.com</a></li>
+<li>Kimball Group, <em>Kimball Dimensional Modeling Techniques</em>（2013）— Additive, Semi-Additive, and Non-Additive Facts / Periodic Snapshot Fact Tables / Aggregate Fact Tables or Cubes — <a href="https://www.kimballgroup.com/wp-content/uploads/2013/08/2013.09-Kimball-Dimensional-Modeling-Techniques11.pdf">PDF</a></li>
+<li>Margy Ross, <em>Design Tip #77: Warning: Summary Data Alone Is Hazardous To Your Health</em>（2006）— <a href="https://decisionworks.com/2006/03/design-tip-77-warning-summary-data-alone-is-hazardous-to-your-health/">decisionworks.com</a></li>
+<li>dbt Labs, <em>About MetricFlow</em>（dbt Semantic Layer）— <a href="https://docs.getdbt.com/docs/build/about-metricflow">docs.getdbt.com</a></li>
+</ul>
+
+</body>
+</html>

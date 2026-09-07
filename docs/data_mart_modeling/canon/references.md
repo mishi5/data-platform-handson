@@ -53,7 +53,7 @@
 
 | 略記 | 文献 | URL | 主張の要点（執筆前に本文で確認） |
 |---|---|---|---|
-| Fowler | Dave Fowler, *Kimball in the context of the modern data warehouse: what's worth keeping, and what's not*（Coalesce 2020）— 議論スレッド | https://discourse.getdbt.com/t/is-kimball-dimensional-modeling-still-relevant-in-a-modern-data-warehouse/225 | 性能のための技法（サロゲートキー、雪片回避の一部）は列指向 DWH で不要化、意味のための技法（粒度・コンフォームド・SCD）は残る |
+| Fowler | Dave Fowler（Chartio）, *Kimball in the context of the modern data warehouse: what's worth keeping, and what's not*（Coalesce 2020 講演） | https://www.youtube.com/watch?v=3OcS2TMXELU （関連議論: https://discourse.getdbt.com/t/is-kimball-dimensional-modeling-still-relevant-in-a-modern-data-warehouse/225 — このスレッド自体は Fowler の講演より前の別議論） | 性能のための技法（サロゲートキー、雪片回避の一部）は列指向 DWH で不要化、意味のための技法（粒度・コンフォームド・SCD）は残る |
 | Fivetran OBT | Fivetran, *Star Schema vs. OBT for Data Warehouse Performance*（2022） | https://www.fivetran.com/blog/star-schema-vs-obt | BigQuery で OBT が star より 49% 速い実測。性能は設計の唯一の基準ではない |
 | ECM | Maxime Beauchemin, *Entity-Centric Data Modeling for Analytics*（Preset, 2023） | https://preset.io/blog/introducing-entity-centric-data-modeling-for-analytics/ | エンティティ（会員・企業）を中心にディメンションへ指標を持たせる。Kimball の拡張 |
 | FDE | Maxime Beauchemin, *Functional Data Engineering — a modern paradigm for batch data processing*（2018）— 解説 | https://www.ssp.sh/brain/functional-data-engineering/ ／ https://www.ssp.sh/brain/snapshotting/ | 不変パーティション・冪等タスク・ディメンションの日次スナップショット（SCD2 の代替） |

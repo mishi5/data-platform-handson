@@ -15,3 +15,5 @@
 - 03 執筆完了（DONE_WITH_CONCERNS）。Ruling: `dim_date` の役割数はブリーフの「7」ではなく正典 FK 列どおり「8（7マイルストーン + closed）」を正とする／`dim_date.date_label` を正典に追加／STRING キーの未知値は `'-1'` と正典に明記 — 誤りなら 02/05 との表記差が横断レビューで出る
 - 02 執筆完了（DONE_WITH_CONCERNS）。Ruling: `dim_agency`（`dim_agent` の縮約ディメンション, Type2）を正典に追加し、`fct_job_posting_daily` と `fct_placement` は `agency_key` を持つ。`fct_placement.agent_key` は scout 経由で解決（無ければ -1）。`current_stage` 初期値 `applied` を正典に明記 — 担当者粒度のディメンションに求人を結ぶと粒度が壊れるため — 誤りなら 06/08/10 で agency の扱いが揺れる（横断レビューで検出）。02 本文の `agent_key=-1` 固定は修正ラウンドで `agency_key` に差し替える
 - 01 レビュー REVISE（critical=2 important=5 minor=8）→ 修正ラウンド 1/3 を執筆エージェントに送付
+- 04 執筆完了（DONE_WITH_CONCERNS）。Ruling: `agg_company_rating_daily.rating_date`（DATE）と `fee_amount = annual_income × fee_rate` を正典に採用。HLL スケッチ列を持つ新集約表は**追加しない**（正典を増やさない。CTE 内の説明で足りる）。§2(b) の 600→440 の置換はブリーフの意図を保っているので採用
+- 07 執筆完了（DONE_WITH_CONCERNS）。Ruling: Fowler 講演の URL を YouTube（Coalesce 2020）に訂正し references.md を更新（discourse スレッドは別議論と注記）。`obt_*` プレフィクスと `obt_scout_funnel` を正典に採用。図の accent 変更（OBT の方がスキャンバイトが多い）はレビューで妥当性を判定させる

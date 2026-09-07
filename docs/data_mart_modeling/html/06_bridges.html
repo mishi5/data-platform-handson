@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>多対多・不揃い階層・異種ディメンション — データマート設計 06</title>
+<style>
+  :root { --bg:#ffffff; --fg:#1a1a1a; --muted:#666; --border:#e0e0e0;
+          --accent:#0b6bcb; --card:#f7f8fa; --code:#f3f4f6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171a; --fg:#e8e8e8; --muted:#9aa0a6; --border:#2c3136;
+            --accent:#6aa9ff; --card:#1b1f23; --code:#1f2429; }
+  }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+    line-height:1.8; max-width:900px; margin:0 auto; padding:24px 20px 64px; }
+  h1 { font-size:1.6rem; margin:0 0 4px; line-height:1.4; }
+  h2 { font-size:1.2rem; border-bottom:1px solid var(--border); padding-bottom:6px; margin:40px 0 16px; }
+  h3 { font-size:1.02rem; margin:24px 0 8px; }
+  .meta { color:var(--muted); font-size:.85rem; margin:0 0 24px; }
+  a { color:var(--accent); }
+  table { border-collapse:collapse; width:100%; margin:12px 0 20px; font-size:.9rem; }
+  th, td { border:1px solid var(--border); padding:6px 10px; vertical-align:top; text-align:left; }
+  th { background:var(--card); }
+  .table-wrap { overflow-x:auto; }
+  code { background:var(--code); border:1px solid var(--border); border-radius:4px; padding:1px 5px; font-size:.85em; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:8px; padding:14px 16px;
+        overflow-x:auto; font-size:.84rem; line-height:1.55; }
+  pre code { background:none; border:none; padding:0; font-size:inherit; }
+  .aside { border-left:3px solid var(--accent); background:var(--card); padding:10px 16px; margin:16px 0; font-size:.92rem; }
+  .kimball { border-left-color:#8a6d3b; }
+  .modern { border-left-color:#3b8a5a; }
+  details { border:1px solid var(--border); border-radius:8px; padding:8px 14px; margin:10px 0; background:var(--card); }
+  summary { cursor:pointer; font-weight:600; }
+  svg { max-width:100%; height:auto; display:block; margin:20px 0; }
+  ul, ol { padding-left:1.3em; }
+  .ref li { font-size:.88rem; }
+</style>
+</head>
+<body>
+
+<h1>多対多・不揃い階層・異種ディメンション</h1>
+<p class="meta">データマート設計 06 ／ 参照: DWT ch.6–8, Design Tip #142, Kimball Dimensional Modeling Techniques ／ 再解釈: BigQuery ネスト・繰り返し列</p>
+
+<h2>1. この回が決めること</h2>
+
+<p>ディメンションとファクトの関係は普通は多対一で、ファクト 1 行に対してディメンション値は 1 つに定まる。CareerVoice にはこれが成り立たない箇所が 3 種類ある。会員の希望職種は 1 人に複数（<code>M002</code> は <code>ENG-BE</code> と <code>ENG-DATA</code> の 2 件）、企業グループと職種は深さが揃わない階層（<code>ENG-DATA</code> は level2 で終端）、スカウトの送信主体は企業とエージェントという別種のエンティティ。この回はこの 3 つを、ブリッジ表・平坦化・supertype のどれで持つかを決める。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>問題</th><th>題材の具体</th><th>手段 A</th><th>手段 B</th><th>この回の決定</th></tr></thead>
+<tbody>
+<tr><td>多値</td><td>会員の希望職種。<code>member_desired_job_categories</code>、<code>M002</code> は 2 件</td><td><code>br_member_desired_job_category</code> + <code>weighting_factor</code></td><td><code>dim_member</code> に <code>desired_job_categories ARRAY&lt;STRUCT&lt;…&gt;&gt;</code> を内包</td><td><strong>ブリッジ</strong>。ARRAY は §4・§6 の条件下での対案</td></tr>
+<tr><td>不揃い階層（企業グループ）</td><td><code>companies.parent_company_id</code>。<code>C003</code>（ヒノデ物流）→ <code>C001</code>（アオゾラ商事）</td><td><code>br_company_hierarchy</code>（祖先-子孫 + <code>depth</code>）</td><td>固定深さに平坦化（<code>parent_name</code> 等の位置属性）</td><td><strong>階層ブリッジ</strong>。深さが不定で、買収で伸びる</td></tr>
+<tr><td>不揃い階層（職種）</td><td><code>job_categories.level</code>。<code>ENG</code>→<code>ENG-BE</code>→<code>ENG-BE-JAVA</code> と <code>ENG</code>→<code>ENG-DATA</code></td><td>階層ブリッジ</td><td><code>dim_job_category</code> に <code>level1_name</code>/<code>level2_name</code>/<code>level3_name</code> を平坦化</td><td><strong>平坦化</strong>。深さ 1〜3 で幅が狭く、レベル名が合意されている</td></tr>
+<tr><td>異種</td><td>スカウト送信主体。<code>scouts.sender_type</code> = <code>company</code> / <code>agent</code></td><td><code>dim_scout_sender</code>（supertype、<code>sender_type</code> + 固有属性 NULL 許容）</td><td><code>fct_scout</code> に <code>sender_company_key</code> と <code>sender_agent_key</code> の 2 本 + <code>-1</code></td><td><strong>supertype 1 本</strong></td></tr>
+</tbody>
+</table>
+</div>
+
+<p>共通する判断軸は 1 つ。<strong>「ファクト 1 行 × ディメンション 1 値」を崩すコストを、どこに払わせるか</strong>である。ブリッジは行の増殖と重み付けの責任をクエリ側に押しつけ、ARRAY はスキーマの読みにくさを BI ツール側に押しつけ、supertype は NULL 列の存在をディメンション側に押しつける。払う先を決めずに 3 つを混ぜると §2 になる。</p>
+
+<h2>2. どこで壊れるか</h2>
+
+<h3>(a) 重みなしでブリッジを結合してスカウトが 2 倍になる</h3>
+
+<p>2026-06 に <code>M002</code> 宛のスカウトが 10 件送られたとする（<code>fct_scout</code> に 10 行）。<code>M002</code> の希望職種は 2 件なので <code>br_member_desired_job_category</code> には <code>M002</code> の行が 2 本ある。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>クエリ</th><th>結果</th><th>正しい値</th></tr></thead>
+<tbody>
+<tr><td><code>SUM(scout_count)</code>（<code>fct_scout</code> のみ）</td><td>10</td><td>10</td></tr>
+<tr><td>ブリッジを結合して <code>SUM(scout_count)</code></td><td><strong>20</strong></td><td>10</td></tr>
+<tr><td>ブリッジを結合して <code>SUM(scout_count * weighting_factor)</code></td><td>10</td><td>10</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>職種別に割ると、重み付きは <code>ENG-BE</code> 5 件 / <code>ENG-DATA</code> 5 件で合計 10。重みなしは 10 / 10 で合計 20。壊れるのは数字そのものではなく、<strong>「明細を足すと総数になる」という読み手の前提</strong>である。ダッシュボードの上段に「6 月のスカウト送信数 1,240 件」を置き、下段に職種別の内訳を置くと、内訳の合計が 1,240 を超える。</p>
+
+<h3>(b) level3 固定で <code>ENG-DATA</code> が NULL に落ちる</h3>
+
+<p><code>job_categories</code> は <code>ENG</code> → <code>ENG-BE</code> → <code>ENG-BE-JAVA</code> が level3 まで伸びる一方、<code>ENG</code> → <code>ENG-DATA</code> は level2 で終端する。<code>dim_job_category.level3_name</code> をソースのまま引くと <code>ENG-DATA</code> の行は NULL になる。</p>
+
+<ul>
+<li><code>GROUP BY level3_name</code> → BI に「(null)」という行が出る。<code>ENG-DATA</code> と、他の level2 終端の枝が全部そこに混ざる。</li>
+<li><code>WHERE level3_name = 'データエンジニア'</code> → 1 行もヒットしない。</li>
+<li>BI のフィルタが <code>level3_name IN (…)</code> の形になっていると、<code>J001</code>（<code>C001</code> のデータエンジニア求人、<code>ENG-DATA</code>）が集計から丸ごと消える。「消えた」ことは画面に出ない。</li>
+</ul>
+
+<p>DT#43 の「ディメンションに NULL を置かない」がそのまま効く。正典の決定は <code>level3_name</code> を <code>level2_name</code> の値で埋めること。埋めた事実は <code>leaf_level</code>（この行が実際に何レベルで終端したか）で残す。</p>
+
+<h3>(c) 2 本の FK にすると「送信主体別」が UNION になる</h3>
+
+<p>採用しなかった対案として、<code>fct_scout</code> に <code>scout_sender_key</code> 1 本ではなく <code>sender_company_key</code> と <code>sender_agent_key</code> の 2 本を持たせた場合を見る。<code>S001</code>（<code>C001</code> 発）は前者に企業キー・後者に <code>-1</code>、<code>S002</code>（<code>AG01</code> 発）はその逆になる。</p>
+
+<ul>
+<li>「送信主体別の返信率」が 2 本のクエリの <code>UNION ALL</code> になる。BI ツールから見ると 2 つの別ディメンションが並んでいるだけで、1 本のドリルダウン軸にできない。</li>
+<li>送信主体を 3 種類目に増やすと FK 列が 1 本増える。<code>fct_scout</code> を参照している既存クエリを全部直すことになる。</li>
+<li>どちらの列も半分の行で <code>-1</code> になるので、<code>COUNT(DISTINCT sender_agent_key)</code> のような素朴な指標が「エージェント数 + 1」を返す。</li>
+</ul>
+
+<h2>3. Kimball の原則</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>技法</th><th>定義</th><th>使う条件</th></tr></thead>
+<tbody>
+<tr><td>多値ディメンションとブリッジ表</td><td>ファクトからディメンションへ、グループキー経由でブリッジ表を挟む。ブリッジは「同時に成立する 1 値」につき 1 行を持つ</td><td>ディメンションが正当に多値のとき（患者 1 回の診療に複数の診断名）</td></tr>
+<tr><td>重み付け係数（weighting factor）</td><td>ブリッジの各行に、そのグループ内での配分比を持つ。1 グループ内の合計が 1 になる</td><td>加法メジャーを多値の軸で割りたい。合計を総数と一致させたいとき</td></tr>
+<tr><td>impact report / weighted report</td><td>重みを掛けない集計が impact（「この職種を希望する会員に何件届いたか」）、掛けた集計が weighted（「この職種に帰属する件数」）</td><td>両方作る。どちらが欲しいかは問いによって変わる。同じ画面に混ぜない</td></tr>
+<tr><td>時間可変ブリッジ</td><td>ブリッジ表に有効期間のタイムスタンプを持ち、クエリ側が特定時点に制約する</td><td>関係そのものが時間で変わり、かつ両端が Type 2 のとき（口座と顧客）</td></tr>
+<tr><td>固定深さ位置階層</td><td>多対一の連鎖で、各レベルに合意された名前があるとき、レベルをディメンションの別々の位置属性にする</td><td>最も速く最も分かりやすい。条件を満たすなら常にこれ</td></tr>
+<tr><td>わずかに不揃いな階層</td><td>深さは一定でないが幅が小さい場合、最大深さの位置属性に業務ルールで押し込む</td><td>「不定深さ用の複雑な機構を使うよりは」force-fit してよい範囲</td></tr>
+<tr><td>不揃い/可変深さ階層のブリッジ</td><td>階層中の<strong>あり得る全経路</strong>に 1 行ずつ持つ表。祖先・子孫・<code>depth</code>・末端/根のフラグ</td><td>深さが不定、代替階層を差し替えたい、共有所有がある、階層が時間変化する</td></tr>
+<tr><td>pathstring 属性</td><td>ディメンション行ごとに、根から自分までの経路を符号化した文字列を 1 列持つ</td><td>ブリッジを避けたいとき。ただし代替階層の差し替えと共有所有は表現できず、構造変更で全体の付け替えが要る</td></tr>
+<tr><td>supertype / subtype スキーマ</td><td>共通属性だけを持つ supertype ディメンションと、種別ごとの subtype 表に分ける。core / custom とも呼ぶ</td><td>異種の製品・口座で、互換しない属性やメジャーが多いとき</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="aside kimball">
+<p><strong>Kimball Dimensional Modeling Techniques より。</strong></p>
+<p>不揃い階層について: <em>“All these objections can be overcome in relational databases by modeling a ragged hierarchy with a specially constructed bridge table. This bridge table contains a row for every possible path in the ragged hierarchy.”</em>（SQL の再帰拡張では代替階層の差し替え・共有所有・時間変化が扱えない、その全部をブリッジ表が解く）</p>
+<p>異種ディメンションについて: <em>“The solution is to build a single supertype fact table that has the intersection of the facts from all the account types (along with a supertype dimension table containing the common attributes), and then systematically build separate fact tables (and associated dimension tables) for each of the subtypes.”</em></p>
+<p>多値について: <em>“the multivalued dimension must be attached to the fact table through a group dimension key to a bridge table with one row for each simultaneous diagnosis in a group.”</em> さらに、両端が Type 2 の場合はブリッジ自身に有効/失効タイムスタンプが要り、<em>“the requesting application must constrain the bridge table to a specific moment in time”</em>。</p>
+</div>
+
+<div class="aside kimball">
+<p><strong>DT#142「Building Bridges」（Warren Thornthwaite）。</strong>ブリッジを 2 種類に分ける。1 つは<strong>静的</strong>ブリッジで、1 ファクト行に紐づく値の集合が時間変化しない（救急外来の受診時診断）。もう 1 つは<strong>時間可変</strong>ブリッジで、関係が測定対象のトランザクションとは独立に存在し、時間で変わる（顧客と口座）。作り方は、値の組合せを重複排除して<strong>グループ</strong>を作り、グループに一意キーを振り、それを行方向に展開してブリッジにする。この Design Tip 自身は静的ブリッジの手順だけを扱い、重み付けには触れていない。重み付け係数と impact / weighted の対比は DWT の口座-顧客ブリッジ（金融サービスの章）側の議論。</p>
+</div>
+
+<p>CareerVoice の 3 つを、この表のどこに当てるか。<strong>希望職種は静的ブリッジ</strong>（ソースの <code>member_desired_job_categories</code> に履歴が無く、<code>updated_at</code> しか持たない）。<strong>企業グループは時間可変の不揃い階層</strong>（<code>C003</code> が <code>C001</code> から離脱しうる）。<strong>職種はわずかに不揃いな階層</strong>で、深さの幅が 1〜3 に収まるので force-fit して <code>dim_job_category</code> に平坦化する。<strong>スカウト送信主体は supertype</strong>で、企業とエージェントの共通属性（名前・種別）に対して固有属性が <code>company_industry</code> と <code>agency_tier</code> の 2 列しかないので、subtype 表を分けずに 1 本に畳む。</p>
+
+<h2>4. 現代の再解釈</h2>
+
+<p>BigQuery のスキーマ設計ガイドは、ブリッジ表という発想そのものへの対案を出している。「ネストと繰り返し列でストレージを非正規化してクエリ性能を上げよ」であり、その理由は結合のためのシャッフルを消せることにある。ガイドの言葉では <em>“Denormalization localizes the data to individual slots, so that execution can be done in parallel”</em>、そして <em>“Increases in storage costs are worth the performance gains of using denormalized data.”</em></p>
+
+<div class="aside modern">
+<p><strong>BigQuery ネスト・繰り返し列ガイドの要点と、この題材での効き方。</strong></p>
+<ul>
+<li><strong>推奨される形</strong>: 一緒にクエリされる低〜中カーディナリティの 1 対多。<code>M002</code> の希望職種 2 件（仕様上の上限 <code>priority</code> 1..3）はここに当たる。</li>
+<li><strong>推奨されない形</strong>: 高カーディナリティの 1 対多。会員の閲覧履歴（<code>page_views</code>）を <code>dim_member</code> に ARRAY で内包するのは明確に対象外で、そちらはファクト表のまま。</li>
+<li><strong>効かない場合の明記</strong>: すでに分析向けに最適化されたスタースキーマは、さらに非正規化してもそれほど得をしない。ガイド自身がそう書いている。CareerVoice の規模ではブリッジ結合のコストは測定誤差の内側で、<strong>性能は選択理由にならない</strong>。</li>
+</ul>
+</div>
+
+<p>下の図は同じ問い（「<code>M002</code> 宛のスカウトを希望職種別に割る」）を 2 通りの物理設計で表したもの。ブリッジは行を 2 本に増やし、ARRAY は <code>dim_member</code> の 1 行に畳む。<strong>どちらも <code>weight</code> を持つ</strong>。重みは物理設計ではなく意味の問題なので、ARRAY にしても消えない。</p>
+
+<svg id="dg-brv" viewBox="0 0 800 424" width="100%"
+     style="max-width:800px;height:auto;display:block"
+     xmlns="http://www.w3.org/2000/svg"
+     role="img" aria-labelledby="dg-brv-t dg-brv-d">
+  <title id="dg-brv-t">多値の希望職種をブリッジ表で持つ場合と ARRAY で持つ場合</title>
+  <desc id="dg-brv-d">ブリッジ表では M002 の希望職種が 2 行に分かれて別テーブルに置かれ、ARRAY では同じ 2 件が dim_member の 1 行の中に畳まれる。重み 0.5 はどちらの持ち方でも必要になる。</desc>
+  <style>
+    #dg-brv{
+      --paper:#fbfbfa; --ink:#22262e; --muted:#5b6472; --soft:#828b9a;
+      --rule:rgba(34,38,46,.14); --accent:#c8571d; --tint:rgba(200,87,29,.10);
+      --sans:system-ui,-apple-system,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+      --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Hiragino Sans","Noto Sans JP",monospace;
+    }
+    @media (prefers-color-scheme:dark){
+      #dg-brv{--paper:#1a1d23;--ink:#e9ecf1;--muted:#a6afbd;--soft:#7f8898;
+            --rule:rgba(233,236,241,.18);--accent:#f0894f;--tint:rgba(240,137,79,.14);}
+    }
+    :root[data-theme="dark"] #dg-brv{--paper:#1a1d23;--ink:#e9ecf1;--muted:#a6afbd;--soft:#7f8898;
+            --rule:rgba(233,236,241,.18);--accent:#f0894f;--tint:rgba(240,137,79,.14);}
+    :root[data-theme="light"] #dg-brv{--paper:#fbfbfa;--ink:#22262e;--muted:#5b6472;--soft:#828b9a;
+            --rule:rgba(34,38,46,.14);--accent:#c8571d;--tint:rgba(200,87,29,.10);}
+    #dg-brv .bg{fill:var(--paper)}
+    #dg-brv .box-soft{fill:var(--paper);stroke:var(--rule);stroke-width:1}
+    #dg-brv .box-focal{fill:var(--tint);stroke:var(--accent);stroke-width:1.4}
+    #dg-brv .zone{fill:none;stroke:var(--rule);stroke-width:1;stroke-dasharray:4 3}
+    #dg-brv .name{fill:var(--ink);font:600 14px var(--sans)}
+    #dg-brv .sub{fill:var(--muted);font:400 11px var(--mono)}
+    #dg-brv .tag{fill:var(--soft);font:500 10px var(--mono);letter-spacing:.12em}
+    #dg-brv .tag-accent{fill:var(--accent);font:500 10px var(--mono);letter-spacing:.12em}
+    #dg-brv .note{fill:var(--muted);font:400 12px var(--sans)}
+    #dg-brv .lead{fill:none;stroke:var(--muted);stroke-width:1.4;marker-end:url(#dg-brv-a)}
+    #dg-brv .mask{fill:var(--paper)}
+    #dg-brv .mk{fill:var(--muted)}
+  </style>
+  <defs>
+    <marker id="dg-brv-a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <path class="mk" d="M0,0 L9,3.5 L0,7 Z"/></marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="800" height="424"/>
+
+  <rect class="zone" x="32" y="56" width="336" height="320" rx="8"/>
+  <rect class="mask" x="48" y="48" width="64" height="16"/>
+  <text class="tag" x="52" y="59">BRIDGE</text>
+
+  <rect class="zone" x="432" y="56" width="336" height="320" rx="8"/>
+  <rect class="mask" x="448" y="48" width="104" height="16"/>
+  <text class="tag-accent" x="452" y="59">ARRAY IN DIM</text>
+
+  <line class="lead" x1="200" y1="144" x2="200" y2="176"/>
+  <line class="lead" x1="200" y1="264" x2="200" y2="296"/>
+  <line class="lead" x1="600" y1="144" x2="600" y2="176"/>
+
+  <rect class="box-soft" x="56" y="88" width="288" height="56" rx="6"/>
+  <text class="name" x="200" y="114" text-anchor="middle">fct_scout</text>
+  <text class="sub" x="200" y="132" text-anchor="middle">member_key = M002</text>
+
+  <rect class="box-focal" x="56" y="176" width="288" height="88" rx="6"/>
+  <text class="name" x="200" y="200" text-anchor="middle">br_member_desired_job_category</text>
+  <text class="sub" x="200" y="222" text-anchor="middle">ENG-BE   priority 1  w 0.5</text>
+  <text class="sub" x="200" y="244" text-anchor="middle">ENG-DATA priority 2  w 0.5</text>
+
+  <rect class="box-soft" x="56" y="296" width="288" height="56" rx="6"/>
+  <text class="name" x="200" y="322" text-anchor="middle">dim_job_category</text>
+  <text class="sub" x="200" y="340" text-anchor="middle">ENG-BE / ENG-DATA</text>
+
+  <rect class="box-soft" x="456" y="88" width="288" height="56" rx="6"/>
+  <text class="name" x="600" y="114" text-anchor="middle">fct_scout</text>
+  <text class="sub" x="600" y="132" text-anchor="middle">member_key = M002</text>
+
+  <rect class="box-focal" x="456" y="176" width="288" height="176" rx="6"/>
+  <text class="name" x="600" y="200" text-anchor="middle">dim_member</text>
+  <text class="sub" x="600" y="218" text-anchor="middle">member_id = M002</text>
+  <rect class="box-soft" x="472" y="236" width="256" height="100" rx="6"/>
+  <text class="sub" x="600" y="258" text-anchor="middle">desired_job_categories</text>
+  <text class="sub" x="600" y="286" text-anchor="middle">ENG-BE   priority 1  w 0.5</text>
+  <text class="sub" x="600" y="314" text-anchor="middle">ENG-DATA priority 2  w 0.5</text>
+
+  <text class="note" x="32" y="400">ブリッジは行が 2 本に増え、ARRAY は 1 行に畳まれる。weight はどちらにも要る。</text>
+</svg>
+
+<h3>何が変わり、何が残るか</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>論点</th><th>Kimball の前提</th><th>BigQuery + ARRAY で</th><th>残るもの</th></tr></thead>
+<tbody>
+<tr><td>結合コスト</td><td>ブリッジ 1 本の追加は結合 2 回分の負担。避けられるなら避ける</td><td><code>UNNEST</code> は同一テーブル内の展開でシャッフルが起きない。スキャン課金も ARRAY 列を読むぶんだけ</td><td>CareerVoice の規模ではどちらも無視できる。<strong>性能は決め手にならない</strong></td></tr>
+<tr><td>重み</td><td>ブリッジ行に <code>weighting_factor</code>。合計 1</td><td><code>STRUCT</code> の中に <code>weight FLOAT64</code>。持たないと同じ二重計上が起きる</td><td><strong>そのまま残る</strong>。物理設計ではなく意味の問題</td></tr>
+<tr><td>グループキー</td><td>組合せを重複排除してグループ表を作り、ファクトはグループキーを持つ（DT#142）</td><td>不要。ARRAY はファクトやディメンションの行に直接ぶら下がる</td><td>組合せの数が少なく再利用されるなら、グループ化はストレージではなく<strong>一貫性</strong>のために効く</td></tr>
+<tr><td>BI からの見え方</td><td>ブリッジは普通の表。BI ツールが素の JOIN で扱える</td><td>繰り返しフィールドは多くの BI ツールがディメンションとして直接扱えない。カスタムクエリで <code>UNNEST</code> して平坦化するか、モデリング層（LookML 等）で展開済みビューを定義する必要がある</td><td><strong>ここが最大の差</strong>。セルフサービス BI を前提にするならブリッジが強い</td></tr>
+<tr><td>更新</td><td>希望職種が 1 件変わればブリッジの 1 行を差し替える</td><td>配列は部分更新できない。1 要素の変更で <code>dim_member</code> の行全体を書き直す。SCD2 と組むと版が丸ごと 1 本増える</td><td>更新頻度が高い多値は ARRAY に向かない</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>階層側にも同じ対案がある。<code>br_company_hierarchy</code> の代わりに <code>dim_company</code> へ祖先コードの ARRAY を持たせれば「<code>C001</code> 傘下か」は <code>UNNEST</code> なしの <code>IN UNNEST(…)</code> 一発で判定できる。ただしこれは Kimball の pathstring と同じ性質で、<code>depth</code> を使ったレベル別の集計や代替階層の差し替えは表現できない。正典では <code>br_company_hierarchy</code> をブリッジとして持つ。</p>
+
+<h2>5. BigQuery + dbt での実装</h2>
+
+<h3>(a) <code>br_member_desired_job_category</code> と weighted report</h3>
+
+<pre><code>-- models/marts/br_member_desired_job_category.sql
+{{ config(materialized='table') }}
+
+WITH weighted AS (
+
+    SELECT
+        member_id,
+        job_category_code,
+        priority,
+        -- グループ内の合計が 1 になる配分比。DWT の weighting factor
+        SAFE_DIVIDE(1.0, COUNT(*) OVER (PARTITION BY member_id)) AS weighting_factor
+    FROM {{ ref('stg_careervoice__member_desired_job_categories') }}
+
+)
+
+SELECT
+    m.member_key,
+    jc.job_category_key,
+    w.priority,
+    w.weighting_factor
+FROM weighted AS w
+-- is_current で絞らない。dim_member の全 SCD2 版に希望職種を展開しておくと、
+-- ファクト側の sent 時点 member_key と直接結合できる（下の weighted report 参照）
+INNER JOIN {{ ref('dim_member') }} AS m
+    ON w.member_id = m.member_id
+INNER JOIN {{ ref('dim_job_category') }} AS jc
+    ON w.job_category_code = jc.job_category_code
+</code></pre>
+
+<div class="aside kimball">
+<p><strong>ここで 1 つ判断している。</strong>DT#142 の分類では、関係が時間変化するなら時間可変ブリッジ（有効/失効タイムスタンプ付き）が要る。しかしソースの <code>member_desired_job_categories</code> は <code>updated_at</code> しか持たず、過去の希望職種は残っていない。<strong>取れない履歴は作れない</strong>ので、現在値の希望職種を <code>dim_member</code> の全版に複製する静的ブリッジにする。代償は「2026-06 時点で <code>M002</code> が何を希望していたか」に答えられないこと。答える必要が出たらソース側にスナップショット（<code>snap_*</code>）を足すのが先で、ブリッジの形を変えるのは後。</p>
+</div>
+
+<pre><code>-- 希望職種別のスカウト送信数。impact と weighted を 1 クエリで並べる
+SELECT
+    jc.level2_name,
+    SUM(f.scout_count)                       AS scout_count_impact,
+    SUM(f.scout_count * b.weighting_factor)  AS scout_count_weighted
+FROM {{ ref('fct_scout') }} AS f
+INNER JOIN {{ ref('br_member_desired_job_category') }} AS b
+    ON f.member_key = b.member_key
+INNER JOIN {{ ref('dim_job_category') }} AS jc
+    ON b.job_category_key = jc.job_category_key
+WHERE f.sent_date BETWEEN DATE '2026-06-01' AND DATE '2026-06-30'
+GROUP BY jc.level2_name
+</code></pre>
+
+<p><code>scout_count_impact</code> は「この職種を希望する会員に届いたスカウト数」で、列の合計は総送信数を超える。<code>scout_count_weighted</code> は合計が総送信数に一致する。<strong>この 2 列は必ず並べて出す。</strong>片方だけを出すダッシュボードは、読み手が勝手にもう片方だと思い込む。</p>
+
+<pre><code># models/marts/schema.yml
+version: 2
+
+models:
+  - name: br_member_desired_job_category
+    description: |
+      会員の希望職種（多値）をファクトに結ぶブリッジ。DT#142 の静的ブリッジ。
+      weighting_factor は member_key 内で合計 1。重みなしで結合すると二重計上になる。
+    columns:
+      - name: member_key
+        tests: [not_null, relationships: {to: ref('dim_member'), field: member_key}]
+      - name: job_category_key
+        tests: [not_null, relationships: {to: ref('dim_job_category'), field: job_category_key}]
+      - name: weighting_factor
+        tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 0, max_value: 1, inclusive: false}
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [member_key, job_category_key]
+</code></pre>
+
+<pre><code>-- tests/assert_desired_weights_sum_to_one.sql
+-- 合計 1 はブリッジの定義そのもの。壊れたら weighted report が静かにずれる
+SELECT
+    member_key,
+    SUM(weighting_factor) AS total_weight
+FROM {{ ref('br_member_desired_job_category') }}
+GROUP BY member_key
+HAVING ABS(total_weight - 1.0) &gt; 1e-9
+</code></pre>
+
+<h3>(b) <code>br_company_hierarchy</code> を再帰 CTE で作る</h3>
+
+<pre><code>-- models/marts/br_company_hierarchy.sql
+{{ config(materialized='table') }}
+
+WITH RECURSIVE
+
+base AS (
+
+    SELECT
+        company_id,
+        parent_company_id
+    FROM {{ ref('stg_careervoice__companies') }}
+
+),
+
+flags AS (
+
+    SELECT
+        b.company_id,
+        b.parent_company_id IS NULL AS is_root,
+        NOT EXISTS (
+            SELECT 1 FROM base AS c WHERE c.parent_company_id = b.company_id
+        ) AS is_leaf
+    FROM base AS b
+
+),
+
+paths AS (
+
+    -- 自己参照行。depth 0。これが無いと「C001 グループ」に C001 自身が入らない
+    SELECT
+        company_id AS ancestor_company_id,
+        company_id AS descendant_company_id,
+        0          AS depth
+    FROM base
+
+    UNION ALL
+
+    -- 1 段ずつ下る。C001 → C003 が depth 1
+    SELECT
+        p.ancestor_company_id,
+        b.company_id AS descendant_company_id,
+        p.depth + 1  AS depth
+    FROM paths AS p
+    INNER JOIN base AS b
+        ON b.parent_company_id = p.descendant_company_id
+
+)
+
+SELECT
+    anc.company_key AS ancestor_company_key,
+    des.company_key AS descendant_company_key,
+    p.depth,
+    fd.is_leaf,   -- 子孫側が末端か
+    fa.is_root    -- 祖先側がグループの頂点か
+FROM paths AS p
+-- 祖先は「現在の」グループ定義で辿る
+INNER JOIN {{ ref('dim_company') }} AS anc
+    ON p.ancestor_company_id = anc.company_id
+   AND anc.is_current
+-- 子孫は全 SCD2 版に展開し、ファクトのイベント時点 company_key と直結できるようにする
+INNER JOIN {{ ref('dim_company') }} AS des
+    ON p.descendant_company_id = des.company_id
+INNER JOIN flags AS fd ON p.descendant_company_id = fd.company_id
+INNER JOIN flags AS fa ON p.ancestor_company_id = fa.company_id
+</code></pre>
+
+<p>BigQuery の <code>WITH RECURSIVE</code> は、再帰項が CTE を<strong>ちょうど 1 回</strong>参照すること、<code>UNION ALL</code> で基底項と繋ぐこと、再帰項に集計関数・分析関数・<code>LIMIT</code> を置かないことを要求する。反復上限は 500 で、それを超えるとエラーで止まる。<strong>この上限が実質的な循環参照検出になる</strong>（<code>C001</code> の親を <code>C003</code> にしてしまうと、エラーで落ちる。無限ループにはならない）。</p>
+
+<pre><code>-- 「C001 グループのクチコミ数」。C001 自身 + C003 が 1 回ずつ数えられる
+SELECT
+    anc.name AS group_parent_name,
+    SUM(r.review_count) AS review_count
+FROM {{ ref('fct_review') }} AS r
+INNER JOIN {{ ref('br_company_hierarchy') }} AS h
+    ON r.company_key = h.descendant_company_key
+INNER JOIN {{ ref('dim_company') }} AS anc
+    ON h.ancestor_company_key = anc.company_key
+WHERE anc.company_id = 'C001'
+  AND anc.is_current
+GROUP BY anc.name
+</code></pre>
+
+<p>木構造なら子孫から祖先への経路は 1 本なので、祖先を 1 社に固定すればファクト行は 1 回しか数えられない。<strong>共有所有（1 社が 2 つの親を持つ）を許した瞬間にこれは崩れ、多値ブリッジと同じ重み付けが必要になる。</strong>正典では <code>companies.parent_company_id</code> が単一なので木のまま。</p>
+
+<h3>(c) <code>dim_scout_sender</code>（supertype）</h3>
+
+<pre><code>-- models/marts/dim_scout_sender.sql
+{{ config(materialized='table') }}
+
+WITH company_senders AS (
+
+    SELECT
+        'company'            AS sender_type,
+        c.company_id         AS sender_id,
+        c.name               AS sender_name,
+        i.name               AS company_industry,   -- company 固有
+        CAST(NULL AS STRING) AS agency_tier         -- agent 固有 → NULL
+    FROM {{ ref('stg_careervoice__companies') }} AS c
+    LEFT JOIN {{ ref('stg_careervoice__industries') }} AS i
+        ON c.industry_code = i.industry_code
+
+),
+
+agent_senders AS (
+
+    SELECT
+        'agent'              AS sender_type,
+        a.agent_id           AS sender_id,
+        a.name               AS sender_name,
+        CAST(NULL AS STRING) AS company_industry,
+        ag.tier              AS agency_tier
+    FROM {{ ref('stg_careervoice__agents') }} AS a
+    INNER JOIN {{ ref('stg_careervoice__agencies') }} AS ag
+        ON a.agency_id = ag.agency_id
+
+),
+
+unioned AS (
+
+    SELECT * FROM company_senders
+    UNION ALL
+    SELECT * FROM agent_senders
+
+)
+
+SELECT
+    -- サロゲートキーの生成方式そのものは 03回の判断に従う
+    {{ dbt_utils.generate_surrogate_key(['sender_type', 'sender_id']) }} AS scout_sender_key,
+    sender_type,
+    sender_id,
+    sender_name,
+    company_industry,
+    agency_tier
+FROM unioned
+</code></pre>
+
+<p><code>UNION ALL</code> の両側で列の順序・型を完全に揃えるのがこのパターンの全部で、<strong>固有属性は「無い側で <code>CAST(NULL AS …)</code>」</strong>と書く。<code>SELECT *</code> で繋ぐなら位置が意味を持つので、列を足すときは両側を同時に直す。<code>valid_from</code> / <code>valid_to</code> / <code>is_current</code> の付与（正典では <code>dim_scout_sender</code> は SCD2）は 05回の方式に従う。</p>
+
+<p>属性の NULL 率が高い supertype は、BI で「業種で絞ると agent 発のスカウトが全部消える」事故を生む。防ぐのは列名の規律で、<strong>片方にしか無い属性は名前に出自を残す</strong>（<code>company_industry</code>、<code>agency_tier</code>）。共通属性のつもりで <code>industry</code> と名付けると、読み手は両方に入っていると思う。</p>
+
+<p>固有属性が 2 列を超えて増え、種別ごとにメジャーまで違ってくるなら、Kimball の core / custom に分けて subtype 表を別に持つ。判断の境界は §6 の 3 番目の表。</p>
+
+<h3>(d) ARRAY 版の <code>dim_member</code> と <code>UNNEST</code> クエリ</h3>
+
+<pre><code>-- models/marts/dim_member.sql（ARRAY を内包する対案。列を 1 本足すだけ）
+WITH weighted AS (
+
+    SELECT
+        member_id,
+        job_category_code,
+        priority,
+        SAFE_DIVIDE(1.0, COUNT(*) OVER (PARTITION BY member_id)) AS weight
+    FROM {{ ref('stg_careervoice__member_desired_job_categories') }}
+
+),
+
+desired AS (
+
+    SELECT
+        member_id,
+        ARRAY_AGG(
+            STRUCT(job_category_code AS code, priority, weight)
+            ORDER BY priority
+        ) AS desired_job_categories
+    FROM weighted
+    GROUP BY member_id
+
+)
+
+SELECT
+    m.*,
+    -- 希望を登録していない会員は NULL ではなく空配列。BigQuery は
+    -- NULL 配列を読み戻すと空配列になるので、型付き空配列で明示的に揃える
+    IFNULL(
+        d.desired_job_categories,
+        ARRAY&lt;STRUCT&lt;code STRING, priority INT64, weight FLOAT64&gt;&gt;[]
+    ) AS desired_job_categories
+-- m は dim_member の既存の本体（SCD2 版の会員行）。この対案では一切変えない
+FROM member_versions AS m
+LEFT JOIN desired AS d
+    ON m.member_id = d.member_id
+</code></pre>
+
+<pre><code>-- (a) と同じ問いを ARRAY 版で。ブリッジへの JOIN が UNNEST に置き換わる
+SELECT
+    jc.level2_name,
+    SUM(f.scout_count)            AS scout_count_impact,
+    SUM(f.scout_count * d.weight) AS scout_count_weighted
+FROM {{ ref('fct_scout') }} AS f
+INNER JOIN {{ ref('dim_member') }} AS m
+    ON f.member_key = m.member_key
+CROSS JOIN UNNEST(m.desired_job_categories) AS d
+INNER JOIN {{ ref('dim_job_category') }} AS jc
+    ON d.code = jc.job_category_code
+WHERE f.sent_date BETWEEN DATE '2026-06-01' AND DATE '2026-06-30'
+GROUP BY jc.level2_name
+</code></pre>
+
+<p>結果は (a) と同じ。差は 3 点ある。<strong>1.</strong> <code>CROSS JOIN UNNEST</code> は空配列の行を落とす（ブリッジへの <code>INNER JOIN</code> と同じ挙動）。希望職種を登録していない会員のスカウトも数えたいなら <code>LEFT JOIN UNNEST(…) AS d</code> にする。<strong>2.</strong> <code>weight</code> は <code>STRUCT</code> の中にあるので、書き忘れの結果は (a) と同じ二重計上になる。ARRAY にしても重みの規律は緩まない。<strong>3.</strong> この <code>UNNEST</code> を BI ツールのセルフサービス画面から書かせることはできない。カスタムクエリかモデリング層のどちらかで、誰かが先に平坦化しておく必要がある。</p>
+
+<h2>6. 判断基準</h2>
+
+<h3>多値: ブリッジか ARRAY か</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>多値の個数の分布</th><th>BI の <code>UNNEST</code> 可否</th><th>更新頻度</th><th>選択</th><th>理由</th></tr></thead>
+<tbody>
+<tr><td>上限が仕様で決まっている（希望職種は <code>priority</code> 1..3）</td><td>セルフサービス BI が直結する（<code>UNNEST</code> 不可）</td><td>低</td><td><strong>ブリッジ</strong></td><td>素の JOIN で見える。CareerVoice の決定はこれ</td></tr>
+<tr><td>同上</td><td>クエリは dbt / モデリング層が書く</td><td>低</td><td><strong>ARRAY</strong></td><td>結合が 1 つ減り、行数が増えない</td></tr>
+<tr><td>数十〜数百（閲覧履歴、応募履歴）</td><td>問わない</td><td>高</td><td><strong>別ファクト表</strong></td><td>ディメンションが肥大する。ガイドが明示的に外す高カーディナリティ</td></tr>
+<tr><td>個数が可変で頻繁に変わる</td><td>問わない</td><td>高</td><td><strong>ブリッジ</strong></td><td>ARRAY は部分更新できず、1 要素の変更で行全体を書き直す</td></tr>
+<tr><td>関係自体が時間変化し、過去の状態を問う</td><td>問わない</td><td>問わない</td><td><strong>時間可変ブリッジ</strong></td><td>有効/失効タイムスタンプを持てるのはブリッジだけ（DT#142）</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>階層: 平坦化かブリッジか</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>深さの分布</th><th>問いの形</th><th>選択</th><th>理由</th></tr></thead>
+<tbody>
+<tr><td>固定。各レベルに合意された名前がある</td><td>「level2 別の応募数」</td><td><strong>固定深さ位置属性</strong></td><td>最速・最も分かりやすい。条件を満たすなら常にこれ</td></tr>
+<tr><td>1〜3 で幅が狭い（<code>job_categories</code>）</td><td>同上</td><td><strong>平坦化 + 終端埋め</strong></td><td><code>dim_job_category</code>。<code>level3_name</code> を <code>level2_name</code> で埋め、<code>leaf_level</code> に実際の終端を残す（DT#43）</td></tr>
+<tr><td>不定。買収で伸びる（企業グループ）</td><td>「<code>C001</code> 配下の全社を合計」</td><td><strong>階層ブリッジ</strong></td><td>全経路 1 行。<code>depth</code> でレベル別にも切れる</td></tr>
+<tr><td>不定だが「祖先の集合」しか要らない</td><td>「<code>C001</code> 傘下かどうか」</td><td><strong>pathstring / 祖先 ARRAY</strong></td><td>ブリッジより軽い。代替階層の差し替えは捨てる</td></tr>
+<tr><td>共有所有（1 社が複数の親を持つ）</td><td>任意</td><td><strong>ブリッジ一択</strong></td><td>再帰 CTE でも pathstring でも表現できない。加えて重み付けが要る</td></tr>
+<tr><td>階層自体が時間変化する</td><td>「2026-01 時点のグループで集計」</td><td><strong>ブリッジ + 有効期間</strong></td><td>祖先-子孫の行に <code>valid_from</code>/<code>valid_to</code>。§7(b) で扱う</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>異種: supertype か分離か</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>共通属性の割合</th><th>メジャー</th><th>選択</th><th>理由</th></tr></thead>
+<tbody>
+<tr><td>高い。固有は 1〜2 列（<code>dim_scout_sender</code>: 固有は <code>company_industry</code> と <code>agency_tier</code> のみ）</td><td>同じ</td><td><strong>supertype 1 本</strong></td><td>NULL 列 2 本の代償で、ファクトの FK が 1 本になり「送信主体別」が 1 クエリになる</td></tr>
+<tr><td>半々</td><td>同じ</td><td><strong>supertype + subtype</strong></td><td>共通属性の supertype で横断集計、固有は subtype 表へ（core / custom）</td></tr>
+<tr><td>低い。属性もメジャーも粒度も違う</td><td>違う</td><td><strong>ファクトごと分離</strong></td><td>無理に畳むと「数百の互換しない属性」の失敗形になる</td></tr>
+<tr><td>任意</td><td>任意</td><td><strong>2 本の FK + <code>-1</code> は採らない</strong></td><td>種別が増えるたびに列とクエリが増える。§2(c)</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>7. 演習</h2>
+
+<h3>(a) <code>reviews</code> に「タグ（複数）」が付いたら <code>fct_review</code> にどう持つか</h3>
+
+<p>クチコミに「残業少なめ」「リモート可」のような多値タグが付くようになった。<code>fct_review</code> の粒度は「1 行 = 投稿された 1 クチコミ」で変えない。タグをどこに置くか。</p>
+
+<details>
+<summary>解答例</summary>
+<p><strong>命名規約 <code>br_*</code> に従うブリッジを 1 本置く</strong>（<code>fct_review</code> に <code>review_id</code> は退化ディメンションとして既にあるので、ブリッジはそれで結べる。表名は正典に追加が要る）。判断基準の 1 番目の表を当てる。</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>軸</th><th>この場合</th><th>効き方</th></tr></thead>
+<tbody>
+<tr><td>個数の分布</td><td>1 クチコミに数個。上限は運用で決まる</td><td>ブリッジ・ARRAY ともに可</td></tr>
+<tr><td>BI の <code>UNNEST</code> 可否</td><td>クチコミのタグ別集計はセルフサービスで見たい典型</td><td><strong>ブリッジに寄る</strong></td></tr>
+<tr><td>更新頻度</td><td>審査時に確定してほぼ変わらない（DT#142 の静的ブリッジ）</td><td>どちらでも可</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>重みは持つが、既定の見せ方は impact。</strong>「残業少なめのタグが付いたクチコミは何件か」が主な問いで、合計が総クチコミ数と一致する必要はない。ただし <code>weighting_factor</code> の列自体は作っておく。「タグ別の平均 <code>overall_score</code>」を出す時に、重みなしだとタグを多く付けたクチコミが平均を強く引っ張るため。</p>
+<p><strong><code>fct_review</code> 側に <code>ARRAY&lt;STRING&gt;</code> で持たない理由</strong>がもう 1 つある。<code>fct_review</code> はパーティション付きのファクトで行数が最も伸びる表であり、タグの付け直し（審査のやり直し）が起きるたびにファクト行を書き換えることになる。ブリッジなら差分はブリッジ側の数行で済む。</p>
+</details>
+
+<h3>(b) <code>C003</code> が <code>C001</code> から離脱したら <code>br_company_hierarchy</code> はどうなるか</h3>
+
+<p>2026-09-01 に <code>C003</code>（ヒノデ物流）が <code>C001</code>（アオゾラ商事）グループから離脱し、<code>companies.parent_company_id</code> が NULL になった。§5(b) の実装のまま <code>dbt build</code> したら何が起きるか。SCD の観点で答える。</p>
+
+<details>
+<summary>解答例</summary>
+<p><strong>起きること: 過去のクチコミが遡って <code>C001</code> グループから消える。</strong>§5(b) は <code>base</code> をソースの現在値から作り直す全件再構築なので、離脱後の実行では <code>C001</code> → <code>C003</code>（depth 1）の行が消える。「<code>C001</code> グループのクチコミ数」を 2026-08 の期間で出しても、<code>C003</code> 分が入らなくなる。<strong>階層が Type 1 として振る舞っている。</strong></p>
+<p>ただし完全には消えない。<code>dim_company</code> は正典で Type 2（<code>name</code> のみ Type 1）なので、<code>parent_company_id</code> の変化で <code>C003</code> に新しい版が生まれる。§5(b) は子孫側を全 SCD2 版に展開しているので、<strong>離脱前の <code>C003</code> の版キー</strong>は <code>C001</code> の子孫として残せる余地がある。実装上そうするには、再構築を「現在値からの全件再生成」ではなく「版ごとの親を辿る」形に変える必要がある。</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>主に答えたい問い</th><th>設計</th><th>代償</th></tr></thead>
+<tbody>
+<tr><td>「当時の <code>C001</code> グループの実績」</td><td>ブリッジに <code>valid_from</code> / <code>valid_to</code> を持ち、集計時に <code>sent_date</code> 等で as-of 制約する（DT#142 の時間可変ブリッジ）</td><td>全クエリに時点条件が必要。忘れると行が重複する</td></tr>
+<tr><td>「今の <code>C001</code> グループの過去実績」（M&amp;A の効果測定）</td><td>現在値からの全件再生成のまま（§5(b)）</td><td>過去のレポートの数字が実行日で変わる</td></tr>
+<tr><td>両方</td><td>時間可変ブリッジを正とし、「現在のグループ」は <code>is_current</code> な祖先だけを見るビューを別に置く</td><td>ブリッジ 1 本ぶんの運用が増える</td></tr>
+</tbody>
+</table>
+</div>
+<p>正解は 1 つではない。判断基準の 2 番目の表の最終行「階層自体が時間変化する」に当たるかどうかは、<strong>離脱・買収がどれくらいの頻度で起きるか</strong>で決まる。年に数件なら時間可変ブリッジのコストは正当化される。</p>
+</details>
+
+<h3>(c) <code>fct_placement.agent_key</code> が <code>-1</code> のとき <code>dim_agent</code> に <code>-1</code> 行を持つべきか</h3>
+
+<p>直接応募による入社を <code>fct_placement</code> に入れると <code>agent_key</code> が <code>-1</code> になる。<code>dim_agent</code> に <code>-1</code> 行を作るのと、<code>dim_scout_sender</code> に寄せて統一するのと、どちらか。</p>
+
+<details>
+<summary>解答例</summary>
+<p><strong>まず前提を疑う。</strong>正典の <code>fct_placement</code> は「1 行 = 1 入社（エージェント経由）」と粒度を宣言しており、ソースの <code>placements.agency_id</code> も NULL 許容ではない。この宣言のままなら <code>agent_key = -1</code> は出ない。出るとしたら粒度宣言が「全入社」に広がった時で、それは <code>fee_amount</code> が NULL になる行を混ぜるということでもある。<strong>粒度の変更が先にあり、<code>-1</code> はその結果</strong>。</p>
+<p><strong>そのうえで、<code>dim_agent</code> の <code>-1</code> 行は持つ。</strong>理由は 2 つ。</p>
+<ol>
+<li>正典の <code>fct_job_posting_daily</code> は <code>agent_key(-1=直接)</code> を既に持っている。<code>dim_agent</code> に <code>-1</code> 行が無ければこのファクトの結合が壊れる。粒度の話とは無関係に必要。</li>
+<li>DT#43。ディメンションの FK に NULL を置かず、<code>-1</code> の行に「直接（エージェント経由でない）」という表示名を入れる。BI で「エージェント別」を出したとき、直接応募が行として見える。</li>
+</ol>
+<p><strong><code>dim_scout_sender</code> に統一しない。</strong>DT#3 の「プロセス単位」がそのまま効く。<code>dim_scout_sender</code> の意味は「スカウトを送った主体」で、<code>fct_placement.agent_key</code> の意味は「入社を仲介したエージェント」。別のビジネスプロセスの別の役割であり、値域も違う（送信主体には企業が入るが、仲介者に企業は入らない）。畳むと「送信主体別の入社数」という無意味な軸ができ、コンフォームド性を壊す。判断基準の 3 番目の表の第 3 行「属性もメジャーも粒度も違う → 分離」。</p>
+<p><code>dim_agent</code> と <code>dim_scout_sender</code> の重複（同じ担当者が両方に出る）は許容する。<code>dim_scout_sender</code> は <code>sender_type</code> + <code>sender_id</code> を自然キーに持つので、<code>agent_id</code> から辿ることはできる。</p>
+</details>
+
+<h2>8. 参考: 手元の基盤ではどうか</h2>
+
+<div class="aside modern">
+<p><code>news_pipeline</code> の <code>summaries.tags</code> は <code>STRING</code> の <code>REPEATED</code> 列で、まさに §4 の ARRAY 選択をしている。多値の個数が数個、更新はほぼ無し、クエリを書くのは BI ツールではなくアプリ側のコードなので、判断基準の 1 番目の表では ARRAY 行に当たる。妥当。</p>
+<p><code>bq_client.get_favorite_tag_counts</code> は <code>, UNNEST(s.tags) AS tag</code> で展開し <code>COUNT(DISTINCT f.article_id)</code> を数えている。これは <strong>impact report</strong> で、タグ列の合計はお気に入り記事数を超える（3 タグの記事は 3 タグそれぞれに 1 を寄与する）。採点のヒント用途としては impact が正しい。「タグ別の記事数の内訳」を出す場面が来たら、<code>weight = 1 / ARRAY_LENGTH(tags)</code> 相当が要る。</p>
+<p><code>dbt_logs_analysis</code> には多値も階層も無い。<code>mart_url_performance</code> の <code>url_path</code> は文字列 1 本で、実際には <code>/</code> 区切りの不揃い階層を内側に持っている。今後試せる種: <code>url_path</code> を <code>SPLIT</code> して祖先-子孫のブリッジを作り、「<code>/api</code> 配下の全パスの p95」を §5(b) と同じ形で出す。深さが不定なので、§6 の 2 番目の表ではブリッジ側に落ちる。</p>
+</div>
+
+<h2>参照文献</h2>
+
+<ul class="ref">
+<li><em>The Data Warehouse Toolkit, 3rd ed.</em> (Kimball &amp; Ross, 2013) ch.6–8 — <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/data-warehouse-dw-toolkit/">kimballgroup.com</a></li>
+<li>Kimball Dimensional Modeling Techniques (2013) — <a href="https://www.kimballgroup.com/wp-content/uploads/2013/08/2013.09-Kimball-Dimensional-Modeling-Techniques11.pdf">PDF</a>（多値ブリッジ / 不揃い階層 / pathstring / supertype-subtype の定義）</li>
+<li>Design Tip #142: Building Bridges — <a href="https://www.kimballgroup.com/2012/02/design-tip-142-building-bridges/">kimballgroup.com</a></li>
+<li>Design Tip #43: Dealing With Nulls In The Dimensional Model — <a href="https://www.kimballgroup.com/2003/02/design-tip-43-dealing-with-nulls-in-the-dimensional-model/">kimballgroup.com</a></li>
+<li>Design Tip #3: Focus On Business Process, Not Business Departments! — <a href="https://decisionworks.com/2000/01/design-tip-3-focus-on-business-process-not-business-departments/">decisionworks.com</a></li>
+<li>Google Cloud, BigQuery スキーマ設計（ネスト・繰り返し列）— <a href="https://cloud.google.com/bigquery/docs/best-practices-performance-nested">cloud.google.com</a></li>
+</ul>
+
+</body>
+</html>

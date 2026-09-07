@@ -1,0 +1,59 @@
+# 04 加法性と派生指標 — 執筆報告
+
+ファイル: `docs/data_mart_modeling/html/04_additivity.html`
+
+## 完了した節
+
+| 節 | 内容 | ブリーフ必須項目の充足 |
+|---|---|---|
+| 1. この回が決めること | 加法/半加法/非加法の3分類表 + CareerVoice のメジャー分類表（13行） | ✓ `review_count` 加法、`score_*` 非加法、`scouts_remaining` 半加法、`fee_rate` 非加法、`avg_overall_score` は持たない、を全て収録 |
+| 2. どこで壊れるか | (a) 平均の平均（`C002` 3日分、件数 1/1/10 を実計算） (b) `scouts_remaining` の四半期 SUM (c) 日次 `COUNT(DISTINCT member_key)` の週次加算 | ✓ 3例とも数値を検算できる形 |
+| 3. Kimball の原則 | 技法6行の表 + Techniques PDF と DT#77 の verbatim 引用 2枠 | ✓ 加法性の定義／期末値・期中平均／分子分母を分けて持つ／パーセンタイル再集約不可 |
+| 4. 現代の再解釈 | MetricFlow の ratio metric（`reply_rate = scouts_replied / scouts_sent`）と `non_additive_dimension`（`window_choice: max` = 期末値） | ✓ + 半加法の宣言まで拡張 |
+| 5. BigQuery + dbt での実装 | `agg_company_rating_daily` モデル / schema.yml / 月次再集約 / `br_company_hierarchy` 経由のグループ再集約 / `QUALIFY ROW_NUMBER()` の期末値 / `APPROX_QUANTILES` / `HLL_COUNT.INIT`+`MERGE` | ✓ |
+| 6. 判断基準 | 「メジャー → 分類 → マートに持つ形 → BI で計算する形」10行 + 列名規約（`avg_`/`rate_`/`pct_`/`median_`/`unique_` 禁止）の運用案 | ✓ |
+| 7. 演習 | (a) 企業別・年別の中央値 (b) `SUM(is_open)` = 延べ掲載日数と月末時点の出し方 (c) 送信主体別の返信率の分子分母 | ✓ 3問、`<details>` 内に SQL 付き解答 |
+| 8. 参考: 手元の基盤 | `mart_url_performance` の `avg_response_time` / `error_rate_percent` / `unique_visitors`、`percentile()` マクロ、HLL の種 | ✓ 4行、この節にのみ登場（grep で確認済み） |
+| 図 | 比較図「平均の平均 vs 和と件数」1枚（ノード6、矢印4、accent 1系統） | ✓ |
+
+## 読んだ文献と引用した要点
+
+- **Kimball Dimensional Modeling Techniques（2013, PDF）** — WebFetch では PDF がテキスト化されなかったため、取得済み PDF を `pdftotext` で抽出して該当箇所を直接読んだ。
+  - 引用（§3 の aside、verbatim）: "Semi-additive measures can be summed across some dimensions, but not all; balance amounts are common semi-additive facts because they are additive across all dimensions except time. Finally, some measures are completely non-additive, such as ratios. A good approach for non-additive facts is, where possible, to store the fully additive components of the non-additive measure and sum these components into the final answer set before calculating the final non-additive fact. This final calculation is often done in the BI layer or OLAP cube."
+  - Periodic Snapshot Fact Tables: 「粒度は期間でありトランザクションではない」「活動が無くても行が立つので FK が密」→ §3 の表と §2(b) の「行は素直に3行ある」に反映。
+  - Aggregate Fact Tables or Cubes: "built solely to accelerate query performance"、原子ファクトと同時に BI へ公開する（aggregate navigation）→ §3 の「性能のためなので原子と答えが一致しなければならない」という論法の根拠。
+- **Design Tip #77（Margy Ross, 2006）** — "you can roll up detailed data in unpredictable ways, the converse is not true – you can't magically explode summary data into its underlying components." および "Summary data naturally pre-supposes the typical business questions..." を §3 に引用。§2(c)・§7(a) の「分解不能なメジャーは原子を残すしかない」の論拠に使った。
+- **dbt / MetricFlow** — `docs/build/about-metricflow` に加え、YAML を実在の spec に合わせるため `docs/build/ratio`・`docs/build/measures`・`docs/build/simple` も参照した（本文の参照文献リストには `references.md` にある `about-metricflow` のみ掲載）。
+  - ratio metric は dbt v1.12+ で `numerator:` / `denominator:` をメトリクス直下に書く形（旧 spec の `type_params:` 配下ではない）。本文はこの v1.12+ 形で統一し、コメントにも明記した。
+  - simple metric も v1.12+ では `agg:` / `expr:` を直接持ち、`measures:` は simple metric に置き換えられる方向（docs に deprecation の注記あり）。
+  - `non_additive_dimension`（`name` / `window_choice: min|max` / `window_groupings`）が半加法メジャーの宣言そのもの。docs のサンプルは MRR とサブスクリプションで、CareerVoice の `scouts_remaining` にそのまま対応する。
+
+## check_svg の結果
+
+```
+python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py docs/data_mart_modeling/html/04_additivity.html
+0 errors, 0 warnings
+```
+
+初回は `UNWEIGHTED` / `WEIGHTED` のタグがノード内側パディングを割ってエラーになったため、タグを結果ノードの外（真上 8px）へ逃がして解消。
+
+## 正典への変更提案
+
+1. **`agg_company_rating_daily` にパーティション用の DATE 列が無い。** 正典 §4 は「ファクトは主要な日付キーと並べて DATE 型の `<role>_date` を持つ」としているが、この agg のメジャー欄は `date_key` / `company_key` のみ。今回は `dim_date` 結合で月次へ上げる書き方にして DATE 列を使わずに済ませたが、09回（増分・パーティション）で `insert_overwrite` を書く際に必要になる。`agg_company_rating_daily` に `full_date` ではなく `snapshot_date`（または `date`）を1列足すか、agg は例外とするかを決めておきたい。
+2. **ユニーク数のスケッチ列の置き場所。** §2(c)・§6 で `HLL_COUNT.INIT` のスケッチを「集約可能なユニーク数の持ち方」として挙げたが、正典にはスケッチ列を持つ集約表が無い。本文では新テーブルを作らず CTE 内で完結させた。スカウト系の日次集約（例: `agg_scout_sender_daily`）を正典に足すなら、`unique_member_sketch`（BYTES）を持つ形が 04/08 回の議論と噛み合う。
+3. **`fee_rate` の分母。** 正典の `fct_placement` は `annual_income`・`fee_rate`・`fee_amount` を持つので `SAFE_DIVIDE(SUM(fee_amount), SUM(annual_income))` で加重平均料率が出る。この関係（`fee_amount = annual_income × fee_rate`）を正典に1行明記しておくと、他の回でも分子分母の対応を迷わない。
+
+## 迷った判断とその理由
+
+1. **§2(b) の合計を 600 ではなく 440 にした。** ブリーフは「1〜3月で SUM して『残枠 600』と出る」だが、`premium` の枠は 200/月で `scouts_remaining = 200 − scouts_sent` なので、3ヶ月の SUM が 600 になるのは**3ヶ月とも送信 0 のとき**だけ。それでは「枠を消化している契約」の例にならないため、送信 20/60/80（残枠 180/140/120）として `SUM = 440` にし、本文で「上限まで積んでも 200 × 3 = 600 にしかならない量を残枠として報告している」と 600 を上限値として明示した。ブリーフの意図（実在しない大きな数が出る）は保っている。
+2. **`agg_company_entity.avg_overall_score_90d` との矛盾を明示的に処理した。** 正典は「集約テーブルの平均: `avg_*` を持たず `sum_*` + `count` を持つ」としつつ、`agg_company_entity` には `avg_overall_score_90d` がある。§1 末尾に「1エンティティ1行の終端テーブルは再集約しない契約なので平均を持ってよい（08回）」という但し書きを置き、§6 の判断基準表にも1行として入れた。08回の ECM の議論と衝突させないための処理。
+3. **§2(c) のユニーク数の題材に `fct_scout` を選んだ。** `fct_review` は正典の固定判断で `member_key` を持たない（匿名性）ため、クチコミ側では COUNT(DISTINCT 会員) の例が作れない。スカウト受信会員のユニーク数（`M001`・`M003` が3日連続で受信）に置き換えた。新しいスカウト ID は作らず、受信者だけを既存 ID で書いている。
+4. **§7(b) の SQL で `QUALIFY` と `GROUP BY` を同じ SELECT に置かなかった。** BigQuery の `QUALIFY` は集約の後に評価されるため、`GROUP BY` を持つ SELECT で非グループ列（`snapshot_date_key`）を `QUALIFY` の条件にすると構文エラーになる。CTE で月末行に絞ってから外側で `SUM` する形に直し、その理由をコメントに残した。
+5. **図の accent を右パネル全体ではなく結果ノード1つ＋その手前の矢印に絞った。** 比較図は3段とも左右で内容が違うため全段を accent にできてしまうが、ブリーフの「結果の違いだけ accent」に従い、構造を完全に同じ座標で並べたうえで最終値だけを focal にした。色を落としても `UNWEIGHTED` / `WEIGHTED` のタグで意味が読めるようにしてある。
+6. **MetricFlow の YAML を v1.12+ spec で書いた。** 旧 spec（`measures:` + `type_params.measure`）との二本立てにすると紙面が倍になるため、docs が現行としている形に統一し、コード内コメントに「dbt v1.12+ の spec」と明記した。
+
+## 未達事項
+
+- DWT 3rd ed. の ch.1 / ch.4 は書籍本体を参照できないため、同じ内容を要約した Kimball Group 公式の *Kimball Dimensional Modeling Techniques*（正典 references.md に「Techniques」として収載）から引用した。章番号での参照は `p.meta` と §3 に残してある。
+- `metrics.yml`（MetricFlow）の YAML は dbt docs の spec に照らして書いたが、実際に `dbt parse` で検証していない。手元に Semantic Layer を有効化した dbt プロジェクトが無いため。
+- 図は1枚のみ（ブリーフ指定どおり）。§5 の「原子 → 日次 agg → 月次 → 企業グループ」の流れも図にしたくなったが、表と SQL で足りるため描いていない。
