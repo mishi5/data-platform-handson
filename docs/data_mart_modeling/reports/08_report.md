@@ -98,3 +98,28 @@
 - `check_svg.py`: `0 errors, 1 warnings`（warning は「`<svg>` が見つからない」＝図なし指定どおり）。
 - 正典外テーブル名は `agg_member_entity`（裁定済み）と §8 の手元基盤名（`mart_url_performance` / `mart_url_performance_incremental` / `mart_error_analysis` / `stg_access_logs`、いずれも実在）のみ。`dim_url_path` は削除。
 - 本文の URL はすべて `references.md` 掲載か kimballgroup.com。3 文超の `<p>` / `<li>` は 0。タグ balance・`<pre>` 内の生 `<` なしを再確認。
+
+---
+
+## 修正ラウンド 2
+
+| ID | 対応 |
+|---|---|
+| N-1 | §5-4 のパーティション制約から出典不明の英文引用を削除し、`materialized-views-create` を WebFetch で再確認して実在の 3 文に差し替え。義務と選択を分けて「MV のパーティションは任意だが、張るならベーステーブルと同じパーティション列でなければならない」（"If the base table is partitioned, then you can partition a materialized view on the same partitioning column."）／「時間パーティションでは粒度も一致」（"For time-based partitions, the granularity must match (hourly, daily, monthly, or yearly)."）／「非パーティションのベーステーブルの上にパーティション MV は作れない」（"You cannot partition a materialized view over a non-partitioned base table."）と書き直した。影響列も「3 条件を満たす」に対応づけ |
+| N-2 | §5-2 の置き換え手順を 3 パス全部に閉じる形へ書き直し。`review_monthly` / `application_monthly` は `company_map` → `group_map` の置換、`scout_monthly` は `company_map` を経由しないため `INNER JOIN group_map AS g ON g.company_key = c.company_key` を足して `g.group_company_key AS company_key` を出す、と明記。「1 本でも畳み忘れると行ヘッダのドメインが揃わず §2(a) と同じ割れ方をする」を追記 |
+| N-3 | `materialized-views-use` からの引用（"You can query your materialized views directly…"）を削除し、参照文献に載せている `materialized-views-intro` の自動書き換えの文（"If any part of a query against a base table can be resolved by querying the materialized view, then BigQuery reroutes the query to use the materialized view for improved performance."）に差し替え。「直接参照できる」は引用ではなく要約として残した。`references.md` は変更していない |
+| N-4 | §5-2 に「`C001` のグループ行と `C003` 単体のグループ行が同時に出る（`depth = 0` で自分自身も自グループの子孫）。全行の合計は取れない。レベルを選ぶなら `b.depth` を行ヘッダに足すか `is_root` で絞る」の 1 段を追加 |
+| N-5 | §5-1 に「分母はその月に送信されたスカウト、分子はその月に応募された `scout_company` 応募でコホートが一致しない。`S001`（6/20 送信）→ `P001`（6/23 応募）は同月だが月末送信では割れる。送信起点で揃えるなら `fct_scout_funnel` を使う」の 1 段を追加 |
+| N-6 | §8 の `mart_error_analysis` の行ヘッダを `date` × `hour` × `error_source` × `error_detail` に修正（`app_error_summary` と `access_error_summary` の `UNION ALL` で `error_source` が粒度に入る） |
+
+### 正典への追加提案（再掲・未反映）
+
+- `references.md` の BQ MV 行に `https://cloud.google.com/bigquery/docs/materialized-views-use` を追加したい。今回は引用元を `materialized-views-intro` に差し替えて回避したが、「MV を通常のテーブルと同じように直接クエリできる」の一次出典はこのページにしかない。
+
+### 再検証
+
+- 本文の英文引用 5 件（MV パーティション 3 文・ネスト禁止・自動書き換え）を `materialized-views-create` / `-intro` の WebFetch 結果と突合し verbatim 一致を確認。出典不明の 1 文と参照文献外の 1 文は本文から消えていることを文字列検索で確認。
+- 本文の URL はすべて `canon/references.md` 掲載か kimballgroup.com。正典外テーブル名は `agg_member_entity`（裁定済み）と §8 の手元基盤名のみ。
+- 3 文超の `<p>` / `<li>` は 0、タグ balance OK、`<pre>` 内の生 `<` なし、§8 限定の語（`dbt_logs_analysis` / `news_pipeline` / `mart_*` / `stg_access_logs` / `error_source`）はすべて §8 内。
+- `check_svg.py`: `0 errors, 1 warnings`（`<svg>` なし＝図なし指定どおり）。
+- BigQuery への実クエリは今回の裁定どおり実施していない（SQL 変更は §5-2 の手順文と §5-1 の説明段のみで、コードブロックの SQL 本体は無変更）。

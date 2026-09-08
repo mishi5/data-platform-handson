@@ -64,3 +64,5 @@
 - 10 修正ラウンド1 完了（16件 FIXED、report 新規作成）。Ruling: references の dbt structure URL を実在する 1-guide-overview に訂正、model versions / source freshness の URL 追加、dim_audit の quality_flag 値域・source_system・loaded_at を正典に明記。各ファクトの DATE 列名は規約（<role>_date）から導出可能なので個別列挙はしない → 再レビュー起動
 - 08 再レビュー: 13件 ADDRESSED、新規 Critical 1（公式に無い英文引用）+ Important 1（置換手順の粒度混在）+ Minor 4 → 修正ラウンド 2/3 送付
 - 10: complete（再レビュー APPROVE、16/16 addressed）
+- 08: complete（ラウンド2 N-1〜N-6 を grep で確認: 創作引用 0 件、URL 全て references 内。Ruling: 再々レビュー省略）
+- 全11本 完了。次: 横断レビュー（一貫性）→ 修正ウェーブ（03 §5(e) audit_key の 10 回への整合を含む）→ Playwright 目視 → publish --dry-run
