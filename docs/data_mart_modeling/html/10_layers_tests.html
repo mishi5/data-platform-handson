@@ -763,6 +763,7 @@ models:
 </tbody>
 </table>
 </div>
+<p>もう1つ、SQL のテストでは書きにくい保証がある。<strong>公開面（<code>fct_review</code> × <code>dim_review_attributes</code>）から個人が再識別できないこと</strong>だ。準識別子の組合せごとの行数（<em>k</em>-匿名性）は singular test で <code>HAVING COUNT(*) &lt; 5</code> を出せば最低限は測れるが、<em>l</em>-多様性まで見るなら Sensitive Data Protection の Risk analysis ジョブを CI とは別の定期ジョブで回し、結果を <code>dim_audit</code> の <code>quality_flag</code> ではなく独立した監査テーブルに残す（DMBOK07 の「分類の自動化」）。</p>
 <p>最後の 1 行が本題である。粒度も参照整合性も守れているのに公開面へ繋いでしまう事故は SQL のテストでは捕まらないので、依存グラフ側で守る（<code>exposures</code> と <code>tags</code>）。<code>fct_review</code> の契約は、匿名性という設計判断を機械が守れる形に翻訳したものになっている。</p>
 </details>
 

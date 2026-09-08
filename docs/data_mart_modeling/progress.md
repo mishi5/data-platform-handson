@@ -118,3 +118,4 @@ progress.md 内の `Ruling:` 行を参照。主要なもの: dim_agency 追加 /
 | DM10 レイヤ・命名・契約・テスト・監査 — データマート設計 | https://family-share-76mm33owba-an.a.run.app/view/01M20MVVG25GSAGBX819GZJJTP | `01M20MVVG25GSAGBX819GZJJTP` |
 
 上書きは `publish.py --html <file> --title <title> --content-id <id>`（--slack なし）。
+- 2026-09-09 DLP 追記: DMBOK07 §3 に Sensitive Data Protection の節、DM03 §1 に k-匿名性の計測、DM10 演習(c) に再識別リスクの監査を追記して上書き公開（--slack なし）。DMBOK 17本のタイトルを DMBOKnn 接頭辞に改名

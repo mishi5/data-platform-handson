@@ -78,6 +78,7 @@
 
 <p><code>fct_review</code> が <code>member_key</code> を持たないのは技法の帰結ではなく、正典の固定判断（匿名性）だ。投稿者の属性は <code>dim_review_attributes</code> にジャンク化して落とす。つまりここでは<strong>ジャンクディメンションが匿名化装置を兼ねている</strong>。</p>
 <p>ただし 30 行の粗い帯でも小規模企業では特定されうる（<code>C002</code> の <code>former</code>/<code>fulltime</code>/<code>1_3</code> が1人しか居ない場合）。会員×クチコミの結合が要る分析は <code>int_review_member_link</code> に隔離する。</p>
+<p>「1人しか居ない組合せ」は感覚ではなく数える。準識別子（<code>company_key</code> × <code>dim_review_attributes</code> の3属性 × <code>job_category_key</code>）ごとの行数の最小値が <em>k</em>-匿名性の <em>k</em> で、<code>GROUP BY</code> して <code>HAVING COUNT(*) &lt; 5</code> を出せば危ない組合せが列挙できる。Google Cloud の Sensitive Data Protection（旧 Cloud DLP）の Risk analysis は同じ計算を <em>l</em>-多様性まで含めてジョブとして回せる（DMBOK07 の「分類の自動化」）。<em>k</em> が小さい組合せは <code>years_of_service_band</code> を粗くするか、その企業のクチコミを件数閾値未満なら非公開にする——どちらもジャンクディメンションの帯の設計に戻ってくる。</p>
 
 <h2>2. どこで壊れるか</h2>
 

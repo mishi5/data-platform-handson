@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>データセキュリティ — DMBOK 07</title>
+<style>
+  :root {
+    --bg:#ffffff; --fg:#1a1a1a; --muted:#666; --border:#e0e0e0;
+    --accent:#0b6bcb; --card:#f7f8fa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#14171a; --fg:#e8e8e8; --muted:#9aa0a6; --border:#2c3136;
+      --accent:#6aa9ff; --card:#1b1f23;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+    line-height:1.85; max-width:900px; margin:0 auto; padding:24px 20px 64px; }
+  h1 { font-size:1.6rem; margin:0 0 4px; }
+  section { border:1px solid var(--border); border-radius:10px; padding:20px 22px;
+    margin-bottom:28px; background:var(--card); }
+  section h2 { font-size:1.2rem; margin:0 0 12px; line-height:1.5; }
+  section h3 { font-size:1rem; margin:28px 0 8px; color:var(--muted); }
+  a { color:var(--accent); }
+  .meta { color:var(--muted); font-size:.85rem; margin-top:0; }
+  .series { color:var(--muted); font-size:.8rem; border:1px solid var(--border);
+    border-radius:6px; padding:8px 12px; margin-bottom:24px; }
+  code { background:var(--bg); border:1px solid var(--border); border-radius:4px;
+    padding:1px 5px; font-size:.85em; }
+  svg { max-width:100%; height:auto; display:block; margin:20px 0; }
+  table { border-collapse:collapse; width:100%; margin:16px 0; font-size:.9rem; }
+  th, td { border:1px solid var(--border); padding:8px 10px; text-align:left;
+    vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:.82rem; }
+  ul { padding-left:1.2em; }
+  li { margin-bottom:8px; }
+</style>
+</head>
+<body>
+  <h1>データセキュリティ</h1>
+  <p class="meta">DMBOK 07 ／ BigQuery 基盤での実装</p>
+  <p class="series">「データマネジメント概論」を本編とするシリーズ。番号は DAMA-DMBOK2 の章番号（01〜17）。全体像と各章の位置づけは概論を参照。</p>
+
+  <section>
+    <h2>1. この領域が扱うもの</h2>
+
+    <p>データセキュリティは<strong>「誰が・何に・どこまで触れるか」を設計し、実施し、証明する</strong>領域。
+      3つ目の<em>証明する</em>が抜けやすい。設定しただけでは「そうなっているはず」であって、
+      <strong>実際にそうであることを示せる状態</strong>とは違う。</p>
+
+    <p>DMBOK は「4つの A」で整理する。実装を考えるときの分解として使いやすい。</p>
+
+    <table>
+      <tr><th>要素</th><th>問い</th><th>BigQuery での主な担い手</th></tr>
+      <tr>
+        <td><strong>Authentication</strong>（認証）</td>
+        <td>誰であるかを確かめる</td>
+        <td>Google アカウント / サービスアカウント。基盤側で作り込む余地は小さい</td>
+      </tr>
+      <tr>
+        <td><strong>Authorization</strong>（認可）</td>
+        <td>その人に何を許すか</td>
+        <td>IAM、Authorized View、列/行レベル制御。<strong>設計の主戦場</strong></td>
+      </tr>
+      <tr>
+        <td><strong>Access</strong>（アクセス）</td>
+        <td>実際にどう到達させるか</td>
+        <td>VPC Service Controls、データセットの location、共有の経路</td>
+      </tr>
+      <tr>
+        <td><strong>Audit</strong>（監査）</td>
+        <td>誰が何をしたかを後から示せるか</td>
+        <td>Cloud Audit Logs、<code>INFORMATION_SCHEMA.JOBS</code></td>
+      </tr>
+    </table>
+
+    <p>データ基盤で設計判断が集中するのは<strong>認可</strong>で、監査は「後から効いてくる」もの。
+      インシデントが起きてから「ログを取っていなかった」と気づく類のものなので、
+      <strong>認可より先に監査の保持期間を決めておく</strong>ほうが安全側に倒せる。</p>
+
+    <h3>分類なくして制御なし</h3>
+
+    <p>認可の設計に入る前に、<strong>何が機密かの分類</strong>が要る。
+      分類が無いまま権限だけ設計すると、「この列は隠すべきか」を毎回その場で判断することになり、
+      判断がぶれる。</p>
+
+    <table>
+      <tr><th>分類の例</th><th>扱い</th><th>典型</th></tr>
+      <tr>
+        <td><strong>公開可</strong></td>
+        <td>社内なら誰でも</td>
+        <td>マスタ、集計済み指標</td>
+      </tr>
+      <tr>
+        <td><strong>社外秘</strong></td>
+        <td>業務上の必要がある人まで</td>
+        <td>売上明細、原価</td>
+      </tr>
+      <tr>
+        <td><strong>個人情報</strong></td>
+        <td>目的を限定し、経路を記録</td>
+        <td>氏名、メール、住所、端末ID</td>
+      </tr>
+      <tr>
+        <td><strong>要配慮個人情報</strong></td>
+        <td>原則として基盤に入れない判断もある</td>
+        <td>健康、信条、犯罪歴</td>
+      </tr>
+    </table>
+
+    <p><strong>4段階を超えると運用できなくなる</strong>ので、細分化したくなっても3〜4段に留める。
+      段階が増えるほど「どれに当たるか」の判断コストが上がり、結局は使われなくなる。</p>
+  </section>
+
+  <section>
+    <h2>2. 認可の設計 — 何で絞るか</h2>
+
+    <p>BigQuery の権限は「IAM でどのリソースに触れるか」と
+      「その内側で列・行のどこまで見せるか」の2系統に分かれている。
+      これを<strong>選択の順序</strong>として整理する。
+      <strong>上から順に検討し、足りないときだけ下へ降りる</strong>のが原則。
+      下へ行くほど強力だが、運用コストと事故のリスクが上がる。</p>
+
+    <svg id="ds-order" viewBox="0 0 800 400" width="100%"
+         style="max-width:800px;height:auto;display:block"
+         xmlns="http://www.w3.org/2000/svg"
+         role="img" aria-labelledby="ds-order-t ds-order-d">
+      <title id="ds-order-t">アクセス制御の検討順序</title>
+      <desc id="ds-order-d">データセットを分けるのが最も単純で、次に加工結果だけを見せる Authorized View、それでも足りないときに列レベル・行レベルの制御を使う。下へ行くほど細かく制御できるが運用コストが上がる。</desc>
+      <style>
+        #ds-order{
+          --paper:#fbfbfa; --ink:#22262e; --muted:#5b6472; --soft:#828b9a;
+          --rule:rgba(34,38,46,.14); --accent:#c8571d; --tint:rgba(200,87,29,.10);
+          --sans:system-ui,-apple-system,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+          --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+        }
+        @media (prefers-color-scheme:dark){
+          #ds-order{--paper:#1a1d23;--ink:#e9ecf1;--muted:#a6afbd;--soft:#7f8898;
+                    --rule:rgba(233,236,241,.18);--accent:#f0894f;--tint:rgba(240,137,79,.14);}
+        }
+        :root[data-theme="dark"] #ds-order{--paper:#1a1d23;--ink:#e9ecf1;--muted:#a6afbd;--soft:#7f8898;
+                    --rule:rgba(233,236,241,.18);--accent:#f0894f;--tint:rgba(240,137,79,.14);}
+        :root[data-theme="light"] #ds-order{--paper:#fbfbfa;--ink:#22262e;--muted:#5b6472;--soft:#828b9a;
+                    --rule:rgba(34,38,46,.14);--accent:#c8571d;--tint:rgba(200,87,29,.10);}
+        #ds-order .bg{fill:var(--paper)}
+        #ds-order .box{fill:var(--paper);stroke:var(--ink);stroke-width:1}
+        #ds-order .box-focal{fill:var(--tint);stroke:var(--accent);stroke-width:1.4}
+        #ds-order .name{fill:var(--ink);font:600 14px var(--sans)}
+        #ds-order .sub{fill:var(--muted);font:400 11px var(--mono)}
+        #ds-order .tag{fill:var(--soft);font:500 10px var(--mono);letter-spacing:.12em}
+        #ds-order .lead{fill:none;stroke:var(--muted);stroke-width:1.4;marker-end:url(#ds-order-a)}
+        #ds-order .mk{fill:var(--muted)}
+      </style>
+      <defs>
+        <marker id="ds-order-a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+          <path class="mk" d="M0,0 L9,3.5 L0,7 Z"/></marker>
+      </defs>
+      <rect class="bg" x="0" y="0" width="800" height="400"/>
+
+      <text class="tag" x="48" y="32">SIMPLE</text>
+      <text class="tag" x="48" y="372">POWERFUL</text>
+
+      <path class="lead" d="M 400,120 V 148"/>
+      <path class="lead" d="M 400,220 V 248"/>
+
+      <rect class="box" x="48" y="44" width="704" height="76" rx="6"/>
+      <text class="name" x="72" y="76">データセットを分ける</text>
+      <text class="sub" x="72" y="98">機密度ごとに別データセット。IAM は継承されるので設定箇所が少ない</text>
+      <text class="sub" x="560" y="88">まずここで足りないか疑う</text>
+
+      <rect class="box" x="48" y="144" width="704" height="76" rx="6"/>
+      <text class="name" x="72" y="176">Authorized View / Dataset</text>
+      <text class="sub" x="72" y="198">元テーブルの権限を渡さず、加工結果だけ見せる</text>
+      <text class="sub" x="560" y="188">部門横断の共有はここ</text>
+
+      <rect class="box-focal" x="48" y="244" width="704" height="76" rx="6"/>
+      <text class="name" x="72" y="276">列レベル / 行レベル / マスキング</text>
+      <text class="sub" x="72" y="298">同じテーブルの中で人によって見え方を変える</text>
+      <text class="sub" x="560" y="288">最後の手段として使う</text>
+
+      <rect class="box" x="176" y="320" width="448" height="56" rx="6"/>
+      <text class="sub" x="400" y="344" text-anchor="middle">下へ行くほど「誰が何を見たか」の説明が難しくなる</text>
+      <text class="sub" x="400" y="362" text-anchor="middle">監査を求められる環境ほど上位で解くほうが有利</text>
+    </svg>
+
+    <p><strong>「データセットを分ける」で足りる場面は多い。</strong>
+      個人情報を含むテーブルを専用データセットに隔離し、そこへのアクセスを限定するだけで、
+      列レベル制御を導入せずに済むことがある。
+      <strong>テーブルを分割できないか</strong>を先に考えると、権限設計は大幅に単純になる。</p>
+
+    <p>逆に列レベル・行レベルが本当に要るのは、<strong>同じ行を複数の立場の人が見るが、
+      見える範囲が違う</strong>ケース。営業担当が自分の担当顧客だけ見る、
+      分析者はメールアドレスをハッシュでしか見ない、といった要求はテーブル分割では解けない。</p>
+  </section>
+
+
+  <section>
+    <h2>3. BigQuery での実装と落とし穴</h2>
+
+    <h3>手段ごとの注意点</h3>
+
+    <table>
+      <tr><th>手段</th><th>効き方</th><th>踏みやすい落とし穴</th></tr>
+      <tr>
+        <td><strong>IAM ロール</strong></td>
+        <td>組織 → プロジェクト → データセット → テーブルで<strong>継承される</strong></td>
+        <td>上位で付けた権限は下位で剥がせない。<strong>プロジェクトに <code>bigquery.dataViewer</code> を付けると全データセットが見える</strong></td>
+      </tr>
+      <tr>
+        <td><strong>Authorized View</strong></td>
+        <td>ビュー自体に元テーブルへの読み取り権を与える。利用者は元テーブルの権限が不要</td>
+        <td>元テーブルの構造変更でビューが壊れる。ビューが増えると<strong>どれが誰に何を見せているか把握できなくなる</strong></td>
+      </tr>
+      <tr>
+        <td><strong>列レベル（ポリシータグ）</strong></td>
+        <td>タグの分類体系を作り、列に付与。タグへの権限で可否が決まる</td>
+        <td><strong>タグ体系の設計をやり直すのが難しい。</strong>付け替えは全テーブル横断の作業になる</td>
+      </tr>
+      <tr>
+        <td><strong>行レベル</strong></td>
+        <td><code>CREATE ROW ACCESS POLICY</code> でフィルタ条件を定義</td>
+        <td>ポリシーが増えるとクエリの見え方が人によって変わり、<strong>「私には0行なのですが」という問い合わせの調査が難しい</strong></td>
+      </tr>
+      <tr>
+        <td><strong>動的マスキング</strong></td>
+        <td>ポリシータグにマスキングルールを紐づけ、値を変形して返す</td>
+        <td><strong>マスク後の値で結合・集計すると結果が変わる。</strong>利用者がマスクに気づかないまま分析する事故が起きる</td>
+      </tr>
+      <tr>
+        <td><strong>VPC Service Controls</strong></td>
+        <td>ネットワーク境界で持ち出しを止める</td>
+        <td>設定を誤ると<strong>正規の経路まで止まる</strong>。段階的な導入と dry-run が要る</td>
+      </tr>
+    </table>
+
+    <p><strong>IAM の継承が最も事故りやすい。</strong>
+      「開発者にプロジェクトの閲覧権を渡した」つもりが、個人情報を含むデータセットまで
+      見えていた、という形で起きる。<strong>プロジェクトレベルでデータ系のロールを付けない</strong>——
+      データセット単位で付ける、を原則にすると事故が減る。</p>
+
+    <h3>分類の自動化 — Sensitive Data Protection（Cloud DLP）</h3>
+    <p>§1 の分類は<strong>手で付けると続かない</strong>。列が増えるたびに誰かが判定する運用は、
+      最初の棚卸しで止まる。Google Cloud の Sensitive Data Protection（旧 Cloud DLP）は、
+      DMBOK が「データ分類」「マスキング／難読化」「プライバシー」として書いている活動を
+      BigQuery 上で機械化する。名前は DMBOK に出てこないが、対応先ははっきりしている。</p>
+    <table>
+      <tr><th>機能</th><th>DMBOK での位置</th><th>BigQuery での使い方</th><th>落とし穴</th></tr>
+      <tr>
+        <td><strong>Discovery（自動プロファイル）</strong></td>
+        <td>ch.7 データ分類、ch.12 メタデータ（機密度は分類メタデータ）</td>
+        <td>組織・プロジェクト単位で全テーブルを走査し、列ごとの infoType と機密度（High / Moderate / Low）を Dataplex のタグに書く。<strong>ここからポリシータグに繋ぐ</strong>と §2 の列レベル制御が「分類→制御」で一本化する</td>
+        <td>採点は<strong>サンプリング</strong>で決まる。低頻度の PII 列（備考欄に稀にメール）は Low と出る。閾値だけで自動付与せず、High 以外は人が見る</td>
+      </tr>
+      <tr>
+        <td><strong>Inspection（検査ジョブ）</strong></td>
+        <td>ch.7 データ分類の実施</td>
+        <td>特定テーブルに対し infoType（<code>EMAIL_ADDRESS</code>、<code>JAPAN_INDIVIDUAL_NUMBER</code>、<code>PHONE_NUMBER</code> 等）で値を検出。結果を BigQuery に書き戻して集計できる</td>
+        <td>日本語の氏名・住所は<strong>検出精度が低い</strong>。カスタム infoType（辞書・正規表現）を足す前提で見積もる</td>
+      </tr>
+      <tr>
+        <td><strong>De-identification（非識別化）</strong></td>
+        <td>ch.7 マスキング／難読化（静的）</td>
+        <td>マスク、トークン化、<strong>フォーマット保持暗号（FPE）</strong>、バケット化、日付シフト。DWH に入れる前に静的に掛けるか、§3 上表の動的マスキングで参照時に掛けるかを選ぶ</td>
+        <td>結合キーに使う列は<strong>決定的トークン化</strong>でないと結合が切れる。ハッシュだけだとレインボー攻撃に弱いので鍵付き（HMAC）にする</td>
+      </tr>
+      <tr>
+        <td><strong>Risk analysis（再識別リスク）</strong></td>
+        <td>ch.7 プライバシー・機密性、ch.2 データ取扱倫理</td>
+        <td><em>k</em>-匿名性・<em>l</em>-多様性・δ-存在性を準識別子（年齢帯・居住地・職種…）の組合せで計測。「匿名化した集計」を公開する前の<strong>定量チェック</strong></td>
+        <td>準識別子の選び方で結果が変わる。「何を準識別子とみなすか」は分類方針（§1）側で先に決める</td>
+      </tr>
+    </table>
+    <p><strong>順序は「分類 → メタデータ → 制御」。</strong>
+      Discovery で機密度を Dataplex に書き、それをポリシータグに写し、タグへの権限で列を絞る——
+      この一本の流れにすると、分類の更新が制御に伝わる。逆に Inspection の結果を Excel に落として
+      手で権限を付ける運用にすると、分類と制御がすぐ乖離する。</p>
+    <p>再識別リスクは<strong>マスキングでは解けない</strong>点に注意。氏名を消しても、
+      「30代・福岡・データエンジニア・従業員50人未満の会社」が1人しかいなければ特定できる。
+      少人数の母集団を持つ属性の組合せは、集計マートの設計段階で
+      <strong>キーを持たせない／帯に丸める</strong>判断が要る（データマート設計 DM03 の匿名性の項）。</p>
+    <h3>サービスアカウントの扱い</h3>
+
+    <p>実務では<strong>人よりサービスアカウントの権限が問題になる</strong>ことが多い。
+      パイプラインが動くために強い権限を持ち、それが放置される。</p>
+
+    <table>
+      <tr><th>原則</th><th>理由</th></tr>
+      <tr>
+        <td><strong>用途ごとに分ける</strong></td>
+        <td>1つのSAを使い回すと、何を止めてよいか分からなくなる。収集用・変換用・BI用は別にする</td>
+      </tr>
+      <tr>
+        <td><strong>キーを作らない</strong></td>
+        <td>JSON キーは漏洩経路になり、失効管理も要る。Workload Identity や impersonation で代替する</td>
+      </tr>
+      <tr>
+        <td><strong>権限を定期的に見直す</strong></td>
+        <td>付けた権限は消えない。<strong>Recommender の未使用権限の提案</strong>を定期的に見る</td>
+      </tr>
+      <tr>
+        <td><strong>誰が impersonate できるか管理する</strong></td>
+        <td><code>iam.serviceAccountTokenCreator</code> を持つ人は、そのSAの全権限を使える。<strong>実質的な権限昇格経路</strong></td>
+      </tr>
+    </table>
+
+    <p>最後の項目は見落とされやすい。<strong>SA を impersonate できる権限は、
+      その SA が持つ全権限と等価</strong>で、直接ロールを付与していなくても同じことができる。
+      権限の棚卸しでは「誰がどの SA になれるか」まで見る必要がある。</p>
+
+    <h3>監査 — 後から示せるか</h3>
+
+    <table>
+      <tr><th>知りたいこと</th><th>参照先</th><th>注意</th></tr>
+      <tr>
+        <td>誰がいつどのテーブルを読んだか</td>
+        <td>Cloud Audit Logs（Data Access ログ）</td>
+        <td><strong>既定では無効。</strong>明示的に有効化しないと記録されない。有効化すると量が多くコストがかかる</td>
+      </tr>
+      <tr>
+        <td>どんなクエリが実行されたか</td>
+        <td><code>INFORMATION_SCHEMA.JOBS</code></td>
+        <td>保持は180日。<strong>それ以上残すなら自分でエクスポート</strong>する</td>
+      </tr>
+      <tr>
+        <td>権限がいつ変更されたか</td>
+        <td>Cloud Audit Logs（Admin Activity ログ）</td>
+        <td>こちらは既定で有効・無料。権限変更の追跡はここで足りる</td>
+      </tr>
+    </table>
+
+    <p><strong>Data Access ログが既定で無効な点は要注意。</strong>
+      「誰がこの個人情報テーブルを見たか」を後から知りたくなったときには手遅れで、
+      有効化した時点より前は記録が無い。
+      <strong>機密データを扱うデータセットだけ有効化する</strong>と、
+      コストを抑えつつ必要な証跡が残せる。</p>
+  </section>
+
+
+  <section>
+    <h2>4. 最小構成 — 個人・小規模なら</h2>
+
+    <p>1人で運用している基盤でも、次の3つは意味がある。
+      いずれも「他人から守る」より<strong>「自分の事故から守る」</strong>ための備えになる。</p>
+
+    <ul>
+      <li><strong>本番と検証でプロジェクトを分ける</strong> — 権限設計の8割はこれで済む。
+        検証で誤って本番テーブルを消す事故が構造的に起きなくなる</li>
+      <li><strong>サービスアカウントのキーを作らない</strong> — impersonation を使う。
+        キーファイルは<strong>作った瞬間から漏洩リスクが始まり、失効管理が必要になる</strong></li>
+      <li><strong>個人情報を基盤に入れるかを最初に決める</strong> — 入れなければ、
+        それにまつわる制御・監査・保持期間の設計がすべて不要になる。
+        <strong>入れない判断が最も安上がりで安全</strong></li>
+    </ul>
+
+    <p>やらなくてよいのは<strong>列レベル制御の先行導入</strong>と
+      <strong>Data Access ログの全面有効化</strong>。前者はタグ体系の設計コストが先に来て、
+      後者はログ費用が積み上がる。どちらも「必要になってから」で間に合う。</p>
+
+    <h3>この基盤（news_pipeline）での実装</h3>
+
+    <p>公開情報しか扱わないため機密の制御は薄いが、<strong>認証と権限の分離</strong>は
+      いくつか実装されている。</p>
+    <p>Sensitive Data Protection は<strong>使っていない</strong>。扱うのは公開記事の本文と URL で、
+      個人情報に当たる列が無いため、分類は「全部公開可」の1段で足りる。要るとすれば
+      <code>favorites</code>（本人の関心の履歴）だが、利用者が1人の基盤では保護対象にならない。
+      判断としては正しいが、<strong>「PII が無いことを一度も機械で確かめていない」</strong>のは弱点で、
+      Discovery を1回走らせて Low が並ぶことを見ておけば、それが証明になる。</p>
+
+    <table>
+      <tr><th>対象</th><th>実装</th><th>評価</th></tr>
+      <tr>
+        <td>Cloud Run の呼び出し</td>
+        <td>Scheduler 専用 SA（<code>news-pipeline-scheduler</code>）に <code>run.invoker</code></td>
+        <td>用途ごとに SA を分けられている</td>
+      </tr>
+      <tr>
+        <td>Slack からの呼び出し</td>
+        <td><code>SLACK_SIGNING_SECRET</code> による署名検証</td>
+        <td>エンドポイントは <code>allUsers</code> に開いているため、<strong>署名検証が唯一の防御</strong></td>
+      </tr>
+      <tr>
+        <td>API キー・シークレット</td>
+        <td>Secret Manager（<code>anthropic-api-key</code> ほか2件）</td>
+        <td>コードにも Terraform state にも平文で入らない</td>
+      </tr>
+      <tr>
+        <td>family-share へのアップロード</td>
+        <td>IAP + SA の impersonation でIDトークンを取得</td>
+        <td><strong>キーファイルを作らない形</strong>になっている</td>
+      </tr>
+      <tr>
+        <td>BigQuery への書き込み</td>
+        <td>Cloud Run の既定 SA</td>
+        <td><strong>弱点。</strong>用途別に分けておらず、権限も絞っていない</td>
+      </tr>
+      <tr>
+        <td>データアクセスの監査</td>
+        <td>なし（Data Access ログ未有効）</td>
+        <td>公開情報のみなので現状は妥当。個人情報を入れるなら必須になる</td>
+      </tr>
+    </table>
+
+    <p><strong>「公開情報しか扱わない」という判断が、セキュリティ設計の大半を省略させている。</strong>
+      これは手抜きではなく<strong>設計判断</strong>で、
+      逆に言えば個人情報を1列でも入れた瞬間に、分類・列レベル制御・監査ログ・保持期間の
+      検討がまとめて必要になる。<strong>入れる前に判断する</strong>のが最も安いタイミングになる。</p>
+
+    <p>もう1つ、この基盤で実際に効いている観点がある。
+      Slack のスラッシュコマンド用エンドポイントは <code>allUsers</code> に開いているため、
+      <strong>URL を知っていれば誰でも叩ける</strong>。署名検証が唯一の防御なので、
+      <code>SLACK_SIGNING_SECRET</code> が空だと事実上の無防備になる。
+      <strong>「開いているエンドポイントを、何が守っているか」を言えるか</strong>が
+      この規模でのセキュリティ設計の実質になる。</p>
+  </section>
+
+
+</body>
+</html>
