@@ -41,7 +41,7 @@
 <body>
 
 <h1>ディメンションの設計</h1>
-<p class="meta">データマート設計 03 ／ 参照: DWT ch.3, ch.6, Kimball Dimensional Modeling Techniques (2013), Surrogate Keys (1998), Design Tip #5 #43 #46 #83 #100 #127 #164 ／ 再解釈: dbt Kimball (Neo 2023), ECM (Beauchemin 2023)</p>
+<p class="meta">データマート設計 03 ／ 参照: DWT ch.3, ch.6, Kimball Dimensional Modeling Techniques (2013), Surrogate Keys (1998), Design Tip #5 #43 #46 #83 #100 #127 #164 ／ 再解釈: dbt Kimball (Neo 2023), ECM (Beauchemin 2023), FDE / スナップショット (Beauchemin 2018)</p>
 
 <h2>1. この回が決めること</h2>
 
@@ -83,7 +83,7 @@
 
 <h3>(a) 速く変わる属性を <code>dim_member</code> に Type2 で持つ</h3>
 
-<p>以下、規模は<strong>会員 300 万人・<code>fct_page_view</code> 日次 2,000 万行を仮定する</strong>（正典はデータ量を定めていない）。</p>
+<p>以下、規模は<strong>正典 §5 の想定規模</strong>（会員 300 万人、<code>page_views</code> 日次 2,000 万行）を使う。断定ではなく前提で、この回の判断のいくつかはこの桁に乗っている。</p>
 
 <p><code>annual_income_band</code> と <code>job_change_intent</code> を <code>dim_member</code> の Type2 属性にしたとする。<code>M001</code> は 2026-06-15 に <code>passive</code>/<code>400_600</code> → <code>active</code>/<code>600_800</code> へ変わるので、この日に新しい <code>member_key</code> が発行される。壊れ方は3つ。</p>
 
@@ -135,7 +135,7 @@ LEFT JOIN dim_date AS d ON f.hired_date_key = d.date_key
 WHERE d.year = 2026        -- NULL になった行がここで静かに落ちる
 GROUP BY d.year;</code></pre>
 
-<p>1本目は「2026年の応募数」を出したつもりで「2026年に入社した応募数」を返す。2本目は <code>COUNT(*)</code> と <code>COUNT(d.date_key)</code> が食い違い、集計関数の選び方で答えが変わる。3本目は絞り込みを1つ足しただけで1本目と同じ結果に戻る。</p>
+<p>1本目は「2026年の応募数」を出したつもりで「2026年に入社した応募数」を返す。2本目は <code>COUNT(*)</code> と <code>COUNT(d.date_key)</code> が食い違い、集計関数の選び方で答えが変わる。3本目は絞り込みを1つ足しただけで <code>INNER JOIN</code> と同じ挙動に戻る（1本目を 2026 年で絞ったものと一致する）。</p>
 
 <p><strong>3つともエラーにならない</strong>のが最悪の性質だ。<code>-1</code> 行があれば INNER JOIN が常に成立し、恒等式 <code>applications = still_open + hired_count</code> がクエリの中で検算できる（§5 のロールプレイング例を参照）。</p>
 
@@ -243,7 +243,7 @@ GROUP BY d.year;</code></pre>
 </table>
 </div>
 
-<p>スナップショットは「分析者が書く SQL の簡単さ」を、ミニディメンションは「ファクト結合の安さ」を買う。<strong>正典はどちらか一方を選ばず両方を置く。</strong> 日次 2,000 万行の <code>fct_page_view</code> に毎日結合するのはミニの側で、<code>dim_member_daily</code> は会員断面の時系列分析（属性が変わった前後の行動差）のために別に置く。</p>
+<p>スナップショットは「分析者が書く SQL の簡単さ」を、ミニディメンションは「ファクト結合の安さ」を買う。<strong>正典は両方を定義しており、どちらを主経路にするかは 05回で決める。</strong> 日次 2,000 万行の <code>fct_page_view</code> に毎日結合するのはミニの側で、<code>dim_member_daily</code> は会員断面の時系列分析（属性が変わった前後の行動差）用だ。</p>
 <p>同じ属性を2経路で持つので、<strong><code>dim_member_daily.member_profile_mini_key</code> がミニ側と一致することが整合条件</strong>になる。トレードオフは保管コスト対 SQL の簡単さで、行数そのものではない（<code>require_partition_filter</code> がスキャンを1日分に閉じるため）。SCD2 と日次スナップショットの選択そのものは 05回で扱う。</p>
 
 <h2>5. BigQuery + dbt での実装</h2>
@@ -414,7 +414,7 @@ SELECT -1 AS member_profile_mini_key, '不明' AS annual_income_band, '不明' A
 <table>
 <tr><th>状況</th><th>キーの作り方</th><th>型</th><th>対象</th></tr>
 <tr><td><strong>SCD2</strong>（1自然キーに複数行）</td><td><code>FARM_FINGERPRINT(自然キー + '|' + valid_from)</code></td><td>INT64</td><td><code>dim_member</code>, <code>dim_company</code>, <code>dim_agent</code>, <code>dim_agency</code>, <code>dim_scout_sender</code> の 5 本</td></tr>
-<tr><td>SCD2 の<strong>縮約ディメンション</strong>（同じ自然キー階層の粗い版）</td><td>本体と同じ規則（<code>agency_id + '|' + valid_from</code>）</td><td>INT64</td><td><code>dim_agency</code>（<code>dim_agent</code> の shrunken rollup, Techniques p.10 / DWT ch.4）。担当者が特定できないファクト（<code>fct_job_posting_daily</code>）はこちらに結ぶ。コンフォーマンスの扱いは 06回・08回</td></tr>
+<tr><td>SCD2 の<strong>縮約ディメンション</strong>（同じ自然キー階層の粗い版）</td><td>本体と同じ規則（<code>agency_id + '|' + valid_from</code>）</td><td>INT64</td><td>同上（<code>dim_agency</code>）。この行の主眼は「なぜ <code>dim_agent</code> と別に置くか」で、<code>dim_agent</code> の shrunken rollup（Techniques p.10 / DWT ch.4）だから。担当者が特定できないファクト（<code>fct_job_posting_daily</code>、および <code>fct_placement</code> の主軸）はこちらに結ぶ。コンフォーマンスの扱いは 06回・08回</td></tr>
 <tr><td>Type 0/1 で自然キーが1列</td><td><strong>自然キーをそのまま <code>_key</code> に別名付け</strong></td><td>ソースの型</td><td><code>dim_job_posting</code>, <code>dim_job_category</code>, <code>dim_channel</code>, <code>dim_contract_plan</code>, <code>dim_moderation_reason</code></td></tr>
 <tr><td>日付</td><td><code>YYYYMMDD</code> の意味付き整数（Techniques が認める唯一の例外）</td><td>INT64</td><td><code>dim_date</code></td></tr>
 <tr><td>組合せが自然キー（ジャンク・ミニ）</td><td>組合せの決定的ハッシュ。1列にできないため</td><td>INT64</td><td><code>dim_review_attributes</code>, <code>dim_page_context</code>, <code>dim_member_profile_mini</code></td></tr>
@@ -515,14 +515,31 @@ models:
 
   # ミニと日次スナップショットは同じ属性を2経路で持つ。両者が同じ
   # 15 通りを指すことが整合条件になる（§4 / 05回）
+  #
+  # dim_member_daily は require_partition_filter=true なので、テストにも
+  # snapshot_date の述語が要る。無いと BigQuery が
+  #   Cannot query over table ... without a filter that can be used for
+  #   partition elimination
+  # を返し、テストは「落ちる」のではなく「走らない」。generic テストの
+  # where は config: の下にネストする。直近3日だけを検査する形を
+  # 10 回で規約化する
   - name: dim_member_daily
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [snapshot_date, member_id]
+          config:
+            where: "snapshot_date >= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 3 DAY)"
     columns:
       - name: member_profile_mini_key
         tests:
-          - not_null
+          - not_null:
+              config:
+                where: "snapshot_date >= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 3 DAY)"
           - relationships:
               to: ref('dim_member_profile_mini')
-              field: member_profile_mini_key</code></pre>
+              field: member_profile_mini_key
+              config:
+                where: "snapshot_date >= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 3 DAY)"</code></pre>
 
 <pre><code>-- tests/assert_mini_dimension_row_count.sql
 -- ミニ・ジャンクの「行数＝組合せ数」は設計上の不変条件。壊れたら落とす
@@ -531,6 +548,8 @@ FROM {{ ref('dim_member_profile_mini') }}
 HAVING COUNT(*) &lt;&gt; 16   -- 組合せ 15 通り ＋ -1 の既定行</code></pre>
 
 <p>BigQuery には外部キー制約が無い（<code>NOT ENFORCED</code> の宣言はできるが検証されない）。<code>relationships</code> テストが参照整合性の実装であり、<code>-1</code> 行を作り忘れた瞬間にこれが落ちる。<strong><code>-1</code> 行は設計であると同時にテストの前提条件だ。</strong></p>
+
+<p>ただし<strong>テストは物理設計に従属する</strong>。<code>require_partition_filter=true</code> のテーブルに素の generic テストを当てると、テストは失敗するのではなく実行自体が拒否される。直近3日だけを検査するのは全期間を諦めたのではなく、<strong>全期間の整合は <code>dim_member_daily</code> を作る側のモデルで担保する</strong>という分担だ（09回・10回）。</p>
 
 <h3>(e) <code>dim_audit</code> と dbt の <code>invocation_id</code></h3>
 
@@ -681,6 +700,7 @@ FROM {{ ref('stg_careervoice__scouts') }} AS s
 <li>Design Tip #164, <em>Have You Built Your Audit Dimension Yet</em> — <a href="https://www.kimballgroup.com/2014/03/design-tip-164-built-your-audit-dimension/">kimballgroup.com</a></li>
 <li>Jonathan Neo, <em>Building a Kimball dimensional model with dbt</em> (dbt Developer Blog, 2023) — <a href="https://docs.getdbt.com/blog/kimball-dimensional-model">docs.getdbt.com</a></li>
 <li>Maxime Beauchemin, <em>Entity-Centric Data Modeling for Analytics</em> (Preset, 2023) — <a href="https://preset.io/blog/introducing-entity-centric-data-modeling-for-analytics/">preset.io</a></li>
+<li>Maxime Beauchemin, <em>Functional Data Engineering</em> / スナップショット（解説） — <a href="https://www.ssp.sh/brain/snapshotting/">ssp.sh</a></li>
 <li>dbt, <em>Snapshots</em> — <a href="https://docs.getdbt.com/docs/build/snapshots">docs.getdbt.com</a></li>
 </ul>
 

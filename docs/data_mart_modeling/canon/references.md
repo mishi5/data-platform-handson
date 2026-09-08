@@ -68,6 +68,8 @@
 | BQ MV | Google Cloud, マテリアライズド・ビューの概要 / 作成（対応集約関数・制約） | https://cloud.google.com/bigquery/docs/materialized-views-intro ／ https://cloud.google.com/bigquery/docs/materialized-views-create | 増分 MV の制約 |
 | BQ recursive | Google Cloud, 再帰 CTE（`WITH RECURSIVE`） | https://cloud.google.com/bigquery/docs/recursive-ctes | 構文・反復上限などの仕様 |
 | dbt incremental BQ | dbt, BigQuery configurations（incremental strategies） | https://docs.getdbt.com/reference/resource-configs/bigquery-configs | `merge` / `insert_overwrite`、`partition_by`、`cluster_by` |
+| dbt incremental strategy | dbt, Incremental strategies（アダプタ別、`incremental_predicates`） | https://docs.getdbt.com/docs/build/incremental-strategy | 戦略の一覧 |
+| dbt microbatch | dbt, Incremental microbatch（`event_time` / `batch_size` / `lookback`） | https://docs.getdbt.com/docs/build/incremental-microbatch | 遅延到着の窓 |
 | dbt snapshots | dbt, Snapshots | https://docs.getdbt.com/docs/build/snapshots | `timestamp` / `check` 戦略、`dbt_valid_from/to` |
 | dbt contracts | dbt, Model contracts | https://docs.getdbt.com/docs/collaborate/govern/model-contracts | 列・型・制約の契約 |
 | dbt structure | dbt, How we structure our dbt projects | https://docs.getdbt.com/best-practices/how-we-structure/1-guide | staging / intermediate / marts |

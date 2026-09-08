@@ -48,3 +48,4 @@
 - 05: complete（修正ラウンド2 N-1〜N-3 を grep で確認。Ruling: 再々レビュー省略 — 局所修正のみ）
 - 03 再レビュー: 17件 ADDRESSED、新規 Critical 1（dim_member_daily テストが require_partition_filter で落ちる）+ Important 1 → 修正ラウンド 2/3 送付
 - 06 再レビュー: 13件 ADDRESSED、新規 Important 1（ARRAY 対案が dim_member を作り直して畳み込みを落とす）→ 修正ラウンド 2/3 送付。Ruling: 対案は ref('dim_member') を参照し dim_member_with_desired と命名
+- 09 執筆完了（DONE_WITH_CONCERNS）。Ruling: references に dbt incremental-strategy / microbatch を追加、fct_scout の物理設計（partition sent_date / cluster scout_sender_key, member_key）を正典に明記、検証用一時表は正典外で可、ブリーフの dbt.partition_range は実在しないため置換を是認 → レビュー起動

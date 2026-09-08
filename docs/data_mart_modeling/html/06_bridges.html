@@ -208,7 +208,7 @@
 
   <rect class="box-soft" x="56" y="88" width="288" height="56" rx="6"/>
   <text class="name" x="200" y="114" text-anchor="middle">fct_scout</text>
-  <text class="sub" x="200" y="132" text-anchor="middle">S003 / member_key = M002</text>
+  <text class="sub" x="200" y="132" text-anchor="middle">S003 / member_id = M002</text>
 
   <rect class="box-focal" x="56" y="176" width="288" height="88" rx="6"/>
   <text class="name" x="200" y="200" text-anchor="middle">br_member_desired_job_category</text>
@@ -221,7 +221,7 @@
 
   <rect class="box-soft" x="456" y="88" width="288" height="56" rx="6"/>
   <text class="name" x="600" y="114" text-anchor="middle">fct_scout</text>
-  <text class="sub" x="600" y="132" text-anchor="middle">S003 / member_key = M002</text>
+  <text class="sub" x="600" y="132" text-anchor="middle">S003 / member_id = M002</text>
 
   <rect class="box-focal" x="456" y="176" width="288" height="176" rx="6"/>
   <text class="name" x="600" y="200" text-anchor="middle">dim_member</text>
@@ -509,7 +509,8 @@ FROM unioned
 
 <h3>(d) ARRAY 版の <code>dim_member</code> と <code>UNNEST</code> クエリ</h3>
 
-<pre><code>-- models/marts/dim_member.sql（ARRAY を内包する対案。列を 1 本足すだけ）
+<pre><code>-- models/marts/dim_member_with_desired.sql
+-- ARRAY を内包する対案。dim_member に列を 1 本足すだけで、本体は一切変えない
 WITH weighted AS (
 
     SELECT
@@ -536,18 +537,17 @@ desired AS (
 
 member_versions AS (
 
-    -- dim_member の既存本体。05回の SCD2 変換（snapshot → 版付きキーの付与）まで
-    -- 済んだ会員行。この対案では一切変えない
+    -- 05回の dim_member をそのまま読む。版の畳み込み（同内容の連続版をまとめる）、
+    -- deleted_at の除外、member_key = FARM_FINGERPRINT(member_id + '|' + valid_from)
+    -- は 05回で済んでいる。ここでは再現も再計算もしない
     SELECT
-        FARM_FINGERPRINT(
-            CONCAT(member_id, '|', CAST(dbt_valid_from AS STRING))
-        ) AS member_key,
+        member_key,
         member_id,
         -- 属性列（birth_year, prefecture, region, …）は省略
-        dbt_valid_from                               AS valid_from,
-        IFNULL(dbt_valid_to, TIMESTAMP '9999-12-31') AS valid_to,
-        dbt_valid_to IS NULL                         AS is_current
-    FROM {{ ref('snap_members') }}
+        valid_from,
+        valid_to,
+        is_current
+    FROM {{ ref('dim_member') }}
 
 )
 
@@ -570,7 +570,7 @@ SELECT
     SUM(f.scout_count)            AS scout_count_impact,
     SUM(f.scout_count * d.weight) AS scout_count_weighted
 FROM {{ ref('fct_scout') }} AS f
-INNER JOIN {{ ref('dim_member') }} AS m
+INNER JOIN {{ ref('dim_member_with_desired') }} AS m
     ON f.member_key = m.member_key
 CROSS JOIN UNNEST(m.desired_job_categories) AS d
 INNER JOIN {{ ref('dim_job_category') }} AS jc
@@ -578,6 +578,8 @@ INNER JOIN {{ ref('dim_job_category') }} AS jc
 WHERE f.sent_date BETWEEN DATE '2026-06-01' AND DATE '2026-06-30'
 GROUP BY jc.level2_name
 </code></pre>
+
+<p><code>member_key</code> は 05回の <code>dim_member</code> のものをそのまま持ち越す。<strong>版の数も変わらない</strong>——<code>M001</code> は <code>snap_members</code> では 3 版だが 05回の畳み込みを経て <code>dim_member</code> で 2 行になっており、この対案でも 2 行のままである。<code>fct_scout.member_key</code>（送信時点の版）との突き合わせが (a) と同じに保たれるのはこのためで、キーを作り直すとここが崩れる。</p>
 
 <p>結果は (a) と同じ。差は 3 点ある。</p>
 
@@ -709,6 +711,7 @@ GROUP BY jc.level2_name
 <li>Design Tip #43: Dealing With Nulls In The Dimensional Model — <a href="https://www.kimballgroup.com/2003/02/design-tip-43-dealing-with-nulls-in-the-dimensional-model/">kimballgroup.com</a></li>
 <li>Design Tip #3: Focus On Business Process, Not Business Departments! — <a href="https://decisionworks.com/2000/01/design-tip-3-focus-on-business-process-not-business-departments/">decisionworks.com</a></li>
 <li>Google Cloud, BigQuery スキーマ設計（ネスト・繰り返し列）— <a href="https://cloud.google.com/bigquery/docs/best-practices-performance-nested">cloud.google.com</a></li>
+<li>Google Cloud, BigQuery 再帰 CTE（<code>WITH RECURSIVE</code>）— <a href="https://cloud.google.com/bigquery/docs/recursive-ctes">cloud.google.com</a>（自己参照 1 回・<code>UNION ALL</code>・反復上限 500）</li>
 </ul>
 
 </body>
