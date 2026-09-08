@@ -41,11 +41,8 @@ python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py html/09_incremental.ht
 
 ## 正典への変更提案
 
-1. **references.md に dbt の2ページを追加**してほしい。
-   - `https://docs.getdbt.com/docs/build/incremental-strategy`（アダプタ別の戦略と `incremental_predicates`）
-   - `https://docs.getdbt.com/docs/build/incremental-microbatch`（`event_time` / `batch_size` / `lookback` / `begin`）
-   本文では `microbatch` の `lookback`（既定 1）に触れているが、URL 規約（references.md にあるものだけ）に従い参照文献リストには `bigquery-configs` だけを載せた。10回も incremental に触れるなら共有しておきたい。
-2. **`fct_scout` の物理設計を正典 §4 に明記**したい（`partition_by = sent_date`, `cluster_by = ['scout_sender_key']`）。07回と09回が同じ config を書くため、正典側に1行あると揺れない。正典には `fct_page_view` の「パーティション: `view_date`、クラスタ: `company_key`」だけがある。
+1. ~~references.md に dbt の incremental-strategy / microbatch を追加してほしい~~ → **採用済み**（references.md 71–72 行）。修正ラウンド1で参照文献に2行を追加した。
+2. ~~`fct_scout` の物理設計を正典 §4 に明記したい~~ → **正典に明記済み**（domain.md 124 行: パーティション `sent_date`、クラスタ `scout_sender_key`, `member_key`）。初稿の `cluster_by = ['scout_sender_key']` は正典違反で、修正ラウンド1で正典に従った。
 3. **`fct_selection_event.event_date` / `fct_application_pipeline.applied_date` を使用した**。正典 §4 の「ファクトは日付キーと並べて DATE 型の `<role>_date` を持つ」からの機械的な導出だが、明示は無い。
 4. **検証用スクラッチ表 `marts.fct_scout__fingerprint`** は正典外の名前。モデルではなく冪等性検証の一時表なので正典に入れる必要はないと判断したが、レビューで名前規約の対象と見なすなら `tmp_` などの接頭辞規約が要る。
 
@@ -65,3 +62,25 @@ python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py html/09_incremental.ht
 
 - なし。ブリーフの §1〜§7・図・8節すべてを埋めた。
 - 注意点として、`microbatch` の config 詳細（`lookback` 既定 1・BigQuery が内部で `insert_overwrite` を使う）は dbt の microbatch ページを読んで書いたが、URL 規約のため参照文献に出していない（提案1）。
+
+
+---
+
+## 修正ラウンド1（レビュー `review/09_review.md` への対応）
+
+| 指摘 | 対応 | 箇所 |
+|---|---|---|
+| I1 `cluster_by` が正典と違う | `cluster_by = ['scout_sender_key', 'member_key']` に修正（正典 domain.md 124 行・07/10 回と一致）。report の提案2も「正典に従った」に書き換え | §5(a) の config |
+| I2 FDE 要約の反転 | ssp.sh を再取得して原文（"No past dependencies; partition on processing time": keeps backfills parallelizable and cleanly handles late-arriving facts）を確認。§4 を3段に分割し、「FDE は処理時刻でパーティションを切る」と原典側を正しく書いたうえで、この題材はイベント時刻（`sent_date`）を選び窓で遅延を吸収する、と決定側を分けた | §4 の3段落 |
+| I3 `SUM(is_hired)` の検算 | `COUNT(*)` が 1 ではなく 7、`AVG(days_applied_to_offer)` が7回数えた平均、と行数側の指標に差し替え。`SUM(is_hired)` が 1 のままである理由（入社を観測した最後の1行だけが 1）を別段落で説明し、「壊れていても合う指標がある」ことを失敗の見つけにくさとして書いた | §2(b) |
+| I4 原典の歪み | 「原典が許しているのは…ではない」を削除。原典は誤り訂正に更新／削除再ロード／相殺行の3方式を挙げること、直したいのはメジャーの誤りではなくディメンションの版であること、それが `MERGE` を2列に限る理由であること、の3段に書き直した | §3.1 の末尾 |
+| M1 参照文献に dbt の2ページが無い | `incremental-strategy` と `incremental-microbatch` を参照文献に追加（references.md に追加済みのため URL 規約に適合） | 参照文献 |
+| M2 4文の段落 | 演習(c) の「壊れ方」を2段落に分割（`require_partition_filter` の1文を独立） | §7(c) |
+| M3 §5a 参照の食い違い | 「`snapshot_date = &lt;role&gt;_date` で結ぶモデル（§5(a) の `member_snapshot` は `sent_date`、`fct_page_view` なら `view_date`）」に修正 | §7(c) |
+| M4 表にディメンションが混じる | 「`fct_job_posting_daily`（同じ扱いで `dim_member_daily` も）」に修正 | §6 の表 |
+| M5 ミニディメンションの近似 | 「`member_profile_mini_key` は `dim_member_daily`（その日の終わり時点）で解決するので同日中の変化は変化後の版に寄る。`M001` の 6/15 がこの型で、時点精度が要るなら 05回の履歴側」の段落を追加 | §5(a) の直後 |
+| M6 FDE と dbt config を結ぶ地の文 | 「`insert_overwrite` に静的な `partitions` を渡す形は『1タスク実行 → 指定したパーティションを丸ごと置換』をそのまま実装する」を段落として追加 | §4 |
+| M7 `p.meta` | `Design Tip #43 #164` に修正し、再解釈側を「dbt の増分戦略（BigQuery configs / incremental strategies / microbatch）」に変更 | L43 |
+
+- 図は触っていないが `check_svg.py` を再実行: `0 errors, 0 warnings`。
+- 1段落3文の上限を全 `<p>` について再スキャンし、超過ゼロを確認。`<pre>` 内の生 `<` ゼロ・タグ平衡も再確認。

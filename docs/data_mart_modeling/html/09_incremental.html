@@ -40,7 +40,7 @@
 </head>
 <body>
 <h1>増分・遅延到着・冪等性</h1>
-<p class="meta">データマート設計 09 ／ 参照: DWT ch.19–20, ETL サブシステム #2 #6 #13 #14 #16 #24, Design Tip #164 ／ 再解釈: Functional Data Engineering, dbt BigQuery configs（incremental strategies）</p>
+<p class="meta">データマート設計 09 ／ 参照: DWT ch.19–20, ETL サブシステム #2 #6 #13 #14 #16 #24, Design Tip #43 #164 ／ 再解釈: Functional Data Engineering, dbt の増分戦略（BigQuery configs / incremental strategies / microbatch）</p>
 
 <h2>1. この回が決めること</h2>
 
@@ -210,7 +210,9 @@ where s.sent_at &gt; (select max(sent_at) from {{ this }})
 
 <h3>(b) 累積スナップショットを追記にすると <code>P001</code> が7行になる</h3>
 
-<p><code>P001</code>（<code>M001</code> → <code>J001</code>）は 6/23 応募 → 7/1 書類 → 7/8 一次 → 7/15 最終 → 7/20 内定 → 7/22 承諾 → 8/1 入社と7回状態が変わる。<code>fct_application_pipeline</code> を <code>unique_key</code> 無しの <code>merge</code>（＝追記）で作ると、状態が動いた日の実行ごとに1行増えて7行になる。粒度宣言「1行 = 1応募のパイプライン」が壊れ、<code>SUM(is_hired)</code> は 1 ではなく 7 を返す。</p>
+<p><code>P001</code>（<code>M001</code> → <code>J001</code>）は 6/23 応募 → 7/1 書類 → 7/8 一次 → 7/15 最終 → 7/20 内定 → 7/22 承諾 → 8/1 入社と7回状態が変わる。<code>fct_application_pipeline</code> を <code>unique_key</code> 無しの <code>merge</code>（＝追記）で作ると、状態が動いた日の実行ごとに1行増えて7行になる。粒度宣言「1行 = 1応募のパイプライン」が壊れ、<code>COUNT(*)</code> は応募数 1 ではなく 7 を返し、<code>AVG(days_applied_to_offer)</code> は同じ応募を7回数えた平均になる。</p>
+
+<p><code>SUM(is_hired)</code> が 1 のままなのは、入社を観測できた最後の1行しか <code>is_hired = 1</code> にならないからだ。壊れていても合う指標があることが、この失敗を見つけにくくしている。</p>
 
 <h3>(c) 遅延到着ディメンション: <code>C002</code> の規模変更</h3>
 
@@ -263,7 +265,7 @@ where s.sent_at &gt; (select max(sent_at) from {{ this }})
 </table>
 </div>
 
-<p>原典が許しているのは「ファクトの外部キーを後から更新する」ことで、メジャーの書き換えではない。この区別は §5(c) の <code>MERGE</code> が <code>company_key</code> と <code>audit_key</code> しか触らない理由になっている。</p>
+<p>遅延到着ディメンションの修復で触るのは外部キーだけにする。原典はファクトの誤り訂正に「該当行の更新」「削除して再ロード」「相殺行の追加」の3方式を挙げるが、ここで直したいのは「ディメンションの版が後から来た」ことであってメジャーの誤りではない。この区別が §5(c) の <code>MERGE</code> を <code>company_key</code> と <code>audit_key</code> に限る理由になっている。</p>
 
 <h2>4. 現代の再解釈</h2>
 
@@ -271,7 +273,11 @@ where s.sent_at &gt; (select max(sent_at) from {{ this }})
 <p>Functional Data Engineering（Beauchemin）は、バッチ処理を関数型プログラミングの語彙で捉え直す。タスクは副作用を持たない純関数であり、再実行は追記ではなく上書きで行う。状態の最小単位はパーティションで、「1タスク → 1テーブル、1タスク実行 → 1パーティション」を守ると系譜とデバッグが単純になる。</p>
 </div>
 
-<p>この主張のうち増分に効くのは3点。パーティションを不変の単位として扱うこと、行単位の更新をやめて丸ごと置換すること、処理時刻ではなく<strong>イベント時刻</strong>でパーティションを切ってバックフィルを並列化できる形にすること。ディメンションを日次スナップショットで持つ提案（<code>dim_member_daily</code>、05回）も、同じ「不変パーティションの列」という発想の適用にすぎない。</p>
+<p>この主張のうち増分にそのまま効くのは2点。パーティションを不変の単位として扱うことと、行単位の更新をやめて丸ごと置換することだ。</p>
+
+<p>3点目として FDE は「過去への依存を持たず、<strong>処理時刻</strong>でパーティションを切る」ことを挙げ、それでバックフィルが並列化でき遅延ファクトも素直に扱えるとする。CareerVoice はそこを採らず、<code>run_date</code> を与えた実行が <code>sent_date</code>（イベント時刻）のパーティションを置換し、遅延分はルックバック窓で吸収する形にした。イベント時刻側に寄せる選択は dbt の <code>microbatch</code> が <code>event_time</code> として持っている側で、代わりに「窓の外は自動では入らない」という穴を自分で塞ぐ必要がある（§5c）。</p>
+
+<p>dbt の <code>insert_overwrite</code> に静的な <code>partitions</code> を渡す形は、この「1タスク実行 → 指定したパーティションを丸ごと置換」をそのまま実装する。ディメンションを日次スナップショットで持つ提案（<code>dim_member_daily</code>、05回）も、同じ不変パーティションの発想の適用にすぎない。</p>
 
 <div class="table-wrap">
 <table>
@@ -306,7 +312,7 @@ where s.sent_at &gt; (select max(sent_at) from {{ this }})
     materialized = 'incremental',
     incremental_strategy = 'insert_overwrite',
     partition_by = {'field': 'sent_date', 'data_type': 'date', 'granularity': 'day'},
-    cluster_by = ['scout_sender_key'],
+    cluster_by = ['scout_sender_key', 'member_key'],
     partitions = partitions_to_replace,
     on_schema_change = 'append_new_columns'
 ) }}
@@ -371,6 +377,8 @@ left join {{ ref('dim_job_posting') }} as jp
     on t.job_posting_id = jp.job_posting_id</code></pre>
 
 <p><code>{{ audit_key() }}</code> は10回で定義するマクロ。それまでは <code>-1</code> を返す。<code>member_key</code> はイベント時刻の as-of join で解決するので、6/18 送信の <code>S003</code> が 6/20 に届いても 6/18 時点の版に結ばれる（§3.1 の遅延到着ファクト）。</p>
+
+<p><code>member_profile_mini_key</code> のほうは <code>dim_member_daily</code>（その日の終わり時点）で解決するので、同日中の属性変化は当日ぶんが変化後の版に寄る。<code>M001</code> の 6/15 の <code>active</code>・<code>600_800</code> 化がまさにこの型で、時点精度が要るならミニディメンションの履歴側（05回）に切り替える。</p>
 
 <div class="table-wrap">
 <table>
@@ -584,7 +592,7 @@ models:
 <tr><td>トランザクション</td><td>p99 ≤ 3日</td><td>日次で数千万以上</td><td><code>insert_overwrite</code>（動的 ＋ <code>copy_partitions</code>）</td><td>3日</td><td><code>fct_page_view</code></td></tr>
 <tr><td>トランザクション</td><td>裾が長い（p99 &gt; 7日）</td><td>—</td><td><code>insert_overwrite</code> ＋ 定期の広窓リビルド</td><td>日次3日 ＋ 週次30日</td><td>モバイルからの <code>page_views</code> のように到着が遅れる経路</td></tr>
 <tr><td>累積スナップショット</td><td>行が更新され続ける</td><td>—</td><td><code>merge</code>（<code>unique_key</code>）＋ <code>incremental_predicates</code></td><td>イベント側3日。predicate は最長パイプライン以上</td><td><code>fct_application_pipeline</code>, <code>fct_scout_funnel</code>, <code>fct_review_moderation</code></td></tr>
-<tr><td>定期スナップショット（日）</td><td>ソースが現在値のみ＝過去日は再現不能</td><td>—</td><td><code>insert_overwrite</code>（当日パーティションのみ）</td><td>0日（過去は不変）</td><td><code>fct_job_posting_daily</code>, <code>dim_member_daily</code></td></tr>
+<tr><td>定期スナップショット（日）</td><td>ソースが現在値のみ＝過去日は再現不能</td><td>—</td><td><code>insert_overwrite</code>（当日パーティションのみ）</td><td>0日（過去は不変）</td><td><code>fct_job_posting_daily</code>（同じ扱いで <code>dim_member_daily</code> も）</td></tr>
 <tr><td>定期スナップショット（月）</td><td>月内は動き続ける</td><td>—</td><td><code>insert_overwrite</code>（<code>granularity: 'month'</code>）</td><td>当月 ＋ 前月</td><td><code>fct_contract_monthly</code></td></tr>
 <tr><td>小さいファクト</td><td>—</td><td>全量再構築が数十秒以内</td><td>増分にしない（<code>materialized='table'</code>）</td><td>—</td><td><code>fct_placement</code></td></tr>
 </table>
@@ -653,7 +661,9 @@ limit 10;</code></pre>
 <details>
 <summary>解答例</summary>
 
-<p><strong>壊れ方</strong>: 6/19 の <code>snapshot_date</code> が無いと、<code>snapshot_date = view_date</code> で結ぶモデル（§5a の <code>member_snapshot</code> のような結合）は 6/19 だけ一致行を失う。inner join なら 6/19 の行が丸ごと消え、left join なら <code>member_profile_mini_key</code> が NULL になる。<code>-1</code> すら付かないので DT#43 の「NULL 外部キー禁止」に違反し、年収帯別の集計から6/19 だけが抜ける。<code>require_partition_filter=true</code> のため、欠損なのか単に読んでいないだけなのかもクエリからは区別できない。</p>
+<p><strong>壊れ方</strong>: 6/19 の <code>snapshot_date</code> が無いと、<code>snapshot_date = &lt;role&gt;_date</code> で結ぶモデル（§5(a) の <code>member_snapshot</code> は <code>sent_date</code>、<code>fct_page_view</code> なら <code>view_date</code>）は 6/19 だけ一致行を失う。inner join なら 6/19 の行が丸ごと消え、left join なら <code>member_profile_mini_key</code> が NULL になる。<code>-1</code> すら付かないので DT#43 の「NULL 外部キー禁止」に違反し、年収帯別の集計から6/19 だけが抜ける。</p>
+
+<p>しかも <code>require_partition_filter=true</code> なので、欠損しているのか単にそのパーティションを読んでいないだけなのかがクエリ結果からは区別できない。</p>
 
 <p><strong>埋め方1（再生成できる場合）</strong>: <code>members.updated_at</code> があるので 6/19 終了時点の版を作り直せる。1パーティションだけ流す。</p>
 
@@ -695,6 +705,8 @@ where snapshot_date = date '2026-06-18';</code></pre>
 <li>Design Tip #43: <em>Dealing With Nulls In The Dimensional Model</em> — <a href="https://www.kimballgroup.com/2003/02/design-tip-43-dealing-with-nulls-in-the-dimensional-model/">kimballgroup.com</a></li>
 <li>Beauchemin, <em>Functional Data Engineering</em>（解説） — <a href="https://www.ssp.sh/brain/functional-data-engineering/">ssp.sh</a> ／ <a href="https://www.ssp.sh/brain/snapshotting/">snapshotting</a></li>
 <li>dbt, <em>BigQuery configurations</em>（incremental strategies, <code>partition_by</code>, <code>partitions</code>, <code>copy_partitions</code>） — <a href="https://docs.getdbt.com/reference/resource-configs/bigquery-configs">docs.getdbt.com</a></li>
+<li>dbt, <em>Incremental strategies</em>（アダプタ別の戦略、<code>incremental_predicates</code>） — <a href="https://docs.getdbt.com/docs/build/incremental-strategy">docs.getdbt.com</a></li>
+<li>dbt, <em>Incremental microbatch</em>（<code>event_time</code> / <code>batch_size</code> / <code>lookback</code>） — <a href="https://docs.getdbt.com/docs/build/incremental-microbatch">docs.getdbt.com</a></li>
 </ul>
 
 </body>

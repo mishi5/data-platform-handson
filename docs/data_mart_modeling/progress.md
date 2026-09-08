@@ -55,3 +55,5 @@
 - 03: complete（ラウンド2: テスト config.where / 想定規模 / +where 非伝播の注記 を grep で確認。Ruling: 再々レビュー省略）
 - 07: complete（ラウンド2: テスト config.where / dbt_project.yml data_tests の +where は正しい用法 / §8 圧縮 を確認。Ruling: 再々レビュー省略。Fowler 一次資料未読は report に明記＝二次要約依拠として parked）
 - 09 レビュー REVISE（important=4 minor=7。cluster_by 正典差 / FDE 要約の取り違え / 検算 / 原典の歪み）→ 修正ラウンド 1/3 送付
+- 09 修正ラウンド1 完了（11件 FIXED）→ 再レビュー起動
+- 08 レビュー REVISE（critical=2 important=3 minor=8。MV 制約の事実誤認 / 手元基盤の記述の事実誤認 / 演習の窓）→ 修正ラウンド 1/3 送付
