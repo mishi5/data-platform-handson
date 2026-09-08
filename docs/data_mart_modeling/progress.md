@@ -32,3 +32,5 @@
 - 05 レビュー REVISE（critical=1 important=7 minor=8。C-1 は dim_member の版数の前提ズレ＝正典裁定と整合させる）→ 修正ラウンド 1/3 送付
 - 04 レビュー REVISE（critical=2 important=5 minor=7）→ 修正ラウンド 1/3 送付。Ruling: 04 の DWT 章は ch.1–2（加法性は 3rd ed. の ch.1/2）に訂正可
 - 02: complete（修正ラウンド2: N-1/N-2 反映を grep で確認。n-3 は執筆者の理由（直積で水増し）を妥当として parked、n-5 は 05 回へ送付）
+- batch3 dispatch: 08, 09 の執筆エージェント（opus）起動。先行回で確定した規約（audit_key / DATE パーティション列 / as-of 半開区間 / 引用の創作禁止）を補足として渡した。10 は次の空きで起動
+- 03 レビュー REVISE（critical=1 important=5 minor=11）→ 修正ラウンド 1/3 送付。Ruling: SK は SCD2 の 5 ディメンション（agency 含む）、dim_member_daily はミニの代替でなく併存
