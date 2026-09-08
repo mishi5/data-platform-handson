@@ -66,3 +66,4 @@
 - 10: complete（再レビュー APPROVE、16/16 addressed）
 - 08: complete（ラウンド2 N-1〜N-6 を grep で確認: 創作引用 0 件、URL 全て references 内。Ruling: 再々レビュー省略）
 - 全11本 完了。次: 横断レビュー（一貫性）→ 修正ウェーブ（03 §5(e) audit_key の 10 回への整合を含む）→ Playwright 目視 → publish --dry-run
+- 横断レビュー起動（ダイジェスト review/_digest.md を自動生成して渡した）。全11本 <title> 形式一致、check_svg 全て 0 errors を確認済み
