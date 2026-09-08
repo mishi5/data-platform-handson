@@ -37,3 +37,4 @@
 - 04 修正ラウンド1 完了（14件 FIXED）→ 再レビュー起動
 - 05 修正ラウンド1 完了（16件 FIXED）。Ruling: `dim_company.corporate_number`（Type0）を正典に追加（法人番号は不変の実体キーとして遅延到着ディメンションの照合に使える）→ 再レビュー起動
 - 06 レビュー REVISE（critical=2 important=4 minor=7）→ 修正ラウンド 1/3 送付。05 再レビュー起動
+- 07 レビュー REVISE（critical=3 important=7 minor=7。Fowler を戻す / Type1 全版更新 / ビュー課金の誤り / 手元基盤の記述の事実誤認）→ 修正ラウンド 1/3 送付。10 執筆起動（audit_key マクロの正本）

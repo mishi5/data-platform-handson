@@ -45,7 +45,9 @@
 
 <h2>1. この回が決めること</h2>
 
-<p>ファクトの粒度が決まれば（01回）、次は「その粒度に何をぶら下げるか」だけが残る。この回で決めるのは2つ。<strong>サロゲートキーは BigQuery + dbt で本当に要るのか</strong>（結論: SCD2 の 5 ディメンションだけ）、そして<strong>ある属性を本体ディメンション・ミニ・ジャンク・退化・メジャーのどこに置くか</strong>。CareerVoice のディメンションは正典で名前まで固まっているので、ここでは「なぜその形なのか」を技法名に紐付けて言語化する。</p>
+<p>ファクトの粒度が決まれば（01回）、次は「その粒度に何をぶら下げるか」だけが残る。この回で決めるのは2つ。<strong>サロゲートキーは BigQuery + dbt で本当に要るのか</strong>（結論: SCD2 の 5 ディメンションだけ）、そして<strong>ある属性を本体ディメンション・ミニ・ジャンク・退化・メジャーのどこに置くか</strong>。</p>
+
+<p>CareerVoice のディメンションは正典で名前まで固まっているので、ここでは「なぜその形なのか」を技法名に紐付けて言語化する。</p>
 
 <div class="table-wrap">
 <table>
@@ -81,7 +83,9 @@
 
 <h3>(a) 速く変わる属性を <code>dim_member</code> に Type2 で持つ</h3>
 
-<p>以下、規模は<strong>会員 300 万人・<code>fct_page_view</code> 日次 2,000 万行を仮定する</strong>（正典はデータ量を定めていない）。<code>annual_income_band</code> と <code>job_change_intent</code> を <code>dim_member</code> の Type2 属性にしたとする。<code>M001</code> は 2026-06-15 に <code>passive</code>/<code>400_600</code> → <code>active</code>/<code>600_800</code> へ変わるので、この日に新しい <code>member_key</code> が発行される。壊れ方は3つ。</p>
+<p>以下、規模は<strong>会員 300 万人・<code>fct_page_view</code> 日次 2,000 万行を仮定する</strong>（正典はデータ量を定めていない）。</p>
+
+<p><code>annual_income_band</code> と <code>job_change_intent</code> を <code>dim_member</code> の Type2 属性にしたとする。<code>M001</code> は 2026-06-15 に <code>passive</code>/<code>400_600</code> → <code>active</code>/<code>600_800</code> へ変わるので、この日に新しい <code>member_key</code> が発行される。壊れ方は3つ。</p>
 
 <ul>
 <li><strong>行数</strong>: 転職意欲は求人を見た会員が数か月単位で切り替える。会員 300 万人 × 年2回でディメンションが年 600 万行ずつ伸びる。5年で 3,000 万行超のディメンションを、<code>fct_page_view</code>（日次 2,000 万行）に毎日結合することになる。</li>
@@ -91,7 +95,9 @@
 
 <p>正典の形（ミニディメンション）では (i) が消え、(ii)(iii) が桁で軽くなる。<code>dim_member</code> は 6/15 に<strong>行が増えない</strong>。<code>dim_member_profile_mini</code> も組合せ 15 通りのまま動かず、動くのは「ファクト行がどの1つを指すか」だけだ。</p>
 
-<p>ただし<strong>(ii)(iii) は消えない</strong>。正典の <code>dim_member</code> は SCD2 のままで、<code>M001</code> は <code>current_company_id</code> が変わる 8/1 に版が増えて <code>member_key</code> が2つになる。会員数は <code>member_id</code>（耐久キー）で数える必要が残り、イベント時点の版を引く as-of 結合も残る。ミニが消すのは「速く変わる属性のせいで版が増える」分だけで、規模を桁で下げても現象そのものは残る（05回）。</p>
+<p>ただし<strong>(ii)(iii) は消えない</strong>。正典の <code>dim_member</code> は SCD2 のままで、<code>M001</code> は <code>current_company_id</code> が変わる 8/1 に版が増えて <code>member_key</code> が2つになる。会員数は <code>member_id</code>（耐久キー）で数える必要が残り、イベント時点の版を引く as-of 結合も残る。</p>
+
+<p>ミニが消すのは「速く変わる属性のせいで版が増える」分だけで、規模を桁で下げても現象そのものは残る（05回）。</p>
 
 <h3>(b) <code>dim_date</code> を作らず <code>DATE</code> 列で済ませる</h3>
 
@@ -184,8 +190,14 @@ GROUP BY d.year;</code></pre>
 
 <h3>ミニディメンションの設計</h3>
 
-<p>ミニディメンションを作る手順は3段。(1) 本体ディメンションから速く変わる属性を選ぶ。(2) 連続値は<strong>帯にする</strong>。(3) 組合せにサロゲートキーを振る。</p>
-<p>(2) について DT#127 は「サロゲートキー列を持つ新しい表を作り、本体ディメンションの列の <code>SELECT DISTINCT</code> で埋めるだけだ」と書くが、これは属性が既に帯になっていることを前提にしている。年収 4,850,000 円を生のまま入れると行数が会員数と同じになり、ミニにする意味が消える。行数は<strong>属性値の組合せ数</strong>で決まり、会員数にもイベント数にも依存しないのが要点だ。</p>
+<p>ミニディメンションを作る手順は3段。</p>
+<ol>
+<li>本体ディメンションから速く変わる属性を選ぶ</li>
+<li>連続値は<strong>帯にする</strong></li>
+<li>組合せにサロゲートキーを振る</li>
+</ol>
+<p>(2) について DT#127 は「サロゲートキー列を持つ新しい表を作り、本体ディメンションの列の <code>SELECT DISTINCT</code> で埋めるだけだ」と書くが、これは属性が既に帯になっていることを前提にしている。年収 4,850,000 円を生のまま入れると行数が会員数と同じになり、ミニにする意味が消える。</p>
+<p>行数は<strong>属性値の組合せ数</strong>で決まり、会員数にもイベント数にも依存しない。ここが本体ディメンションとの決定的な違いだ。</p>
 
 <p>CareerVoice では帯化がソース側で既に済んでいる（<code>members.annual_income_band</code> が <code>lt400</code>〜<code>ge1000</code> の5値、<code>job_change_intent</code> が3値）。だから <code>dim_member_profile_mini</code> の組合せは <strong>15 通りに固定</strong>される。ソースが生の年収を持っていたら、帯の切り方こそがこの回の最大の設計判断になっていた。</p>
 
@@ -198,14 +210,16 @@ GROUP BY d.year;</code></pre>
 <h3>dbt Kimball（Jonathan Neo, 2023）— キーの作り方は変わり、要否は変わらない</h3>
 
 <div class="aside modern">
-<p>この記事はサロゲートキーの作り方を3つに整理する。<strong>ハッシュ</strong>（<code>md5(key_1, key_2, key_3)</code>）、<strong>連番</strong>（<code>row_number()</code>）、<strong>連結</strong>（<code>concat(key_1, key_2, key_3)</code>）。そのうえでハッシュを「おそらく最も簡単な方法」として <code>dbt_utils.generate_surrogate_key()</code> を推す。利点として挙げるのは「ファクト表のサロゲートキーを生成するときにディメンション表との結合を行う手間が省ける」こと。</p>
+<p>この記事はサロゲートキーの作り方を3つに整理する。<strong>ハッシュ</strong>（<code>md5(key_1, key_2, key_3)</code>）、<strong>連番</strong>（<code>row_number()</code>）、<strong>連結</strong>（<code>concat(key_1, key_2, key_3)</code>）。そのうえでハッシュを「おそらく最も簡単な方法」として <code>dbt_utils.generate_surrogate_key()</code> を推す。</p>
+<p>利点として挙げるのは「ファクト表のサロゲートキーを生成するときにディメンション表との結合を行う手間が省ける」こと。</p>
 </div>
 
-<p>何が変わったか。<strong>連番が使えなくなった</strong>。BigQuery には IDENTITY もシーケンスもなく、<code>ROW_NUMBER()</code> は再実行のたびに値が変わりうる（＝冪等でない。09回）。</p>
-<p>Kimball の「1から順に振る単純整数」は、採番機構を持つ RDBMS の前提だった。決定的ハッシュはこの穴を埋める。しかも ETL 時にディメンションを引く必要がないので、ファクトとディメンションを並列に構築できる。</p>
+<p>変わったのは作り方だ。<strong>連番が使えなくなった</strong>——BigQuery には IDENTITY もシーケンスもなく、<code>ROW_NUMBER()</code> は再実行のたびに値が変わりうる（＝冪等でない／09回）。Kimball の「1から順に振る単純整数」は、採番機構を持つ RDBMS の前提だった。</p>
+<p>決定的ハッシュはこの穴を埋める。しかも ETL 時にディメンションを引く必要がないので、ファクトとディメンションを並列に構築できる。</p>
 
-<p>何が変わっていないか。<strong>要否の判断</strong>。記事のコードは <code>generate_surrogate_key(['stg_product.productid'])</code> のように<strong>自然キー1列をハッシュしている</strong>。これは自然キーの再符号化であって、§3 の表の9つの理由を1つも満たさない。</p>
-<p><code>M001</code> を <code>-5137...</code> に置き換えても、再利用も再割当も統合も起きない題材では可読性を失うだけだ。<strong>ハッシュがサロゲートキーになるのは、ハッシュの入力に版を識別する要素（<code>valid_from</code>）が入るときだけ</strong>——これがこの回の中心的な結論である。</p>
+<p>変わっていないのは<strong>要否の判断</strong>のほうだ。記事のコードは <code>generate_surrogate_key(['stg_product.productid'])</code> のように<strong>自然キー1列をハッシュしている</strong>。これは自然キーの再符号化であって、§3 の表の9つの理由を1つも満たさない。</p>
+
+<p><code>M001</code> を <code>-5137...</code> に置き換えても、再利用も再割当も統合も起きない題材では可読性を失うだけだ。<strong>ハッシュがサロゲートキーになるのは、入力に版を識別する要素（<code>valid_from</code>）が入るときだけ</strong>だ。これがこの回の中心的な結論である。</p>
 
 <h3>ECM（Maxime Beauchemin, 2023）— ディメンションに指標を持たせる</h3>
 
@@ -217,7 +231,8 @@ GROUP BY d.year;</code></pre>
 <p><strong>ディメンションと集約エンティティを別テーブルにするのが、この題材での折衷である</strong>。理由は再集約可能性で、<code>avg_overall_score_90d</code> のような窓付き平均は他の粒度へ持ち上げられないため、ディメンションに置くと「ディメンションで絞ってからファクトを足す」という基本操作が壊れる（04回）。</p>
 
 <p>Kimball が指標をディメンションに置くのを嫌うのは、ディメンションが「絞り込みとグループ化の対象」でファクトが「計測結果」という役割分担（DWT ch.1）を守るためだ。ECM はこの分担を意図的に崩す。</p>
-<p>ECM がもう一方で推すのが<strong>ディメンションの日次フルスナップショット</strong>だ。「ディメンションの完全なスナップショットを毎日保持する……ポイントインタイムのクエリ・比較が容易になる」。正典にはこれが <code>dim_member_daily</code>（1行 = 1会員 × 1日）として置かれている。3つの手法を並べる。</p>
+<p>ECM がもう一方で推すのが<strong>ディメンションの日次フルスナップショット</strong>だ。「ディメンションの完全なスナップショットを毎日保持する……ポイントインタイムのクエリ・比較が容易になる」。正典にはこれが <code>dim_member_daily</code>（1行 = 1会員 × 1日）として置かれている。</p>
+<p>3つの手法を並べる。</p>
 
 <div class="table-wrap">
 <table>
@@ -375,7 +390,9 @@ UNION ALL
 -- 匿名の fct_page_view / 属性未取得の行が指す既定行
 SELECT -1 AS member_profile_mini_key, '不明' AS annual_income_band, '不明' AS job_change_intent</code></pre>
 
-<p>ファクト側は「そのイベントが起きた時点の帯」を解決して <code>member_profile_mini_key</code> に入れる。<code>fct_scout</code> は <code>member_profile_mini_key</code>（送信時点）、<code>fct_application_pipeline</code> は応募時点、<code>fct_page_view</code> は閲覧時点。<strong>キーが 15 種類しかないので、時点解決の結果は「15 行のうちどれを指すか」だけ</strong>になる。§2(a) の 3,000 万行への範囲結合が、正典では 15 行への参照と、<code>dim_member</code> 側の 2 行（<code>M001</code> の版）への as-of 結合に縮む。</p>
+<p>ファクト側は「そのイベントが起きた時点の帯」を解決して <code>member_profile_mini_key</code> に入れる。<code>fct_scout</code> は <code>member_profile_mini_key</code>（送信時点）、<code>fct_application_pipeline</code> は応募時点、<code>fct_page_view</code> は閲覧時点。</p>
+
+<p><strong>キーが 15 種類しかないので、時点解決の結果は「15 行のうちどれを指すか」だけ</strong>になる。§2(a) の 3,000 万行への範囲結合が、正典では 15 行への参照と、<code>dim_member</code> 側の 2 行（<code>M001</code> の版）への as-of 結合に縮む。</p>
 
 <h3>(d) サロゲートキーの作り方 — 3案の比較</h3>
 
@@ -621,7 +638,8 @@ FROM {{ ref('stg_careervoice__scouts') }} AS s
 
 <details>
 <summary>解答例</summary>
-<p><strong>6/15 の変化では、どちらのディメンションも行が1行も増えない。</strong> 変わったのは <code>annual_income_band</code> と <code>job_change_intent</code> の2つで、どちらも <code>dim_member</code> の属性ではない（正典の <code>dim_member</code> は <code>birth_year</code>, <code>gender</code>, <code>prefecture</code>, <code>region</code>, <code>current_company_id</code>, <code>current_job_category</code>, <code>registered_date</code>）。<code>dim_member_profile_mini</code> は 15 行の全組合せを最初から持っているので、こちらも増えない。<strong>変わるのはファクト行がどの行を指すか、だけである。</strong></p>
+<p><strong>6/15 の変化では、どちらのディメンションも行が1行も増えない。</strong> 変わったのは <code>annual_income_band</code> と <code>job_change_intent</code> の2つで、どちらも <code>dim_member</code> の属性ではない（正典の <code>dim_member</code> は <code>birth_year</code>, <code>gender</code>, <code>prefecture</code>, <code>region</code>, <code>current_company_id</code>, <code>current_job_category</code>, <code>registered_date</code>）。<code>dim_member_profile_mini</code> は 15 通りの全組合せを最初から持っているので、こちらも増えない。</p>
+<p><strong>変わるのはファクト行がどの行を指すか、だけである。</strong></p>
 <div class="table-wrap">
 <table>
 <tr><th>日付</th><th>出来事</th><th><code>member_key</code></th><th><code>member_profile_mini_key</code> が指す行</th></tr>
@@ -632,8 +650,10 @@ FROM {{ ref('stg_careervoice__scouts') }} AS s
 <tr><td><strong>8/1</strong></td><td><code>C001</code> 入社 → <code>current_company_id</code> 変化</td><td><strong><code>M001</code> 版2 を発行</strong>（Type 2 属性なので）</td><td>(<code>600_800</code>, <code>active</code>) のまま</td></tr>
 </table>
 </div>
-<p>要点は<strong>変化の種類でディメンションが分かれる</strong>ことだ。8/1 の <code>current_company_id</code> は <code>dim_member</code> の Type2 属性なので新しい <code>member_key</code> が出る。6/15 の2属性はミニ側なので新しいキーは出ない。<code>M001</code> がもし年に4回意欲を切り替えても、<code>dim_member</code> は静止したままである。</p>
-<p>ただし DT#127 の但し書きが効く。6/15 の変化は、6/20 の <code>S001</code> という<strong>ファクトが発生したからこそ記録に残った</strong>。もし 6/15 以降 <code>M001</code> が何も起こさなければ、この変化はどのファクト行にも刻まれない。「会員の意欲がいつ変わったか」自体を分析対象にするなら、ミニディメンションでは足りずファクトレスファクト表か SCD2 が要る（05回）。</p>
+<p>要点は<strong>変化の種類でディメンションが分かれる</strong>ことだ。8/1 の <code>current_company_id</code> は <code>dim_member</code> の Type2 属性なので新しい <code>member_key</code> が出る。6/15 の2属性はミニ側なので新しいキーは出ない。</p>
+<p><code>M001</code> がもし年に4回意欲を切り替えても、<code>dim_member</code> は静止したままである。</p>
+<p>ただし DT#127 の但し書きが効く。6/15 の変化は、6/20 の <code>S001</code> という<strong>ファクトが発生したからこそ記録に残った</strong>。もし 6/15 以降 <code>M001</code> が何も起こさなければ、この変化はどのファクト行にも刻まれない。</p>
+<p>「会員の意欲がいつ変わったか」自体を分析対象にするなら、ミニディメンションでは足りない。正典の <code>dim_member_daily</code>（日次スナップショット）かファクトレスファクト表が要る（05回）。</p>
 </details>
 
 <h2>8. 参考: 手元の基盤ではどうか</h2>
