@@ -103,3 +103,28 @@ $ python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py 07_star_vs_obt.html
 - HTML タグの入れ子balance・`<h2>` 8 節 + 参照文献・URL 一覧（`canon/references.md` 内のみ、YouTube を追加）・テーブル名の正典照合を再実行。正典外は `obt_page_view`（I5 で仮定と明示）と `int_scout_keyed`（`int_<entity>_<verb>` 規約に沿う）の 2 件のみ。
 - 正典の執筆後更新（`dim_agency` / `dim_member_daily` / `obt_*` プレフィクス採用 / 全ファクト `audit_key` / `<role>_date`）との矛盾は解消済み。§5(a) の `fct_scout` config は `sent_date`（DATE）にパーティション・`audit_key` を SELECT に含む形で、更新後の正典と一致する。
 - 変更提案のうち「`obt_*` プレフィクス」「`obt_scout_funnel`」は正典に採用済みのため、上の「正典への変更提案」1・2 は解決済み。残るのは 3（`obt_page_view` の採否）・4（`_asof` サフィックス規約）・5（`int_scout_keyed`）・6（プロジェクト修飾）。
+
+---
+
+## 修正ラウンド 2（再レビュー `review/07_rereview.md` への対応）
+
+### 新規 Critical
+
+- **NI1**: `docs.getdbt.com/reference/resource-configs/where` を WebFetch で確認し、`where` がデータテストの config であること、設定できるのは (1) 各テストインスタンスの `config:`、(2) `dbt_project.yml` の `data_tests:` 配下（`+` 前置）の 2 箇所だけで、**モデルの `config:` からは generic test に伝播しない**ことを確認した。誤りだったモデル単位 `+where` の例を削除し、再レビューの修正案どおり `unique` と `relationships` それぞれの `config: where:` に書く形へ差し替え。あわせて「モデル単位でまとめて掛ける方法は dbt に無い。テスト単位か `dbt_project.yml` のディレクトリ単位かの二択」の 1 段落と、`dbt_project.yml` 側の例（`sent_date` を持たない `dim_member` / `fct_review` のテストまで壊す副作用つき）、「`+` 前置が使えるのは `dbt_project.yml` だけ」の注記を追加した。
+
+### 新規 Important
+
+- **NI2**: §6 を正とし、§1 の「OBT を正本にする条件」から閾値の二重定義（1 億 / Type1 が起きない）を削除して「§6 の判断基準表の 1 行目に当たるときだけ（単発の分析・PoC・star をまだ持っていない・1000 万行未満）。閾値の定義は 6 節に一本化する」に短縮。§6 8 行目の利用者を「自分（SQL を書く・star が既にある）」→「自分（SQL を書く）」に戻し、条件は理由列へ移して「star をまだ持っていなくても、1 行目の規模を超えるなら先に star を作ってから判断する」とした。これで「自分 1 人・star 未所持・5000 万行」は 8 行目で受かり、表の穴が閉じた。読み方の段落も「8 行目はそこから漏れた全ての場合を受ける」に修正。
+
+### 新規 Minor
+
+- **NM1**: §8 の `mart_url_performance` を「OBT」と呼ぶのをやめ、「`url_path` × `date` 粒度の集約マートで、OBT ではない（ファクト 1 行に属性を付けた表ではない）」に修正。§7(b) の OBT の定義と整合させた。§6 1 行目の引き当ては維持している。
+- **NM2**: §8 を 4 段落 → 3 段落に圧縮（約 480 字 → 約 330 字）。チュートリアルの種を 2 段落目の末尾に畳み込み、`news_pipeline` を 1 文にまとめた。
+- **NM3**: Fowler 要約の取得元を明記する。**動画本体（YouTube）は WebFetch でフッタしか取得できず、内容は読めていない。**本文の主張（「star schema を捨て、結合可能な列を全て結合した大きな非正規化テーブルを 1 本作り、その上にビューでマートを切る」「根拠はストレージコストが当時ほど高くない」）は、WebSearch 経由で得た講演の二次要約（Hightouch の Modelling Part 1/2 を含む複数ソースの一致内容）と、コーディネータの裁定文に基づく。講演の演題・登壇者・所属・開催イベント（Dave Fowler / Chartio / Coalesce 2020）は複数ソースで一致。**一次資料（動画・スライド）は未読**であり、次回検証時はこの点を前提にしてほしい。
+
+### 検証
+
+- `python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py 07_star_vs_obt.html` → `0 errors, 0 warnings`（図は今回未変更）
+- HTML タグの入れ子balance OK。`<pre><code>` 内に生の `<` なし。プロパティ yml の例に `+` 前置が残っていないことを機械確認。
+- 4 文以上の段落は §7(c) の `(1)…(2)…` 列挙 1 箇所のみ（前回と同じ。列挙のため分割しない）。
+- 初回レビューの NOT ADDRESSED 2 件（I7・M2）は、それぞれ NI1・NM2 として今回解消した。

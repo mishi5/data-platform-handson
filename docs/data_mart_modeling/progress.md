@@ -53,3 +53,4 @@
 - 06: complete（ラウンド2 N-1 を grep で確認: ref('dim_member') 参照・dim_member_with_desired・svg 0 errors。Ruling: 再々レビュー省略）
 - 20:45 再開バッチ: 03 ラウンド2 再開（resume）/ 07 ラウンド2（resume）/ 08・09・10 レビュー（fresh）を起動
 - 03: complete（ラウンド2: テスト config.where / 想定規模 / +where 非伝播の注記 を grep で確認。Ruling: 再々レビュー省略）
+- 07: complete（ラウンド2: テスト config.where / dbt_project.yml data_tests の +where は正しい用法 / §8 圧縮 を確認。Ruling: 再々レビュー省略。Fowler 一次資料未読は report に明記＝二次要約依拠として parked）
