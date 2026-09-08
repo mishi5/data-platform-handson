@@ -73,7 +73,7 @@
 <tr><th>Type</th><th>定義</th><th>履歴</th><th>行の増え方</th><th>CareerVoice での適用</th></tr>
 </thead>
 <tbody>
-<tr><td><strong>0</strong> Retain Original</td><td>原始値を保持し、変更を受け付けない</td><td>変わらないので不要</td><td>増えない</td><td><code>dim_date</code>、<code>dim_channel</code>、<code>dim_contract_plan</code>、<code>dim_moderation_reason</code></td></tr>
+<tr><td><strong>0</strong> Retain Original</td><td>原始値を保持し、変更を受け付けない</td><td>変わらないので不要</td><td>増えない</td><td><code>dim_date</code>、<code>dim_channel</code>、<code>dim_contract_plan</code>、<code>dim_moderation_reason</code>。<strong>Type 2 の中の Type 0 属性</strong>として <code>dim_company.corporate_number</code></td></tr>
 <tr><td><strong>1</strong> Overwrite</td><td>新しい値で上書きする</td><td><strong>失われる</strong></td><td>増えない</td><td><code>dim_company.name</code>、<code>dim_job_category</code>、<code>dim_job_posting</code></td></tr>
 <tr><td><strong>2</strong> Add New Row</td><td>変化のたびに新しいサロゲートキーで行を追加。<code>valid_from</code> / <code>valid_to</code> / <code>is_current</code> を持つ</td><td>完全に残る</td><td>変化 1 回につき +1 行</td><td><code>dim_member</code>、<code>dim_company</code>、<code>dim_agent</code>、<code>dim_agency</code>、<code>dim_scout_sender</code></td></tr>
 <tr><td><strong>3</strong> Add New Attribute</td><td>列を追加して「もう一つの現実」を並べる（現行 + 1 世代前）</td><td>1 世代だけ</td><td>増えない</td><td>採らない。世代が 1 つで足りる場面が無い（§6）</td></tr>
@@ -205,7 +205,7 @@ where s.sent_at &gt;= dm.valid_from
 </ul>
 <p>代替は「all 30 days kick off in parallel... The whole month finishes in the time it takes to run one day」。</p>
 <p>ただし記事のコメント欄で Chris Gambill が反論している。人手で編集される業務データ（Salesforce / NetSuite / HubSpot）は「Those records flip after the fact, and auditors expect an immutable trail tied to who changed what and when」であり、日次スナップショット単体では監査に耐えない。</p>
-<p>ただし彼の結論は SCD2 への回帰ではない。「So the choice isn't &quot;SCD2 vs datestamps.&quot; It's immutable facts at the base, with snapshots or SCD2 as views that match the model and the risk」——CDC またはイベントログを基盤に置き、スナップショットも SCD2 もその上のビューにする、である。Wilson はこれに答えていない。</p>
+<p>だが彼の結論は SCD2 への回帰ではない。「So the choice isn't &quot;SCD2 vs datestamps.&quot; It's immutable facts at the base, with snapshots or SCD2 as views that match the model and the risk」——CDC またはイベントログを基盤に置き、スナップショットも SCD2 もその上のビューにする、である。Wilson はこれに答えていない。</p>
 <p>CareerVoice はこの前提を既に満たしている。ソースは Datastream（CDC）で <code>src_careervoice</code> に複製されており、<code>snap_companies</code> も <code>dim_member_daily</code> も、その不変ログの上に載るビューにすぎない。</p>
 </div>
 
@@ -354,7 +354,9 @@ snapshots:
 
 <p>この記事の結果表はすべて「2026-01-05 以前からスナップショットが毎日走っている」ことを前提にしている。前提が崩れるなら、ソース側に履歴があるうち（Datastream の CDC ログ）に初期版を投入するか、「この日から履歴がある」を下流へ明示する。実行間隔より短い変化を取りこぼすのも同じ理由で、<code>timestamp</code> と <code>check</code> のどちらでも起きる。</p>
 
-<p>これは §4 の主張の裏付けでもある。<strong>後から遡って作り直せるのは日次スナップショット方式だけ</strong>で、SCD2 のテーブルは一度取り逃した変化を取り戻せない。</p>
+<p>ここで §4 の主張の範囲を確認しておく。日次スナップショット方式が有利なのは<strong>捕捉済みの期間を作り直せる</strong>点で、各日のパーティションを独立に・並列に再計算できる。SCD2 のテーブルは MERGE の結果として状態を持つため、同じ日を流し直しても元に戻らない。</p>
+
+<p>一方、<strong>捕捉していない履歴はどちらの方式でも復元できない。</strong> <code>dim_member_daily</code> も <code>snap_members</code> の上に載っているので、<code>snap_members</code> が持っていない 1〜6 月のパーティションは作れない。遡って作れるのは、ソース側に <code>updated_at</code> 付きの履歴（Datastream の CDC ログ）が残っている場合だけである（09 回の演習(c)）。</p>
 
 <pre><code>-- models/marts/dim_company.sql
 {{ config(materialized='table', cluster_by=['company_id']) }}
@@ -369,6 +371,7 @@ with versions as (
         hq_prefecture_code,
         parent_company_id,
         founded_year,
+        corporate_number,
         dbt_valid_from as valid_from,
         coalesce(dbt_valid_to, timestamp '9999-12-31') as valid_to
     from {{ ref('snap_companies') }}
@@ -387,8 +390,9 @@ current_name as (
 )
 
 select
-    {{ dbt_utils.generate_surrogate_key(['v.company_id', 'v.valid_from']) }} as company_key,
+    farm_fingerprint(concat(v.company_id, '|', cast(v.valid_from as string))) as company_key,
     v.company_id,
+    v.corporate_number,              -- Type 0: 版をまたいで変わらない
     n.name,
     i.name       as industry,
     i.sector_code as sector,
@@ -406,7 +410,7 @@ left join {{ ref('stg_careervoice__industries') }}   as i on i.industry_code = v
 left join {{ ref('stg_careervoice__prefectures') }}  as p on p.prefecture_code = v.hq_prefecture_code
 </code></pre>
 
-<p><code>company_key</code> の生成方法（<code>FARM_FINGERPRINT</code> か <code>generate_surrogate_key</code> か）は 03 回の判断に従う。この回に必要なのは「1 つの版に 1 つの <code>company_key</code> がある」ことだけである。</p>
+<p>キーの生成は 03 回の判断に従う。SCD2 のディメンションは「自然キー + <code>'|'</code> + <code>valid_from</code>」の <code>FARM_FINGERPRINT</code> ＝ INT64 である。この回に必要なのは「1 つの版に 1 つの <code>company_key</code> がある」ことだけだが、型は下流のセンチネル（<code>-1</code>）と揃っている必要がある（§5-b）。</p>
 
 <pre><code># models/marts/schema.yml（抜粋）
 models:
@@ -444,10 +448,22 @@ where next_valid_from is not null
   and next_valid_from != valid_to
 </code></pre>
 
-<p>これは §2-c で引いた Kimball の規約（旧行の <code>valid_to</code> = 新行の <code>valid_from</code>）をそのままテストにした形である。隙間があるとキーが解決できずに <code>-1</code> へ落ち、重なりがあるとファクトの行が増える。<code>relationships</code> テストはどちらも検出しない（NULL 行を無視し、行数の増加も見ない）。</p>
+<p><code>corporate_number</code> は <strong>Type 2 のディメンションの中に置かれた Type 0 属性</strong>である。版をまたいで変わらないことが同一性の保証になるので、変わったら別法人だと分かる。これも 1 本のテストで押さえられる。</p>
+
+<pre><code>-- tests/assert_dim_company_corporate_number_is_type0.sql
+-- 同じ company_id の版で corporate_number が変わっている（= 別法人の使い回し）行を返す
+select company_id
+from {{ ref('dim_company') }}
+group by company_id
+having count(distinct corporate_number) &gt; 1
+</code></pre>
+
+<p>1 つのディメンションに複数の Type が同居するのはこの回の主題そのもので、<code>dim_company</code> は <code>corporate_number</code>=0 / <code>name</code>=1 / それ以外=2 の 3 種類を 1 テーブルに載せている。</p>
+
+<p>上の <code>expression_is_true</code> のテストは §2-c で引いた Kimball の規約（旧行の <code>valid_to</code> = 新行の <code>valid_from</code>）をそのままテストにした形である。隙間があるとキーが解決できずに <code>-1</code> へ落ち、重なりがあるとファクトの行が増える。<code>relationships</code> テストはどちらも検出しない（NULL 行を無視し、行数の増加も見ない）。</p>
 
 <div class="aside kimball">
-<p>正典の <code>dim_company</code> は <code>name</code> を Type1 のみで持つ。Design Tip #15 の完全な Type 6 は「当時の社名」と「現在の社名」を<strong>両方</strong>列として持つ形だが、CareerVoice では社名を集計軸にしないので現在値だけにした。企業の同一性は <code>company_id</code> と、ソース側の <code>corporate_number</code>（法人番号）が担保する。監査で「当時のレポートの社名」を再現する要求が出たら Type 6 に格上げする（§7-c）。</p>
+<p>正典の <code>dim_company</code> は <code>name</code> を Type1 のみで持つ。Design Tip #15 の完全な Type 6 は「当時の社名」と「現在の社名」を<strong>両方</strong>列として持つ形だが、CareerVoice では社名を集計軸にしないので現在値だけにした。企業の同一性は <code>company_id</code> と <code>corporate_number</code>（法人番号）が担保する。監査で「当時のレポートの社名」を再現する要求が出たら Type 6 に格上げする（§7-c）。</p>
 </div>
 
 <h3>(b) as-of join で <code>fct_scout</code> の <code>member_key</code> を解決する</h3>
@@ -506,7 +522,7 @@ collapsed as (
 )
 
 select
-    {{ dbt_utils.generate_surrogate_key(['v.member_id', 'min(v.valid_from)']) }} as member_key,
+    farm_fingerprint(concat(v.member_id, '|', cast(min(v.valid_from) as string))) as member_key,
     v.member_id,
     any_value(v.birth_year)                as birth_year,
     any_value(v.gender)                    as gender,
@@ -524,7 +540,7 @@ left join {{ ref('stg_careervoice__prefectures') }} as pf
 group by v.member_id, v.version_no
 </code></pre>
 
-<p><code>M001</code> の結果。<code>snap_members</code> は 3 版だが、<code>dim_member</code> は <strong>2 行</strong>になる。</p>
+<p><code>M001</code> の結果。<code>snap_members</code> は 3 版だが、<code>dim_member</code> は <strong>2 行</strong>になる。版の境界はソースの <code>updated_at</code> の精度そのままで、6/15 の変化は <strong>09:12</strong> に入っている（図の帯は日単位のラベルにしてある）。</p>
 
 <div class="table-wrap">
 <table>
@@ -549,7 +565,7 @@ group by v.member_id, v.version_no
 </table>
 </div>
 
-<p><code>(v1)</code> / <code>(v2)</code> は実際にはハッシュ値である（03 回）。ここで重要なのは <strong>6/15 の変化が <code>dim_member</code> の行を増やしていない</strong>ことで、増やすのは <code>current_company_id</code> が動いた 8/1 だけである。6/15 の変化は Type 4 の <code>dim_member_profile_mini</code> 側で表現される。</p>
+<p><code>(v1)</code> / <code>(v2)</code> は実際には <code>FARM_FINGERPRINT</code> の INT64 値である（03 回）。ここで重要なのは <strong>6/15 の変化が <code>dim_member</code> の行を増やしていない</strong>ことで、増やすのは <code>current_company_id</code> が動いた 8/1 だけである。6/15 の変化は Type 4 の <code>dim_member_profile_mini</code> 側で表現される。</p>
 
 <p>この 2 本を <code>sent_at</code> で解決する。</p>
 
@@ -588,7 +604,7 @@ select
     coalesce(dm.member_key,              -1) as member_key,
     coalesce(pm.member_profile_mini_key, -1) as member_profile_mini_key,
     coalesce(ss.scout_sender_key,        -1) as scout_sender_key,   -- 送信主体も同じ半開区間で解決
-    coalesce(jp.job_posting_key,         -1) as job_posting_key,
+    coalesce(jp.job_posting_key,       '-1') as job_posting_key,   -- dim_job_posting は自然キーをそのまま使う＝STRING（03 回）
     {{ audit_key() }} as audit_key,   -- 監査ディメンションの解決マクロ。10 回で定義する
 
     s.scout_id,                       -- 退化ディメンション
@@ -624,7 +640,7 @@ left join {{ ref('dim_job_posting') }} as jp
 
 <p>未達だけでなく、<strong>as-of 解決が当たらなかった場合も <code>-1</code> に落とす</strong>のが要点である。区間に穴があると（遅延到着、スナップショット開始前のイベント）キーは静かに NULL になり、<code>relationships</code> テストは NULL 行を無視するので素通りする。</p>
 
-<p><code>-1</code> に寄せておけば、<code>dim_member</code> の「未知」行に集計が現れて気づける。キーが STRING 型なら <code>'-1'</code> を使う（正典 §4）。</p>
+<p><code>-1</code> に寄せておけば、<code>dim_member</code> の「未知」行に集計が現れて気づける。センチネルの型はキーの型に合わせる。SCD2 とミニ／ジャンクの <code>_key</code> は <code>FARM_FINGERPRINT</code> の INT64 なので <code>-1</code>、自然キーをそのまま使う <code>dim_job_posting</code> だけが STRING なので <code>'-1'</code> になる（03 回・正典 §4）。</p>
 
 <p><code>S001</code>（<code>C001</code> → <code>M001</code>、2026-06-20 11:30 送信）の解決結果。</p>
 
@@ -869,7 +885,7 @@ order by 1, 2
 <thead><tr><th>場面</th><th>何が起きるか</th><th>Type1 の問題か</th></tr></thead>
 <tbody>
 <tr><td>監査・突合。2026-03 に配信したレポートや公開したクチコミページと、いま同じ SQL を流した結果を突き合わせる</td><td>社名が変わっていて一致しない。「当時のレポートに載っていた社名」を DWH から復元できない</td><td><strong>Type1 の問題。</strong> 再現性が要件なら Type 6 に格上げする（<code>name</code> を版ごとに残し、<code>current_name</code> を Type1 で併置。Design Tip #15 の完全形）</td></tr>
-<tr><td>社名変更が<strong>合併</strong>を伴う。ソースの <code>corporate_number</code> も変わる</td><td>旧法人に対する <code>R001</code> のようなクチコミが、新法人の評価に混ざる</td><td><strong>Type1 の問題ではない。</strong> 別法人なのに <code>company_id</code> を使い回したことが原因。<code>corporate_number</code> の変化を検知したら新しい <code>company_id</code> を発行し、承継関係は <code>br_company_hierarchy</code> で表す（06 回）</td></tr>
+<tr><td>社名変更が<strong>合併</strong>を伴う。<code>corporate_number</code> も変わる</td><td>旧法人に対する <code>R001</code> のようなクチコミが、新法人の評価に混ざる</td><td><strong>Type1 の問題ではない。</strong> 別法人なのに <code>company_id</code> を使い回したことが原因。<code>corporate_number</code> の変化を検知したら新しい <code>company_id</code> を発行し、承継関係は <code>br_company_hierarchy</code> で表す（06 回）</td></tr>
 </tbody>
 </table>
 </div>

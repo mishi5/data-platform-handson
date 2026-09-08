@@ -42,3 +42,6 @@
 - 06 修正ラウンド1 完了（13件 FIXED、4文段落は列挙型として parked）。Ruling: references に BQ 再帰 CTE ドキュメントを追加、`snap_companies`/`snap_agents` は命名規約の具体化として可、BI 側一次情報は追加しない（断定を弱める方針） → 再レビュー起動
 - 04 再レビュー: 14件 ADDRESSED、新規 Important 4（MetricFlow legacy 残件 / 半加法の但し書き / 週の定義 / semantic model の一意性）→ 修正ラウンド 2/3 送付
 - 05 再レビュー: 16件 ADDRESSED、新規 Important 3（corporate_number 復元 / 遡及生成の誤記述 / member_key の型不一致）→ 修正ラウンド 2/3 送付。Ruling: SCD2 SK の型は INT64（FARM_FINGERPRINT）で統一
+- 07 修正ラウンド1 完了（17件 FIXED）。Ruling: obt_page_view は節内仮定として可、int_scout_keyed は規約内 → 再レビュー起動
+- 08 執筆完了（DONE）。Ruling: agg_company_entity に dim_company 属性の平坦化と audit_key 不要を明記、dim_scout_sender の sender_id の意味を明記、references に BQ MV を追加。agg_member_entity は正典に入れない（演習内の候補のまま）→ レビュー起動
+- 04: complete（修正ラウンド2 N1〜N7 を grep で確認: window_agg 統一 / ISOWEEK / 但し書き削除 / ch.1–2。Ruling: 再々レビュー省略 — 局所修正のみ）

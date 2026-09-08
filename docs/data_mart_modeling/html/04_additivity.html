@@ -526,7 +526,7 @@ GROUP BY group_company_id, d.year
 
 <p>ただしキーの扱いには前提が要る。<code>agg_company_rating_daily.company_key</code> は投稿時点の SCD2 版なので、<code>br_company_hierarchy</code> の子孫側は <strong><code>dim_company</code> の全 SCD2 版に展開して作る</strong>（<code>br_member_desired_job_category</code> と同じ理由）。現行版のキーしか持たないブリッジだと、<code>C002</code> のように年内に属性が変わった企業の投稿が結合で静かに落ちる。</p>
 
-<p>祖先側は逆に <code>is_current</code> の1版に絞り、<code>company_id</code>（自然キー）でグループ化する。そうしないと「2026年の <code>C002</code> グループ」が 5/1 の属性変化を境に2行へ割れる。<strong>足し上げの単位は企業という実体であって、SCD2 の版ではない。</strong></p>
+<p>祖先側も同じく全 SCD2 版で持ち、クエリ側で <code>anc.is_current</code> の1版に絞ってから <code>company_id</code>（自然キー）でグループ化する。この <code>is_current</code> が無いと、祖先 <code>C001</code> の版の数だけ同じ子孫行が複製されてファンアウトする。<strong>足し上げの単位は企業という実体であって、SCD2 の版ではない。</strong></p>
 
 <p>もし日次に平均を持っていたら、時間方向とグループ方向で別々の重み付けロジックを書くことになり、片方を必ず間違える。</p>
 

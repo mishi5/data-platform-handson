@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>増分・遅延到着・冪等性 — データマート設計 09</title>
+<style>
+  :root { --bg:#ffffff; --fg:#1a1a1a; --muted:#666; --border:#e0e0e0;
+          --accent:#0b6bcb; --card:#f7f8fa; --code:#f3f4f6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171a; --fg:#e8e8e8; --muted:#9aa0a6; --border:#2c3136;
+            --accent:#6aa9ff; --card:#1b1f23; --code:#1f2429; }
+  }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+    line-height:1.8; max-width:900px; margin:0 auto; padding:24px 20px 64px; }
+  h1 { font-size:1.6rem; margin:0 0 4px; line-height:1.4; }
+  h2 { font-size:1.2rem; border-bottom:1px solid var(--border); padding-bottom:6px; margin:40px 0 16px; }
+  h3 { font-size:1.02rem; margin:24px 0 8px; }
+  .meta { color:var(--muted); font-size:.85rem; margin:0 0 24px; }
+  a { color:var(--accent); }
+  table { border-collapse:collapse; width:100%; margin:12px 0 20px; font-size:.9rem; }
+  th, td { border:1px solid var(--border); padding:6px 10px; vertical-align:top; text-align:left; }
+  th { background:var(--card); }
+  .table-wrap { overflow-x:auto; }
+  code { background:var(--code); border:1px solid var(--border); border-radius:4px; padding:1px 5px; font-size:.85em; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:8px; padding:14px 16px;
+        overflow-x:auto; font-size:.84rem; line-height:1.55; }
+  pre code { background:none; border:none; padding:0; font-size:inherit; }
+  .aside { border-left:3px solid var(--accent); background:var(--card); padding:10px 16px; margin:16px 0; font-size:.92rem; }
+  .kimball { border-left-color:#8a6d3b; }
+  .modern { border-left-color:#3b8a5a; }
+  details { border:1px solid var(--border); border-radius:8px; padding:8px 14px; margin:10px 0; background:var(--card); }
+  summary { cursor:pointer; font-weight:600; }
+  svg { max-width:100%; height:auto; display:block; margin:20px 0; }
+  ul, ol { padding-left:1.3em; }
+  .ref li { font-size:.88rem; }
+</style>
+</head>
+<body>
+<h1>増分・遅延到着・冪等性</h1>
+<p class="meta">データマート設計 09 ／ 参照: DWT ch.19–20, ETL サブシステム #2 #6 #13 #14 #16 #24, Design Tip #164 ／ 再解釈: Functional Data Engineering, dbt BigQuery configs（incremental strategies）</p>
+
+<h2>1. この回が決めること</h2>
+
+<p>「増分で作る」とは、毎回どこを消してどこを書き直すかを決めることに尽きる。CareerVoice のファクトは、行が追加されるだけのもの（<code>fct_scout</code>）と、既存行が更新され続けるもの（<code>fct_application_pipeline</code>）で書き戻し方が違う。この回はファクトごとに「方式 × ルックバック窓」を決め、同じ <code>run_date</code> で2回流しても結果が1バイトも変わらない形にする。</p>
+
+<h3>1.1 BigQuery で選べる方式</h3>
+
+<p>dbt-bigquery が受け付ける <code>incremental_strategy</code> は <code>merge</code> / <code>insert_overwrite</code> / <code>microbatch</code> の3つ。他アダプタにある <code>append</code> という戦略名は無く、追記は「<code>unique_key</code> を指定しない <code>merge</code>」として現れる（一致条件が常に偽の <code>MERGE</code> ＝ <code>INSERT</code> のみ）。</p>
+
+<div class="table-wrap">
+<table>
+<tr><th>方式</th><th>dbt の書き方</th><th>BigQuery が実行する DML</th><th>同じ日を2回流すと</th><th>課金スキャン</th><th>使う条件</th></tr>
+<tr>
+  <td>追記（<code>append</code> 相当）</td>
+  <td><code>incremental_strategy='merge'</code> ＋ <code>unique_key</code> 無し</td>
+  <td>一致条件が常に偽の <code>MERGE</code>（実質 <code>INSERT</code> のみ）</td>
+  <td><strong>行が二重になる</strong>（冪等でない）</td>
+  <td>ソース側の <code>WHERE</code> 分</td>
+  <td>再実行が原理的に起きないログ取り込みのみ。マートでは使わない</td>
+</tr>
+<tr>
+  <td><code>merge</code>（既定）</td>
+  <td><code>unique_key='application_id'</code></td>
+  <td><code>MERGE … WHEN MATCHED THEN UPDATE / WHEN NOT MATCHED THEN INSERT</code></td>
+  <td>キー一致行を上書き（冪等）</td>
+  <td>ターゲット全体。<code>incremental_predicates</code> とパーティション列条件で絞る</td>
+  <td>行が更新される累積スナップショット</td>
+</tr>
+<tr>
+  <td><code>insert_overwrite</code></td>
+  <td><code>partition_by</code> 必須。<code>partitions</code> を渡すと静的、渡さないと動的</td>
+  <td>対象パーティションを丸ごと削除して挿入する <code>MERGE</code>（<code>copy_partitions=true</code> なら copy API）</td>
+  <td>パーティション単位で同じ結果（冪等）</td>
+  <td>置換対象パーティションのみ</td>
+  <td>行が更新されないトランザクション／定期スナップショット</td>
+</tr>
+<tr>
+  <td><code>microbatch</code></td>
+  <td><code>event_time</code> / <code>batch_size</code> / <code>begin</code> / <code>lookback</code>（既定 1）</td>
+  <td>BigQuery では内部的に <code>insert_overwrite</code>（<code>partition_by</code> 必須）</td>
+  <td>バッチ＝パーティション単位で冪等</td>
+  <td>バッチ単位</td>
+  <td>dbt 1.9 以降。窓の宣言を dbt に任せたいとき</td>
+</tr>
+</table>
+</div>
+
+<h3>1.2 CareerVoice のファクトへの割当</h3>
+
+<div class="table-wrap">
+<table>
+<tr><th>ファクト</th><th>型</th><th>方式</th><th>パーティション列（DATE）</th><th>ルックバック</th><th>理由</th></tr>
+<tr><td><code>fct_page_view</code></td><td>トランザクション</td><td><code>insert_overwrite</code>（日次・動的 ＋ <code>copy_partitions</code>）</td><td><code>view_date</code></td><td>3日</td><td>行は一度書いたら変わらない。最大行数なので挿入課金を避ける</td></tr>
+<tr><td><code>fct_scout</code></td><td>トランザクション</td><td><code>insert_overwrite</code>（静的 <code>partitions</code>）</td><td><code>sent_date</code></td><td>3日</td><td>送信という事実は不変。開封・返信は <code>fct_scout_funnel</code> 側で更新される</td></tr>
+<tr><td><code>fct_application_pipeline</code></td><td>累積スナップショット</td><td><code>merge</code>（<code>unique_key='application_id'</code>）</td><td><code>applied_date</code></td><td>イベント側 3日</td><td>1行 = 1応募で、行そのものが7回更新される。応募日パーティションは動かない</td></tr>
+<tr><td><code>fct_contract_monthly</code></td><td>定期スナップショット（月）</td><td><code>insert_overwrite</code>（月パーティション置換）</td><td><code>month_date</code>（<code>granularity: 'month'</code>）</td><td>当月＋前月</td><td>枠消化は月内ずっと動く。月が閉じたら不変</td></tr>
+</table>
+</div>
+
+<p>パーティション列は <code>&lt;role&gt;_date</code> の DATE 列に張り、<code>WHERE</code> も同じ DATE 列で書く。<code>sent_date_key</code>（INT64 <code>YYYYMMDD</code>）で絞ってもプルーニングは効かない。</p>
+
+<h2>2. どこで壊れるか</h2>
+
+<h3>(a) <code>&gt; MAX(sent_at)</code> の境界と、永久欠損</h3>
+
+<pre><code>-- 壊れている増分境界
+{% if is_incremental() %}
+where s.sent_at &gt; (select max(sent_at) from {{ this }})
+{% endif %}</code></pre>
+
+<p>6/19 の実行が終わった時点で <code>MAX(sent_at)</code> は 6/19 の最終送信時刻を指している。6/20 の実行の直前に、6/18 09:12 送信の <code>S003</code>（<code>AG02</code> → <code>M002</code>）が CDC の遅れで届く。境界条件は <code>S003</code> を読まず、翌日以降は境界がさらに前進するので、<code>S003</code> は<strong>永久に <code>fct_scout</code> に載らない</strong>。</p>
+
+<p>この欠損はテストに出ない。<code>unique</code> も <code>not_null</code> も「存在しない行」を見つけられないからだ。気づくのはエージェント経由の送信数が実績と合わないと言われたときで、そのとき境界はもう何百日も先にある。</p>
+
+<svg id="dg-lb" viewBox="0 0 800 384" width="100%"
+     style="max-width:800px;height:auto;display:block"
+     xmlns="http://www.w3.org/2000/svg"
+     role="img" aria-labelledby="dg-lb-t dg-lb-d">
+  <title id="dg-lb-t">遅れて届いた行と、増分の抽出範囲</title>
+  <desc id="dg-lb-d">6/18 に送信されたスカウトが 6/20 に DWH へ届くと、前回最大値より後だけを読む条件では取りこぼされ、3 日ルックバックで毎回パーティションを置換する条件では拾える。</desc>
+  <style>
+    #dg-lb{
+      --paper:#fbfbfa; --ink:#22262e; --muted:#5b6472; --soft:#828b9a;
+      --rule:rgba(34,38,46,.14); --accent:#c8571d; --tint:rgba(200,87,29,.10);
+      --sans:system-ui,-apple-system,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+      --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    }
+    @media (prefers-color-scheme:dark){
+      #dg-lb{--paper:#1a1d23;--ink:#e9ecf1;--muted:#a6afbd;--soft:#7f8898;
+             --rule:rgba(233,236,241,.18);--accent:#f0894f;--tint:rgba(240,137,79,.14);}
+    }
+    :root[data-theme="dark"] #dg-lb{--paper:#1a1d23;--ink:#e9ecf1;--muted:#a6afbd;--soft:#7f8898;
+             --rule:rgba(233,236,241,.18);--accent:#f0894f;--tint:rgba(240,137,79,.14);}
+    :root[data-theme="light"] #dg-lb{--paper:#fbfbfa;--ink:#22262e;--muted:#5b6472;--soft:#828b9a;
+             --rule:rgba(34,38,46,.14);--accent:#c8571d;--tint:rgba(200,87,29,.10);}
+    #dg-lb .bg{fill:var(--paper)}
+    #dg-lb .box{fill:var(--paper);stroke:var(--ink);stroke-width:1}
+    #dg-lb .box-soft{fill:var(--paper);stroke:var(--rule);stroke-width:1}
+    #dg-lb .box-focal{fill:var(--tint);stroke:var(--accent);stroke-width:1.4}
+    #dg-lb .axis{stroke:var(--rule);stroke-width:1}
+    #dg-lb .name{fill:var(--ink);font:600 14px var(--sans)}
+    #dg-lb .sub{fill:var(--muted);font:400 11px var(--mono)}
+    #dg-lb .tag{fill:var(--soft);font:500 10px var(--mono);letter-spacing:.12em}
+    #dg-lb .lead{fill:none;stroke:var(--muted);stroke-width:1.4;marker-end:url(#dg-lb-a)}
+    #dg-lb .lead-focal{fill:none;stroke:var(--accent);stroke-width:1.8;marker-end:url(#dg-lb-af)}
+    #dg-lb .dash{stroke-dasharray:5 4}
+    #dg-lb .mask{fill:var(--paper)}
+    #dg-lb .mk{fill:var(--muted)} #dg-lb .mkf{fill:var(--accent)}
+  </style>
+  <defs>
+    <marker id="dg-lb-a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <path class="mk" d="M0,0 L9,3.5 L0,7 Z"/></marker>
+    <marker id="dg-lb-af" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <path class="mkf" d="M0,0 L9,3.5 L0,7 Z"/></marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="800" height="384"/>
+
+  <!-- 日付軸 -->
+  <text class="sub" x="180" y="52" text-anchor="middle">6/17</text>
+  <text class="sub" x="308" y="52" text-anchor="middle">6/18</text>
+  <text class="sub" x="436" y="52" text-anchor="middle">6/19</text>
+  <text class="sub" x="564" y="52" text-anchor="middle">6/20</text>
+  <text class="sub" x="692" y="52" text-anchor="middle">6/21</text>
+  <line class="axis" x1="112" y1="64" x2="752" y2="64"/>
+
+  <!-- 線（ノードより先に描く） -->
+  <line class="lead" x1="584" y1="140" x2="584" y2="192"/>
+  <path class="lead-focal" d="M344,140 V156 Q344,164 352,164 H536 Q544,164 544,172 V192"/>
+  <path class="lead-focal dash" d="M288,140 V320"/>
+
+  <!-- 矢印ラベル -->
+  <rect class="mask" x="436" y="140" width="64" height="16" rx="2"/>
+  <text class="sub" x="468" y="151" text-anchor="middle">2 日遅れ</text>
+  <rect class="mask" x="300" y="196" width="64" height="16" rx="2"/>
+  <text class="sub" x="304" y="207">6/18 の行</text>
+
+  <!-- レーン見出し -->
+  <text class="sub" x="32" y="108">発生日</text>
+  <text class="sub" x="32" y="124">sent_at</text>
+  <text class="sub" x="32" y="212">到着日</text>
+  <text class="sub" x="32" y="228">loaded_at</text>
+  <text class="sub" x="32" y="285">旧方式</text>
+  <text class="sub" x="32" y="341">採用案</text>
+
+  <!-- ノード -->
+  <rect class="box-focal" x="248" y="84" width="120" height="56" rx="6"/>
+  <text class="name" x="308" y="110" text-anchor="middle">S003</text>
+  <text class="sub" x="308" y="128" text-anchor="middle">AG02 - M002</text>
+
+  <rect class="box" x="504" y="84" width="120" height="56" rx="6"/>
+  <text class="name" x="564" y="110" text-anchor="middle">S001</text>
+  <text class="sub" x="564" y="128" text-anchor="middle">C001 - M001</text>
+
+  <rect class="box-soft" x="504" y="192" width="120" height="56" rx="6"/>
+  <text class="name" x="564" y="218" text-anchor="middle">6/20 到着</text>
+  <text class="sub" x="564" y="236" text-anchor="middle">S001 と S003</text>
+
+  <rect class="box-soft dash" x="504" y="264" width="248" height="32" rx="6"/>
+  <text class="name" x="628" y="285" text-anchor="middle">&gt; MAX(sent_at)</text>
+  <text class="sub" x="120" y="285">6/19 より後だけ読む → 6/18 は入らない</text>
+
+  <rect class="box-focal" x="120" y="320" width="504" height="32" rx="6"/>
+  <text class="name" x="372" y="341" text-anchor="middle">3 日ルックバック = 4 パーティションを毎回置換</text>
+  <text class="sub" x="644" y="341">6/21 は未到来</text>
+</svg>
+
+<h3>(b) 累積スナップショットを追記にすると <code>P001</code> が7行になる</h3>
+
+<p><code>P001</code>（<code>M001</code> → <code>J001</code>）は 6/23 応募 → 7/1 書類 → 7/8 一次 → 7/15 最終 → 7/20 内定 → 7/22 承諾 → 8/1 入社と7回状態が変わる。<code>fct_application_pipeline</code> を <code>unique_key</code> 無しの <code>merge</code>（＝追記）で作ると、状態が動いた日の実行ごとに1行増えて7行になる。粒度宣言「1行 = 1応募のパイプライン」が壊れ、<code>SUM(is_hired)</code> は 1 ではなく 7 を返す。</p>
+
+<h3>(c) 遅延到着ディメンション: <code>C002</code> の規模変更</h3>
+
+<p><code>C002</code>（ネクスト技研）の <code>employee_size_band</code> は 5/1 に <code>50_299</code> から <code>300_999</code> へ変わったが、CDC が DWH に届いたのは 5/3 だった。<code>dim_company</code> 側は <code>valid_from</code> を 5/1 に遡って新版を挿入できるので正しくなる。しかし 5/1–5/2 に投稿されたクチコミの <code>fct_review.company_key</code> は、その時点で唯一存在した旧版のキーを指したまま残る。</p>
+
+<p>結果、「企業規模別の平均 <code>overall_score</code>」は2日分だけ旧規模帯に載る。ディメンションは正しく、ファクトの外部キーだけが古い、という壊れ方をする。§5(c) の修復対象はここ。</p>
+
+<h3>(d) 冪等でない処理の再実行</h3>
+
+<p><code>fct_contract_monthly</code> を「当月分を <code>INSERT</code>」で作り、途中で失敗したあと素直に再実行すると、<code>K001</code>（<code>C001</code> の <code>premium</code>、枠 200/月）の6月行が2本になる。<code>scouts_sent</code> は二重計上され、半加法の <code>scout_quota</code> も 400 として合計される。<code>MERGE</code> かパーティション置換なら、この再実行は何度やっても同じ1行に収束する。</p>
+
+<h2>3. Kimball の原則</h2>
+
+<div class="aside kimball">
+<p>ETL は34のサブシステムに分解できる（<em>The Data Warehouse ETL Toolkit</em>、要約は Subsystems of ETL Revisited, 2007）。増分と遅延到着はそのうち5〜6個の担当範囲であって、モデル設計の問題ではなく<strong>ロードの問題</strong>として整理されている。</p>
+</div>
+
+<div class="table-wrap">
+<table>
+<tr><th>#</th><th>サブシステム</th><th>この回での使いどころ</th></tr>
+<tr><td>2</td><td>Change Data Capture</td><td>Datastream の CDC。「どこまで取り込んだか」の境界を持つのはこの層の責任で、マート側の <code>MAX()</code> ではない</td></tr>
+<tr><td>6</td><td>Audit Dimension Creation</td><td><code>dim_audit</code> の <code>batch_id</code> / <code>loaded_at</code> / <code>dbt_invocation_id</code>。遅延の実測とルックバック決定の材料（DT#164）</td></tr>
+<tr><td>13</td><td>Fact Table Builders</td><td>トランザクション／定期スナップショット／累積スナップショットで書き戻し方が違う。§1.2 の割当はこの分類に従う</td></tr>
+<tr><td>14</td><td>Surrogate Key Pipeline</td><td>自然キーを版付きサロゲートキーに置換する段。遅延到着の修復とは、この段をやり直すこと</td></tr>
+<tr><td>16</td><td>Late Arriving Data Handler</td><td>遅延到着ファクト／ディメンションの専用処理。§3.1</td></tr>
+<tr><td>24</td><td>Recovery and Restart</td><td>失敗したロードを安全に再開できること。冪等性はこの要件の現代的な言い換え</td></tr>
+</table>
+</div>
+
+<h3>3.1 遅延到着ファクトと遅延到着ディメンション（DWT ch.19–20）</h3>
+
+<div class="table-wrap">
+<table>
+<tr><th>状況</th><th>原典の処理</th><th>CareerVoice に当てると</th></tr>
+<tr>
+  <td><strong>遅延到着ファクト</strong>: 過去日付のファクト行が今日届く</td>
+  <td>今日の現行版ではなく、<strong>そのイベント時点で有効だったディメンション版</strong>のサロゲートキーを割り当てる。SCD2 の有効期間で解決する</td>
+  <td><code>S003</code>（6/18 送信）が 6/20 に届いたら、<code>member_key</code> は 6/18 時点の <code>M001</code>…ではなく <code>M002</code> の版。<code>sent_at &gt;= valid_from AND sent_at &lt; valid_to</code> の as-of join（05回）で解決する</td>
+</tr>
+<tr>
+  <td><strong>遅延到着ディメンション</strong>: ディメンションの新版が遅れて届く</td>
+  <td>新版を <code>valid_from</code> 遡及で挿入し、<strong>その区間に既に入っているファクトの外部キーを貼り替える</strong></td>
+  <td>§2(c)。5/1–5/2 の <code>fct_review.company_key</code> を新版へ更新する（§5c）</td>
+</tr>
+<tr>
+  <td><strong>ディメンション行が無いままファクトが来る</strong></td>
+  <td>自然キーだけを埋めた仮の行を立て、属性が届いたら更新する</td>
+  <td>正典は未知を <code>-1</code> で受ける（DT#43）。仮行を立てるなら <code>dim_company</code> に <code>company_id</code> だけの行を作り、属性到着時に Type1 で埋める</td>
+</tr>
+</table>
+</div>
+
+<p>原典が許しているのは「ファクトの外部キーを後から更新する」ことで、メジャーの書き換えではない。この区別は §5(c) の <code>MERGE</code> が <code>company_key</code> と <code>audit_key</code> しか触らない理由になっている。</p>
+
+<h2>4. 現代の再解釈</h2>
+
+<div class="aside modern">
+<p>Functional Data Engineering（Beauchemin）は、バッチ処理を関数型プログラミングの語彙で捉え直す。タスクは副作用を持たない純関数であり、再実行は追記ではなく上書きで行う。状態の最小単位はパーティションで、「1タスク → 1テーブル、1タスク実行 → 1パーティション」を守ると系譜とデバッグが単純になる。</p>
+</div>
+
+<p>この主張のうち増分に効くのは3点。パーティションを不変の単位として扱うこと、行単位の更新をやめて丸ごと置換すること、処理時刻ではなく<strong>イベント時刻</strong>でパーティションを切ってバックフィルを並列化できる形にすること。ディメンションを日次スナップショットで持つ提案（<code>dim_member_daily</code>、05回）も、同じ「不変パーティションの列」という発想の適用にすぎない。</p>
+
+<div class="table-wrap">
+<table>
+<tr><th>論点</th><th>Kimball（原典）</th><th>FDE / dbt</th><th>この題材の決定</th></tr>
+<tr><td>遅延ファクトの吸収</td><td>遅延到着ハンドラ（#16）で行を挿入し、キーを当時の版で解決</td><td>該当パーティションを作り直す。窓の中なら遅延分は自動で入る</td><td>ルックバック3日の <code>insert_overwrite</code>。窓の外は §5(c) の修復に回す</td></tr>
+<tr><td>ディメンションの版</td><td>SCD2（<code>valid_from</code> / <code>valid_to</code>）</td><td>日次スナップショットで置き換える</td><td>両方持つ（05回）。ファクトのキー解決は時刻精度が要るので SCD2 の as-of</td></tr>
+<tr><td>再実行</td><td>Recovery and Restart（#24）＝安全に再開できること</td><td>冪等＝何回流しても同じ。再実行は上書き</td><td>静的 <code>partitions</code> と <code>unique_key</code> 付き <code>merge</code> で担保し、指紋クエリで検証（§5d）</td></tr>
+<tr><td>実行の追跡</td><td>監査ディメンション（#6, DT#164）</td><td>invocation id をタスク出力に埋める</td><td><code>dim_audit</code> に <code>dbt_invocation_id</code> と <code>loaded_at</code>。遅延の実測にも使う（§7a）</td></tr>
+</table>
+</div>
+
+<h3>4.1 ルックバック窓をどう決めるか</h3>
+
+<p>窓は勘ではなく遅延の分布から決める。<code>dim_audit.loaded_at</code> とファクトの <code>&lt;role&gt;_date</code> の差を分位点で見て、p99 を覆う最小の日数を採る。CareerVoice では3日（＝当日 + 過去3日の4パーティション）を既定にし、それを超える裾は窓を広げるのではなく修復ジョブに回す。</p>
+
+<p>窓を広げ続けない理由は課金だけではない。窓が広いほど「毎日書き換わるパーティション」が増え、下流のキャッシュ・抽出・エクスポートが毎日作り直しになる。dbt の <code>microbatch</code> がこの考え方を <code>lookback</code>（既定 1）という config 名で製品側に持っているのも、窓が設計上の宣言であって実装の副産物ではないという整理による。</p>
+
+<h2>5. BigQuery + dbt での実装</h2>
+
+<h3>(a) <code>fct_scout</code>: 静的パーティション置換</h3>
+
+<pre><code>-- models/marts/fct_scout.sql
+{% set lookback_days = 3 %}
+{% set run_date = var('run_date', run_started_at.strftime('%Y-%m-%d')) %}
+{% set partitions_to_replace = [] %}
+{% for i in range(lookback_days + 1) %}
+  {% do partitions_to_replace.append(
+       "date_sub(date '" ~ run_date ~ "', interval " ~ i ~ " day)") %}
+{% endfor %}
+
+{{ config(
+    materialized = 'incremental',
+    incremental_strategy = 'insert_overwrite',
+    partition_by = {'field': 'sent_date', 'data_type': 'date', 'granularity': 'day'},
+    cluster_by = ['scout_sender_key'],
+    partitions = partitions_to_replace,
+    on_schema_change = 'append_new_columns'
+) }}
+
+with sent as (
+
+    select
+        s.scout_id,
+        s.template_id,
+        s.member_id,
+        s.job_posting_id,
+        s.sender_type,
+        coalesce(s.sender_company_id, s.sender_agent_id) as sender_id,
+        s.sent_at,
+        date(s.sent_at, 'Asia/Tokyo') as sent_date
+    from {{ ref('stg_careervoice__scouts') }} as s
+    {% if is_incremental() %}
+    -- config の partitions と同じ集合で絞る（置換対象とソース範囲を一致させる）
+    where date(s.sent_at, 'Asia/Tokyo') in ({{ partitions_to_replace | join(', ') }})
+    {% endif %}
+
+),
+
+member_snapshot as (
+
+    -- require_partition_filter = true なので結合条件ではなく WHERE で絞る
+    select snapshot_date, member_id, member_profile_mini_key
+    from {{ ref('dim_member_daily') }}
+    {% if is_incremental() %}
+    where snapshot_date in ({{ partitions_to_replace | join(', ') }})
+    {% else %}
+    where snapshot_date &gt;= date '2026-01-01'
+    {% endif %}
+
+)
+
+select
+    cast(format_date('%Y%m%d', t.sent_date) as int64) as sent_date_key,
+    t.sent_date,
+    coalesce(m.member_key, -1)                as member_key,
+    coalesce(d.member_profile_mini_key, -1)   as member_profile_mini_key,
+    coalesce(snd.scout_sender_key, -1)        as scout_sender_key,
+    coalesce(jp.job_posting_key, -1)          as job_posting_key,
+    {{ audit_key() }}                         as audit_key,
+    t.scout_id,
+    t.template_id,
+    1 as scout_count
+from sent as t
+left join {{ ref('dim_member') }} as m
+    on t.member_id = m.member_id
+   and t.sent_at &gt;= m.valid_from
+   and t.sent_at &lt;  m.valid_to
+left join member_snapshot as d
+    on t.member_id = d.member_id
+   and t.sent_date = d.snapshot_date
+left join {{ ref('dim_scout_sender') }} as snd
+    on t.sender_type = snd.sender_type
+   and t.sender_id  = snd.sender_id
+   and t.sent_at &gt;= snd.valid_from
+   and t.sent_at &lt;  snd.valid_to
+left join {{ ref('dim_job_posting') }} as jp
+    on t.job_posting_id = jp.job_posting_id</code></pre>
+
+<p><code>{{ audit_key() }}</code> は10回で定義するマクロ。それまでは <code>-1</code> を返す。<code>member_key</code> はイベント時刻の as-of join で解決するので、6/18 送信の <code>S003</code> が 6/20 に届いても 6/18 時点の版に結ばれる（§3.1 の遅延到着ファクト）。</p>
+
+<div class="table-wrap">
+<table>
+<tr><th><code>partitions</code></th><th>dbt が生成するもの</th><th>置換されるパーティション</th><th>向く場面</th></tr>
+<tr><td>指定あり（静的）</td><td>列挙した集合に対する <code>WHEN NOT MATCHED BY SOURCE … THEN DELETE</code> ＋ <code>INSERT</code></td><td>列挙したもの全部。<strong>その日のソース行が0件になれば空で置換される</strong></td><td>窓を宣言で固定したいとき。行が消える訂正（クチコミの削除、スカウトの取消）がある表</td></tr>
+<tr><td>指定なし（動的）</td><td>一時表を作り、その中の distinct なパーティションを検出して置換。<code>_dbt_max_partition</code> が使える</td><td>モデルが出力したパーティションのみ。<strong>出力が0行の日は古い行が残る</strong></td><td>出力範囲が実行時にしか決まらないとき</td></tr>
+<tr><td><code>copy_partitions=true</code>（<code>partition_by</code> の中に書く）</td><td><code>MERGE</code> ではなく copy API（パーティションデコレータ）</td><td>動的置換のみ</td><td><code>fct_page_view</code> のような大きい表。挿入の課金が無い代わりに追跡は粗い</td></tr>
+</table>
+</div>
+
+<h3>(b) <code>fct_application_pipeline</code>: <code>merge</code> と対象の絞り込み</h3>
+
+<pre><code>-- models/marts/fct_application_pipeline.sql
+{% set lookback_days = 3 %}
+{% set run_date = var('run_date', run_started_at.strftime('%Y-%m-%d')) %}
+
+{{ config(
+    materialized = 'incremental',
+    incremental_strategy = 'merge',
+    unique_key = 'application_id',
+    partition_by = {'field': 'applied_date', 'data_type': 'date', 'granularity': 'day'},
+    cluster_by = ['company_key'],
+    incremental_predicates = [
+      "DBT_INTERNAL_DEST.applied_date &gt;= date_sub(date '" ~ run_date ~ "', interval 180 day)"
+    ],
+    on_schema_change = 'append_new_columns'
+) }}
+
+with touched as (
+
+    -- ルックバック窓の中で動いた応募だけを作り直す
+    select e.application_id
+    from {{ ref('stg_careervoice__selection_events') }} as e
+    where date(e.occurred_at, 'Asia/Tokyo')
+          &gt;= date_sub(date '{{ run_date }}', interval {{ lookback_days }} day)
+
+    union distinct
+
+    select a.application_id
+    from {{ ref('stg_careervoice__applications') }} as a
+    where date(a.applied_at, 'Asia/Tokyo')
+          &gt;= date_sub(date '{{ run_date }}', interval {{ lookback_days }} day)
+
+),
+
+applications as (
+
+    select a.*
+    from {{ ref('stg_careervoice__applications') }} as a
+    {% if is_incremental() %}
+    where a.application_id in (select application_id from touched)
+    {% endif %}
+
+),
+
+milestones as (
+
+    select
+        e.application_id,
+        min(if(e.stage = 'document',        e.occurred_at, null)) as document_at,
+        min(if(e.stage = 'first_interview', e.occurred_at, null)) as first_interview_at,
+        min(if(e.stage = 'final_interview', e.occurred_at, null)) as final_interview_at,
+        min(if(e.stage = 'offer',           e.occurred_at, null)) as offer_at,
+        min(if(e.stage = 'accepted',        e.occurred_at, null)) as accepted_at,
+        min(if(e.stage = 'hired',           e.occurred_at, null)) as hired_at,
+        max(e.occurred_at)                                        as last_event_at
+    from {{ ref('stg_careervoice__selection_events') }} as e
+    where e.application_id in (select application_id from applications)
+    group by e.application_id
+
+)
+
+select
+    a.application_id,
+    date(a.applied_at, 'Asia/Tokyo') as applied_date,
+    cast(format_date('%Y%m%d', date(a.applied_at, 'Asia/Tokyo')) as int64) as applied_date_key,
+    coalesce(cast(format_date('%Y%m%d', date(ms.offer_at, 'Asia/Tokyo')) as int64), -1) as offer_date_key,
+    coalesce(cast(format_date('%Y%m%d', date(ms.hired_at, 'Asia/Tokyo')) as int64), -1) as hired_date_key,
+    date_diff(date(ms.offer_at, 'Asia/Tokyo'), date(a.applied_at, 'Asia/Tokyo'), day) as days_applied_to_offer,
+    if(ms.hired_at is not null, 1, 0) as is_hired,
+    {{ audit_key() }} as audit_key
+    -- 残りのマイルストーン date_key・FK・current_stage は 02 回の定義どおり
+from applications as a
+left join milestones as ms
+    on a.application_id = ms.application_id</code></pre>
+
+<p><code>merge</code> はキー一致行を丸ごと置換するので、<code>touched</code> に入らなかった応募の行はそのまま残る。危険なのは <code>incremental_predicates</code> の窓で、6か月前に応募した <code>P001</code> が今日 <code>withdrawn</code> になったのに 180 日の窓から外れていると、一致行が見つからず<strong>同じ <code>application_id</code> が2行になる</strong>。窓は「開いたままになりうる最長のパイプライン」以上に取り、実測で確かめる。</p>
+
+<pre><code>-- incremental_predicates の窓の下限を測る
+select
+    approx_quantiles(open_days, 100)[offset(99)] as p99_open_days,
+    max(open_days) as max_open_days
+from (
+    select date_diff(
+             date(max(e.occurred_at), 'Asia/Tokyo'),
+             date(min(a.applied_at),  'Asia/Tokyo'), day) as open_days
+    from `marts.fct_selection_event` as e
+    join `marts.fct_application_pipeline` as a using (application_id)
+    group by e.application_id
+)</code></pre>
+
+<h3>(c) 遅延到着ディメンションの修復</h3>
+
+<pre><code>-- macros/repair_late_company_key.sql
+{% macro repair_late_company_key(from_date, to_date) %}
+
+  {% set repair_sql %}
+    merge into {{ ref('fct_review') }} as t
+    using (
+        select
+            r.review_id,
+            c.company_key as resolved_company_key
+        from {{ ref('stg_careervoice__reviews') }} as r
+        join {{ ref('dim_company') }} as c
+          on r.company_id = c.company_id
+         and r.submitted_at &gt;= c.valid_from
+         and r.submitted_at &lt;  c.valid_to
+        where date(r.submitted_at, 'Asia/Tokyo')
+              between date '{{ from_date }}' and date '{{ to_date }}'
+    ) as s
+    on  t.review_id = s.review_id
+    -- ターゲット側にもパーティション条件を置く（置かないと全期間をスキャンする）
+    and t.submitted_date between date '{{ from_date }}' and date '{{ to_date }}'
+    when matched and t.company_key &lt;&gt; s.resolved_company_key then update set
+        company_key = s.resolved_company_key,
+        audit_key   = {{ audit_key() }}
+  {% endset %}
+
+  {% do run_query(repair_sql) %}
+  {% do log('repaired fct_review.company_key: ' ~ from_date ~ ' .. ' ~ to_date, info=true) %}
+
+{% endmacro %}</code></pre>
+
+<pre><code>dbt run-operation repair_late_company_key \
+  --args '{from_date: "2026-05-01", to_date: "2026-05-02"}'</code></pre>
+
+<p>更新するのは <code>company_key</code> と <code>audit_key</code> だけで、メジャーには触れない（§3.1）。<code>audit_key</code> を差し替えるので、あとから「どのバッチが貼り替えた行か」を <code>dim_audit</code> 経由で数えられる。</p>
+
+<p>ただし <code>insert_overwrite</code> のファクトなら、この <code>MERGE</code> より<strong>該当パーティションを流し直す方が安い</strong>。<code>reviews</code> は CDC で <code>submitted_at</code> を保持しているので再構築できる（<code>dbt run --select fct_review --vars '{"run_date": "2026-05-02"}'</code>）。修復 <code>MERGE</code> を選ぶのは、再構築のコストが跳ねる大きい表か、貼り替え範囲が数十パーティションに散っている場合に限る。</p>
+
+<h3>(d) 冪等性の検証</h3>
+
+<pre><code># 1回目
+dbt run --select fct_scout --vars '{"run_date": "2026-06-20"}'</code></pre>
+
+<pre><code>-- 指紋を取る（行の順序に依存しない集約）
+create or replace table `marts.fct_scout__fingerprint` as
+select
+    t.sent_date,
+    count(*)                                   as row_count,
+    sum(t.scout_count)                         as scout_count,
+    bit_xor(farm_fingerprint(format('%T', t))) as row_fingerprint
+from `marts.fct_scout` as t
+where t.sent_date between date '2026-06-17' and date '2026-06-20'
+group by t.sent_date;</code></pre>
+
+<pre><code># 2回目（同じ run_date）
+dbt run --select fct_scout --vars '{"run_date": "2026-06-20"}'</code></pre>
+
+<pre><code>-- 差分が0行なら冪等
+with after_run as (
+    select
+        t.sent_date,
+        count(*)                                   as row_count,
+        sum(t.scout_count)                         as scout_count,
+        bit_xor(farm_fingerprint(format('%T', t))) as row_fingerprint
+    from `marts.fct_scout` as t
+    where t.sent_date between date '2026-06-17' and date '2026-06-20'
+    group by t.sent_date
+),
+
+before_run as (select * from `marts.fct_scout__fingerprint`)
+
+select 'before のみ' as side, * from (select * from before_run except distinct select * from after_run)
+union all
+select 'after のみ',  * from (select * from after_run  except distinct select * from before_run);</code></pre>
+
+<p><code>EXCEPT DISTINCT</code> は片方向なので両向きを取る。<code>audit_key</code> は実行ごとに変わるため指紋の対象から外す（列を明示するか、検証用に <code>audit_key</code> を除いたビューを噛ませる）。「同じ入力なら同じ出力」を守る対象はメジャーとキーであって、実行の記録ではない。</p>
+
+<pre><code># models/marts/schema.yml（一部）
+version: 2
+
+models:
+  - name: fct_scout
+    description: "1行 = 送信された1スカウト。sent_date で日次パーティション"
+    columns:
+      - name: scout_id
+        data_tests: [not_null, unique]
+      - name: sent_date
+        data_tests: [not_null]
+      - name: member_key
+        data_tests: [not_null]
+    data_tests:
+      - dbt_utils.expression_is_true:
+          expression: "sent_date &lt;= current_date('Asia/Tokyo')"</code></pre>
+
+<p><code>unique</code> は §2(b) の二重行を捕まえる。捕まえられないのは §2(a) の欠損なので、そちらは「ソースの件数とマートの件数をルックバック窓で突き合わせる」テストを別に置く。</p>
+
+<h2>6. 判断基準</h2>
+
+<div class="table-wrap">
+<table>
+<tr><th>ファクトの型</th><th>遅延</th><th>行数の規模</th><th>方式</th><th>ルックバック</th><th>この題材の例</th></tr>
+<tr><td>トランザクション</td><td>p99 ≤ 3日</td><td>日次で数万〜数百万</td><td><code>insert_overwrite</code>（静的 <code>partitions</code>）</td><td>3日</td><td><code>fct_scout</code>, <code>fct_selection_event</code>, <code>fct_review</code></td></tr>
+<tr><td>トランザクション</td><td>p99 ≤ 3日</td><td>日次で数千万以上</td><td><code>insert_overwrite</code>（動的 ＋ <code>copy_partitions</code>）</td><td>3日</td><td><code>fct_page_view</code></td></tr>
+<tr><td>トランザクション</td><td>裾が長い（p99 &gt; 7日）</td><td>—</td><td><code>insert_overwrite</code> ＋ 定期の広窓リビルド</td><td>日次3日 ＋ 週次30日</td><td>モバイルからの <code>page_views</code> のように到着が遅れる経路</td></tr>
+<tr><td>累積スナップショット</td><td>行が更新され続ける</td><td>—</td><td><code>merge</code>（<code>unique_key</code>）＋ <code>incremental_predicates</code></td><td>イベント側3日。predicate は最長パイプライン以上</td><td><code>fct_application_pipeline</code>, <code>fct_scout_funnel</code>, <code>fct_review_moderation</code></td></tr>
+<tr><td>定期スナップショット（日）</td><td>ソースが現在値のみ＝過去日は再現不能</td><td>—</td><td><code>insert_overwrite</code>（当日パーティションのみ）</td><td>0日（過去は不変）</td><td><code>fct_job_posting_daily</code>, <code>dim_member_daily</code></td></tr>
+<tr><td>定期スナップショット（月）</td><td>月内は動き続ける</td><td>—</td><td><code>insert_overwrite</code>（<code>granularity: 'month'</code>）</td><td>当月 ＋ 前月</td><td><code>fct_contract_monthly</code></td></tr>
+<tr><td>小さいファクト</td><td>—</td><td>全量再構築が数十秒以内</td><td>増分にしない（<code>materialized='table'</code>）</td><td>—</td><td><code>fct_placement</code></td></tr>
+</table>
+</div>
+
+<p>順序としては、まず増分にしない。全量再構築の課金と所要時間が運用上の制約に触れてから、上の表で方式を選ぶ。増分は正しさの担保を1つ増やす選択で、行数が小さいうちに払う理由がない。</p>
+
+<h3>6.1 ルックバック日数の決め方</h3>
+
+<ol>
+<li><code>dim_audit.loaded_at</code> とファクトの <code>&lt;role&gt;_date</code> の差を分位点で測る（§7a）。</li>
+<li>p99 を覆う最小日数 × 1パーティションの再ビルド課金 × 1日の実行回数を出し、許容内かを見る。</li>
+<li>許容外なら窓は広げず、裾は修復ジョブ（週次の広窓リビルド、または §5c の <code>MERGE</code>）へ分ける。</li>
+</ol>
+
+<h2>7. 演習</h2>
+
+<h3>(a) <code>fct_page_view</code> のルックバックを何日にするか。決めるために何を測るか</h3>
+
+<details>
+<summary>解答例</summary>
+
+<p>測るのは3つ。遅延の分布、再ビルドの課金、窓外に落ちる行が指標を動かす量。</p>
+
+<pre><code>-- 1. 遅延の分布（監査ディメンションを使う）
+select
+    approx_quantiles(lag_days, 100)[offset(50)] as p50,
+    approx_quantiles(lag_days, 100)[offset(99)] as p99,
+    max(lag_days)                               as max_lag,
+    safe_divide(countif(lag_days &gt; 3), count(*)) as over_3d_ratio
+from (
+    select date_diff(date(a.loaded_at, 'Asia/Tokyo'), f.view_date, day) as lag_days
+    from `marts.fct_page_view` as f
+    join `marts.dim_audit`     as a using (audit_key)
+    where f.view_date between date '2026-05-01' and date '2026-06-30'
+);
+
+-- 2. 1パーティションの再ビルド規模
+select partition_id, total_rows, total_logical_bytes
+from `marts.INFORMATION_SCHEMA.PARTITIONS`
+where table_name = 'fct_page_view'
+order by partition_id desc
+limit 10;</code></pre>
+
+<p>決め方: p99 を覆う最小日数を採る。課金が許容外なら窓は3日のままにし、<code>over_3d_ratio</code> の行は週次の広窓リビルドで回収する（判断基準の表の3行目）。<code>fct_page_view</code> は最大の表なので、窓を1日広げる判断は他のどのファクトより高くつく。</p>
+</details>
+
+<h3>(b) <code>fct_job_posting_daily</code> を増分で作る時の単位は「日」か「求人」か</h3>
+
+<details>
+<summary>解答例</summary>
+
+<p>「日」。理由は3つ。</p>
+
+<ul>
+<li>粒度が「1行 = 1求人 × 掲載中の1日」で、パーティション列が <code>snapshot_date</code>。置換単位と粒度の日次側が一致し、FDE の「1タスク実行 → 1パーティション」に収まる。</li>
+<li>「求人」単位にすると1回の実行が <code>J001</code> の全掲載日パーティションに書き込むことになり、<code>insert_overwrite</code> が使えず <code>merge</code>（<code>unique_key=['job_posting_id','snapshot_date']</code>）になる。冪等ではあるがターゲット全体が更新対象になり、プルーニングを自前で設計する羽目になる。</li>
+<li>ソース（<code>job_postings</code> の現在値）は過去日の <code>status</code> を再現できない。過去パーティションは不変にし、当日ぶんだけ作る＝ルックバック0日（判断基準の表の5行目）。掲載終了の反映が1日遅れる経路があるなら、前日ぶんの再生成だけを許す。</li>
+</ul>
+
+<p>ただし <code>application_count_cum</code> / <code>scout_count_cum</code> は累計なので、過去日を作り直さない代わりに「その日の時点で観測できた累計」を持つことになる。この定義を <code>description</code> に書いておかないと、あとから遡って数えた累計と一致しないという問い合わせになる。</p>
+</details>
+
+<h3>(c) <code>dim_member_daily</code>（05回）が1日欠けた時、as-of join はどう壊れ、どう埋めるか</h3>
+
+<details>
+<summary>解答例</summary>
+
+<p><strong>壊れ方</strong>: 6/19 の <code>snapshot_date</code> が無いと、<code>snapshot_date = view_date</code> で結ぶモデル（§5a の <code>member_snapshot</code> のような結合）は 6/19 だけ一致行を失う。inner join なら 6/19 の行が丸ごと消え、left join なら <code>member_profile_mini_key</code> が NULL になる。<code>-1</code> すら付かないので DT#43 の「NULL 外部キー禁止」に違反し、年収帯別の集計から6/19 だけが抜ける。<code>require_partition_filter=true</code> のため、欠損なのか単に読んでいないだけなのかもクエリからは区別できない。</p>
+
+<p><strong>埋め方1（再生成できる場合）</strong>: <code>members.updated_at</code> があるので 6/19 終了時点の版を作り直せる。1パーティションだけ流す。</p>
+
+<pre><code>dbt run --select dim_member_daily --vars '{"run_date": "2026-06-19"}'</code></pre>
+
+<p><strong>埋め方2（再生成できない場合）</strong>: 前日を carry-forward する。</p>
+
+<pre><code>insert into `marts.dim_member_daily`
+    (snapshot_date, member_id, member_key, member_profile_mini_key,
+     current_company_id, current_job_category_code, annual_income_band, job_change_intent)
+select
+    date '2026-06-19',
+    member_id, member_key, member_profile_mini_key,
+    current_company_id, current_job_category_code, annual_income_band, job_change_intent
+from `marts.dim_member_daily`
+where snapshot_date = date '2026-06-18';</code></pre>
+
+<p>これは属性変化を1日遅らせる近似で、<code>M001</code> の 6/15 のような変化がちょうど欠損日に起きていれば取りこぼす。時点精度が要る結合なら、そもそも <code>dim_member</code> の as-of join（<code>event_ts &gt;= valid_from AND event_ts &lt; valid_to</code>）に切り替える。SCD2 と日次スナップショットを両方持つ（05回）判断が効くのはこの場面で、片方の欠損がもう片方で埋まる。</p>
+</details>
+
+<h2>8. 参考: 手元の基盤ではどうか</h2>
+
+<div class="aside">
+<ul>
+<li><code>mart_url_performance_incremental</code> は <code>unique_key=['url_path','date']</code>（BigQuery 既定の <code>merge</code>）だが、増分境界が <code>DATE(request_timestamp) &gt; (SELECT MAX(date) FROM {{ this }})</code> で、§2(a) の形そのもの。ログが1日でも遅れて届くとその日は永久に埋まらない。</li>
+<li><code>partition_by</code> は <code>date</code>（DATE）で張ってあるので、この回の基準なら <code>insert_overwrite</code> ＋ 静的 <code>partitions</code>（当日 + 3日）にすれば、境界を持たずに冪等になる。<code>unique_key</code> も不要になる。</li>
+<li><code>news_pipeline</code> の <code>summaries</code> はパーティション無しで <code>insert_rows_json</code>（ストリーミング挿入）。再実行の冪等性をテーブル側に置けないので、収集時の URL 全件突合で重複を防いでいる。冪等性をパーティションに預けられない典型例。</li>
+<li>試せる種: <code>mart_url_performance_incremental</code> を <code>--vars run_date</code> 付きの静的 <code>partitions</code> に書き換え、同じ <code>run_date</code> で2回流して §5(d) の指紋クエリが一致するかを見る。</li>
+</ul>
+</div>
+
+<h2>参照文献</h2>
+
+<ul class="ref">
+<li>Kimball &amp; Ross, <em>The Data Warehouse Toolkit, 3rd ed.</em>（ch.19–20: ETL サブシステム、遅延到着データ） — <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/data-warehouse-dw-toolkit/">kimballgroup.com</a></li>
+<li>Kimball, <em>The Data Warehouse ETL Toolkit</em>（34 サブシステム） — <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/data-warehouse-dw-etl-toolkit/">kimballgroup.com</a></li>
+<li>Kimball, <em>Subsystems of ETL Revisited</em>（2007） — <a href="https://www.kimballgroup.com/2007/10/subsystems-of-etl-revisited/">kimballgroup.com</a></li>
+<li>Design Tip #164: <em>Have You Built Your Audit Dimension Yet?</em> — <a href="https://www.kimballgroup.com/2014/03/design-tip-164-built-your-audit-dimension/">kimballgroup.com</a></li>
+<li>Design Tip #43: <em>Dealing With Nulls In The Dimensional Model</em> — <a href="https://www.kimballgroup.com/2003/02/design-tip-43-dealing-with-nulls-in-the-dimensional-model/">kimballgroup.com</a></li>
+<li>Beauchemin, <em>Functional Data Engineering</em>（解説） — <a href="https://www.ssp.sh/brain/functional-data-engineering/">ssp.sh</a> ／ <a href="https://www.ssp.sh/brain/snapshotting/">snapshotting</a></li>
+<li>dbt, <em>BigQuery configurations</em>（incremental strategies, <code>partition_by</code>, <code>partitions</code>, <code>copy_partitions</code>） — <a href="https://docs.getdbt.com/reference/resource-configs/bigquery-configs">docs.getdbt.com</a></li>
+</ul>
+
+</body>
+</html>

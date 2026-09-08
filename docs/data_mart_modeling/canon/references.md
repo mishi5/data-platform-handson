@@ -65,6 +65,7 @@
 | 10X | 10X Product Blog, *ディメンショナルモデリング勉強会を実施しました*（2024） | https://product.10x.co.jp/entry/2024/05/08/122512 | Techniques の日本語読解例 |
 | BQ nested | Google Cloud, BigQuery スキーマ設計（ネスト・繰り返し列） | https://cloud.google.com/bigquery/docs/best-practices-performance-nested | 非正規化とネストの公式ガイド |
 | BQ partition | Google Cloud, パーティション分割テーブルの概要 | https://cloud.google.com/bigquery/docs/partitioned-tables | パーティション/クラスタリングの仕様 |
+| BQ MV | Google Cloud, マテリアライズド・ビューの概要 / 作成（対応集約関数・制約） | https://cloud.google.com/bigquery/docs/materialized-views-intro ／ https://cloud.google.com/bigquery/docs/materialized-views-create | 増分 MV の制約 |
 | BQ recursive | Google Cloud, 再帰 CTE（`WITH RECURSIVE`） | https://cloud.google.com/bigquery/docs/recursive-ctes | 構文・反復上限などの仕様 |
 | dbt incremental BQ | dbt, BigQuery configurations（incremental strategies） | https://docs.getdbt.com/reference/resource-configs/bigquery-configs | `merge` / `insert_overwrite`、`partition_by`、`cluster_by` |
 | dbt snapshots | dbt, Snapshots | https://docs.getdbt.com/docs/build/snapshots | `timestamp` / `check` 戦略、`dbt_valid_from/to` |

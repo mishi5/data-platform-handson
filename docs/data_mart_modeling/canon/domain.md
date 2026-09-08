@@ -104,7 +104,7 @@ SCD2 のディメンション（`dim_member` / `dim_company` / `dim_agent` / `di
 | `dim_job_posting` | `job_posting_id` | 1 | `title`, `salary_min`, `salary_max`, `prefecture`, `employment_type`, `posted_date`, `closed_date`, `is_agency_posting` | `company_key` / `agency` は**ファクト側**で結ぶ（雪片化しない） |
 | `dim_agent` | `agent_id` | 2 | `agent_name`, `agency_id`, `agency_name`, `agency_tier`, `joined_date`, `left_date` | agency を**平坦化**（雪片にしない）。所属変更で Type2 |
 | `dim_agency` | `agency_id` | 2 | `agency_name`, `agency_tier`, `contract_start_date` | `dim_agent` の**縮約（shrunken/rollup）ディメンション**（DWT ch.4）。担当者が特定できないファクト（`fct_job_posting_daily`, `fct_placement` の主軸）はこちらに結ぶ |
-| `dim_scout_sender` | (`sender_type`, `sender_id`) | 2 | `sender_type`, `sender_name`, `company_industry`(companyのみ), `agency_tier`(agentのみ) | **異種ディメンション（supertype）**。対案「2本の FK + `-1`」は 06回で比較 |
+| `dim_scout_sender` | (`sender_type`, `sender_id`: company なら `company_id`、agent なら `agent_id`) | 2 | `sender_type`, `sender_name`, `company_industry`(companyのみ), `agency_tier`(agentのみ) | **異種ディメンション（supertype）**。対案「2本の FK + `-1`」は 06回で比較 |
 | `dim_review_attributes` | 組合せ | — | `employment_status` × `employment_type` × `years_of_service_band` = 2×3×5 = 30行 | **ジャンクディメンション** |
 | `dim_moderation_reason` | `reason_code` | 0 | `reason_name`, `severity` | `-1` = 該当なし |
 | `dim_channel` | `source_channel` | 0 | `channel_name`, `channel_group`(`inbound`/`scout`/`agent`) | |
@@ -128,7 +128,7 @@ SCD2 のディメンション（`dim_member` / `dim_company` / `dim_agent` / `di
 | `fct_contract_monthly` | `month_date_key`(月初), `company_key`, `contract_plan_key` | `scout_quota`, `scouts_sent`, `scouts_remaining`, `monthly_fee`, `is_active` | `contract_id` | **半加法**（枠残高は月をまたいで足せない、企業をまたいでは足せる） |
 | `fct_placement` | `hired_date_key`, `member_key`, `company_key`, `job_posting_key`, `agency_key`, `agent_key`(`applications.scout_id`→`scouts.sender_agent_id` で解決、無ければ -1), `job_category_key` | `annual_income`, `fee_rate`, `fee_amount`(= `annual_income` × `fee_rate`) | `placement_id`, `application_id` | `fee_amount` 加法、`fee_rate` 非加法（加重平均は `SUM(fee_amount)/SUM(annual_income)`） |
 | `agg_company_rating_daily` | `date_key`, `rating_date`(DATE, パーティション列), `company_key` | `review_count`, `sum_score_*`(8軸), `sum_overall_score` | | 04回: **平均を持たず和と件数を持つ** |
-| `agg_company_entity` | `company_key` | `review_count_total`, `avg_overall_score_90d`, `open_postings`, `scouts_sent_30d`, `applications_30d`, `hires_90d`, `mrr` | | 08回: ECM 風のエンティティ集約 |
+| `agg_company_entity` | `company_key`(`is_current` 版) | `review_count_total`, `avg_overall_score_90d`(sum/count から算出), `open_postings`, `scouts_sent_30d`, `applications_30d`, `hires_90d`, `mrr` | | 08回: ECM 風のエンティティ集約。`dim_company`（`is_current`）の属性を平坦化して同居させる。`agg_*` は `audit_key` を持たない（元ファクトで辿る） |
 
 ## 5. サンプル値（全回で共通に使う）
 

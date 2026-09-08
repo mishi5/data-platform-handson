@@ -78,3 +78,19 @@ python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py docs/data_mart_modelin
 - **M5-7**: 図の右パネル上段を `sum 3.5 / 5.0 / 25.0` と `count 1 / 1 / 10` の2行に分割（ハイフンが減算に読めた）。左パネルも `avg 3.5 / 5.0 / 2.5` / `count は捨てる` にして構造を対称にした。`check_svg.py` 再実行で `0 errors, 0 warnings`。
 
 未対応: なし（Critical 2 / Important 5 / Minor 7 すべて反映）。
+
+---
+
+## 修正ラウンド2（再レビュー `review/04_rereview.md` 対応）
+
+- **N1**: `non_additive_dimension` の子キーを現行 spec に統一。`window_choice` → `window_agg`（`docs.getdbt.com/docs/build/metrics-overview` を WebFetch し、`name` / `window_agg`(min|max) / `group_by` が latest spec であることを確認。`window_choice` / `window_groupings` は measures 時代の名前）。散文も `window_agg: max` に直し、「旧 spec ではこのキーが `window_choice`」を括弧で添えた。YAML 内の legacy 記法は残っていない（`window_choice` の出現は散文の対比1箇所のみ）。
+- **N2**: §1 分類表の「残高（`scouts_remaining`）と同じ行に置かない」を削除し、「残高と同じ行に共存してよい（足す軸が違うので列ごとに扱いを変える）」に置換。正典 §4 の `fct_contract_monthly`（5メジャーが同居）と DWT ch.4 の在庫スナップショット（加法な販売量と半加法な在庫量の共存）に合わせた。
+- **N3**: §2(c) を ISO 週で定義し直し、§5 の HLL SQL と窓を一致させた。窓は **2026-06-15 〜 06-21（ISO 週、`dim_date.iso_week` = 月曜始まり）**。この週に入る正典サンプルは `S003`(6/18, `M002`) と `S001`(6/20, `M001`)、`S002`(6/25, `M003`) は翌週で窓外であることを明記。`M001` が 6/16 にも受け取ったという仮定を1件だけ置き、日次ユニークの合計 3 vs 実ユニーク 2 とした。HLL SQL は `WHERE sent_date BETWEEN DATE '2026-06-15' AND DATE '2026-06-21'`、`GROUP BY sent_date` → `DATE_TRUNC(sent_date, ISOWEEK) AS iso_week_start` で `GROUP BY iso_week_start`。直後に「返るのは 2。日次ユニークを足した 3 ではない」を追加して §2(c) と数値を接続した。前回報告の「HLL の窓も合わせた」は誤記（実際は未変更）で、今回実施した。
+- **N4**: 参照文献リストの DWT 行を「ch.1–2（加法性）, ch.4（定期スナップショットと半加法残高）」に更新し、`p.meta` と `canon/references.md` の割当に揃えた。
+- **N5**: 月次再集約 SQL を `dim_company` へ結んで `c.company_id` でグループ化する形に変更し、「`C002` は 5/1 に2版になるので SCD2 版で束ねると年内が2行に割れる」を1段落追加。企業グループ節では祖先側の前提も明文化（「祖先側も全 SCD2 版で持ち、クエリ側で `anc.is_current` に絞る。無いと祖先の版数だけ子孫行が複製されてファンアウトする」）。
+- **N6**: `fct_contract_monthly` の `contract_id` を `type: primary` → `type: foreign`（`name: contract`）に変更し、YAML にコメントを付けた。散文2段落を追加: 粒度宣言（01回）と `entity` 宣言は一致しなければならないこと、`type: primary` は「行を一意に識別する」という嘘の宣言になり join で増幅すること、一意なのは `(contract_id, month_date)` でありエンティティは複合キーを取らないので primary を宣言するならモデル側に連結した代理列（`contract_month_id` のような1列）を足すこと、足さないなら `foreign` のままで simple / ratio metric は作れること。`fct_scout_funnel` の `scout_id`（1行 = 1スカウト）は粒度と一致しているので `primary` のまま。
+- **N7**: §7(b) の `WHERE` 行末スペースを削除（ファイル全体で行末スペース 0 を確認）。「6月第4週」の表記は N3 の書き換えで消滅。
+
+検証: `check_svg.py` = `0 errors, 0 warnings`／HTML 入れ子検証 OK／3文超の段落 0／行末スペース 0／正典外のテーブル名・列名なし。
+
+未対応: なし（N1〜N7 すべて反映）。
