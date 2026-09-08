@@ -98,3 +98,23 @@
 
 ## Rulings（一覧・公開前に確認用）
 progress.md 内の `Ruling:` 行を参照。主要なもの: dim_agency 追加 / dim_member_daily 追加 / SCD2 SK は INT64 FARM_FINGERPRINT で 5 本 / M001 の dim_member は 2 行 / R001 差し戻し1回 / fct_scout は incremental+insert_overwrite・star 側に require_partition_filter なし / audit_key() は 10 回が正本 / agg_* は audit_key なし / 再々レビューは局所修正のみの場合 grep 検証で省略
+
+## 公開（2026-09-08）
+
+タイトルを `DMnn <題> — データマート設計` に変更、タグ `Docs/データモデリング`、Slack はシリーズで1通。
+
+| タイトル | URL | content_id |
+|---|---|---|
+| DM00 題材と簡易データモデル — データマート設計 | https://family-share-76mm33owba-an.a.run.app/view/01M20MVCZ8V6WXSJ66TMD2CYGX | `01M20MVCZ8V6WXSJ66TMD2CYGX` |
+| DM01 粒度を宣言する — データマート設計 | https://family-share-76mm33owba-an.a.run.app/view/01M20MVEKJ8X8VNQXM0N3PZ4QP | `01M20MVEKJ8X8VNQXM0N3PZ4QP` |
+| DM02 ファクトの3型とファクトレス — データマート設計 | https://family-share-76mm33owba-an.a.run.app/view/01M20MVG19D0J9NGM5609M0MNH | `01M20MVG19D0J9NGM5609M0MNH` |
+| DM03 ディメンションの設計 — データマート設計 | https://family-share-76mm33owba-an.a.run.app/view/01M20MVHG8SBGVVPVAD2Q4HDKY | `01M20MVHG8SBGVVPVAD2Q4HDKY` |
+| DM04 加法性と派生指標 — データマート設計 | https://family-share-76mm33owba-an.a.run.app/view/01M20MVJX3BSB0KK9DCA48C2T3 | `01M20MVJX3BSB0KK9DCA48C2T3` |
+| DM05 履歴を持つ：SCD とスナップショット — データマート設計 | https://family-share-76mm33owba-an.a.run.app/view/01M20MVM7NQBWT49VN9PXT9TQE | `01M20MVM7NQBWT49VN9PXT9TQE` |
+| DM06 多対多・不揃い階層・異種ディメンション — データマート設計 | https://family-share-76mm33owba-an.a.run.app/view/01M20MVNYTYZS2WD4YYV1MPSPK | `01M20MVNYTYZS2WD4YYV1MPSPK` |
+| DM07 star か One Big Table か — データマート設計 | https://family-share-76mm33owba-an.a.run.app/view/01M20MVQD5116BKKKCMZ4ABPKR | `01M20MVQD5116BKKKCMZ4ABPKR` |
+| DM08 コンフォームドとドリルアクロス — データマート設計 | https://family-share-76mm33owba-an.a.run.app/view/01M20MVRT0VVAVK15P7WXKYKXG | `01M20MVRT0VVAVK15P7WXKYKXG` |
+| DM09 増分・遅延到着・冪等性 — データマート設計 | https://family-share-76mm33owba-an.a.run.app/view/01M20MVT2ZS15346QW3P5D2B0Z | `01M20MVT2ZS15346QW3P5D2B0Z` |
+| DM10 レイヤ・命名・契約・テスト・監査 — データマート設計 | https://family-share-76mm33owba-an.a.run.app/view/01M20MVVG25GSAGBX819GZJJTP | `01M20MVVG25GSAGBX819GZJJTP` |
+
+上書きは `publish.py --html <file> --title <title> --content-id <id>`（--slack なし）。
