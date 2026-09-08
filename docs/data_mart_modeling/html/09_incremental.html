@@ -210,9 +210,9 @@ where s.sent_at &gt; (select max(sent_at) from {{ this }})
 
 <h3>(b) 累積スナップショットを追記にすると <code>P001</code> が7行になる</h3>
 
-<p><code>P001</code>（<code>M001</code> → <code>J001</code>）は 6/23 応募 → 7/1 書類 → 7/8 一次 → 7/15 最終 → 7/20 内定 → 7/22 承諾 → 8/1 入社と7回状態が変わる。<code>fct_application_pipeline</code> を <code>unique_key</code> 無しの <code>merge</code>（＝追記）で作ると、状態が動いた日の実行ごとに1行増えて7行になる。粒度宣言「1行 = 1応募のパイプライン」が壊れ、<code>COUNT(*)</code> は応募数 1 ではなく 7 を返し、<code>AVG(days_applied_to_offer)</code> は同じ応募を7回数えた平均になる。</p>
+<p><code>P001</code>（<code>M001</code> → <code>J001</code>）は 6/23 応募 → 7/1 書類 → 7/8 一次 → 7/15 最終 → 7/20 内定 → 7/22 承諾 → 8/1 入社と7回状態が変わる。<code>fct_application_pipeline</code> を <code>unique_key</code> 無しの <code>merge</code>（＝追記）で作ると、状態が動いた日の実行ごとに1行増えて7行になる。粒度宣言「1行 = 1応募のパイプライン」が壊れ、<code>COUNT(*)</code> は応募数 1 ではなく 7 を返す。</p>
 
-<p><code>SUM(is_hired)</code> が 1 のままなのは、入社を観測できた最後の1行しか <code>is_hired = 1</code> にならないからだ。壊れていても合う指標があることが、この失敗を見つけにくくしている。</p>
+<p><code>COUNT(*)</code> と <code>COUNT(DISTINCT application_id)</code> の乖離が、そのまま二重計上の量になる。一方 <code>SUM(is_hired)</code> は 1 のまま（入社を観測できた最後の1行しか <code>is_hired = 1</code> にならない）で、<code>AVG(days_applied_to_offer)</code> も内定前の4行が NULL で平均から外れるため <code>P001</code> 単独では正しい値を返す。壊れていても合う指標があることが、この失敗を見つけにくくしている。</p>
 
 <h3>(c) 遅延到着ディメンション: <code>C002</code> の規模変更</h3>
 
@@ -265,7 +265,7 @@ where s.sent_at &gt; (select max(sent_at) from {{ this }})
 </table>
 </div>
 
-<p>遅延到着ディメンションの修復で触るのは外部キーだけにする。原典はファクトの誤り訂正に「該当行の更新」「削除して再ロード」「相殺行の追加」の3方式を挙げるが、ここで直したいのは「ディメンションの版が後から来た」ことであってメジャーの誤りではない。この区別が §5(c) の <code>MERGE</code> を <code>company_key</code> と <code>audit_key</code> に限る理由になっている。</p>
+<p>遅延到着ディメンションの修復で触るのは外部キーだけにする。原典はファクトの誤り訂正に「該当行の更新」「削除して再ロード」「相殺行の追加」の3方式を挙げるが（DWT ch.19–20 のロード処理）、ここで直したいのは「ディメンションの版が後から来た」ことであってメジャーの誤りではない。この区別が §5(c) の <code>MERGE</code> を <code>company_key</code> と <code>audit_key</code> に限る理由になっている。</p>
 
 <h2>4. 現代の再解釈</h2>
 

@@ -23,7 +23,7 @@
 |---|---|---|
 | Kimball, *Subsystems of ETL Revisited*（2007） | サブシステム番号と名称: #2 Change Data Capture, #6 Audit Dimension Creation, #13 Fact Table Builders（transaction / periodic snapshot / accumulating snapshot の3種を作る）, #14 Surrogate Key Pipeline, #16 Late Arriving Data Handler, #24 Recovery and Restart | §3 の表 |
 | DWT ch.19–20（書籍。URL は書誌のみ） | 遅延到着ファクト = イベント時点で有効だった版のサロゲートキーを割り当てる／遅延到着ディメンション = 遡及版を挿入し、その区間のファクトの外部キーを貼り替える／ディメンション行が無い場合は自然キーだけの仮行 | §3.1 |
-| FDE（ssp.sh 解説） | 「reruns overwrite rather than append」／パーティションが状態の最小単位で丸ごと上書き／「one task → one table, one task instance → one partition」／ディメンションは完全スナップショットを実行ごとに追加（ストレージと引き換えに明快さ）／処理時刻ではなくイベント時刻で切るとバックフィルが並列化でき遅延到着を扱いやすい | §4、§4.1、演習(b) |
+| FDE（ssp.sh 解説） | 「reruns overwrite rather than append」／パーティションが状態の最小単位で丸ごと上書き（行ではない）／「one task → one table, one task instance → one partition」／ディメンションは完全スナップショットを実行ごとに追加（ストレージと引き換えに明快さ）／**「No past dependencies; partition on processing time」＝過去への依存を持たず処理時刻でパーティションを切ることでバックフィルが並列化でき遅延ファクトを素直に扱える**（この題材はそこを採らず、イベント時刻 `sent_date` のパーティションを置換しルックバック窓で遅延を吸収する側を選んだ。両者を混同しないこと） | §4、§4.1、演習(b) |
 | dbt, BigQuery configurations | `incremental_strategy` は `merge` / `insert_overwrite` / `microbatch`。`partition_by` の辞書キー（field / data_type / granularity / range / copy_partitions）。静的 `partitions`（列挙した集合を置換）と動的（一時表から distinct パーティションを検出、`_dbt_max_partition` が使える）の違い。`copy_partitions=true` は動的置換のみ・copy API で挿入課金なし。`require_partition_filter`, `on_schema_change` | §1.1、§5(a) の比較表 |
 | dbt, incremental strategies / microbatch（URL は本文に出していない。下の提案1参照） | `microbatch` の config は `event_time` / `batch_size` / `begin` / `lookback`（既定 1）/ `concurrent_batches`。BigQuery では内部的に `insert_overwrite`。`incremental_predicates` は `DBT_INTERNAL_DEST` / `DBT_INTERNAL_SOURCE` 別名を使う | §1.1、§4.1、§5(b) |
 | dbt-adapters のソース（`dbt_bigquery_validate_get_incremental_strategy`） | BigQuery で有効な戦略名は `'merge', 'insert_overwrite', 'microbatch'` のみ（`append` は無い） | §1.1 の注記 |
@@ -84,3 +84,17 @@ python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py html/09_incremental.ht
 
 - 図は触っていないが `check_svg.py` を再実行: `0 errors, 0 warnings`。
 - 1段落3文の上限を全 `<p>` について再スキャンし、超過ゼロを確認。`<pre>` 内の生 `<` ゼロ・タグ平衡も再確認。
+
+
+---
+
+## 修正ラウンド2（再レビュー `review/09_rereview.md` への対応）
+
+| 指摘 | 対応 | 箇所 |
+|---|---|---|
+| N1 (Important) `AVG(days_applied_to_offer)` の検算ずれ | 「7回数えた平均」を削除し、行数の壊れは `COUNT(*)` と `COUNT(DISTINCT application_id)` の乖離で語る形に差し替え。`AVG(days_applied_to_offer)` は内定前の4行が NULL で平均から外れるため `P001` 単独では正しい値を返す、と「壊れていても合う指標」側（`SUM(is_hired)` と同じ段落）へ移した。差し替えで第1段落が4文になったため段落を割り直し、3文上限を維持した | §2(b) の2段落 |
+| N2 (Minor) report の FDE 反転記述 | 「読んだ文献と引用した要点」の FDE 行を原文どおり「No past dependencies; partition on processing time（過去への依存を持たず処理時刻で切る）」に訂正し、イベント時刻採用はこの題材の決定である旨を併記（後続回が同じ取り違えをしないための注記） | 09_report.md の文献表 |
+| N3 (Minor) 誤り訂正3方式の出典アンカー | 「（DWT ch.19–20 のロード処理）」を文中に追加。局所修正なので併せて反映した | §3.1 末尾 |
+
+- 図は未変更。`check_svg.py` 再実行: `0 errors, 0 warnings`。
+- 全 `<p>` の3文上限を再スキャンし超過ゼロ、`<pre>` 内の生 `<` ゼロ、タグ平衡も再確認。
