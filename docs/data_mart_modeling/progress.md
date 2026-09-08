@@ -45,3 +45,4 @@
 - 07 修正ラウンド1 完了（17件 FIXED）。Ruling: obt_page_view は節内仮定として可、int_scout_keyed は規約内 → 再レビュー起動
 - 08 執筆完了（DONE）。Ruling: agg_company_entity に dim_company 属性の平坦化と audit_key 不要を明記、dim_scout_sender の sender_id の意味を明記、references に BQ MV を追加。agg_member_entity は正典に入れない（演習内の候補のまま）→ レビュー起動
 - 04: complete（修正ラウンド2 N1〜N7 を grep で確認: window_agg 統一 / ISOWEEK / 但し書き削除 / ch.1–2。Ruling: 再々レビュー省略 — 局所修正のみ）
+- 05: complete（修正ラウンド2 N-1〜N-3 を grep で確認。Ruling: 再々レビュー省略 — 局所修正のみ）

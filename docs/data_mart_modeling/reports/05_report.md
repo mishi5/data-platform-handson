@@ -119,3 +119,27 @@ $ python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py docs/data_mart_model
 ## 未対応・持ち越し
 
 無し。Critical 1 件・Important 7 件・Minor 8 件すべてに本文で対応した（M-5 のみ、裁定どおり本文から削除したうえで提案 4 として残した）。
+
+---
+
+# 修正ラウンド 2（再レビュー `review/05_rereview.md` への対応）
+
+`check_svg.py` 再実行: **0 errors, 0 warnings**（図は無変更）。表 17 本すべて `.table-wrap`、`<pre>` 内の生 `<` `>` ゼロ、4 文以上の段落は 4 件のまま。
+
+| ID | 対応 |
+|---|---|
+| N-1 | `dim_company` の `versions` CTE と SELECT に `corporate_number` を戻した（`-- Type 0: 版をまたいで変わらない` の注記つき）。§5-a aside と §7-c の「ソース側の」「ソースの」を落として `dim_company.corporate_number` に戻した。あわせて 2 点を追加 — (1) §1 の Type 0 行の CareerVoice セルに「**Type 2 の中の Type 0 属性**として `dim_company.corporate_number`」を追記し、正典が持つ唯一のこの例を取りこぼさないようにした (2) §5-a に `tests/assert_dim_company_corporate_number_is_type0.sql`（同じ `company_id` で `COUNT(DISTINCT corporate_number) > 1` の行を返す）を追加し、§7-c の「合併の検知」を DWH 側の道具立てで閉じられるようにした。「`dim_company` は `corporate_number`=0 / `name`=1 / それ以外=2 の 3 種類を 1 テーブルに載せている」の 1 行も足した |
+| N-2 | 「後から遡って作り直せるのは日次スナップショット方式だけ」を削除。裁定どおり 2 段落に書き換えた — (1) 日次スナップショットが有利なのは**捕捉済みの期間**を各日独立・並列に再計算できる点で、SCD2 は MERGE の結果として状態を持つので流し直しても戻らない (2) **捕捉していない履歴はどちらの方式でも復元できない**。`dim_member_daily` も `snap_members` の上に載っているので `snap_members` が持たない期間は作れず、遡って作れるのはソース側に `updated_at` 付きの履歴（Datastream の CDC ログ）が残っている場合だけである（09 回の演習(c) を参照）|
+| N-3 | キーの型を記事内で INT64 に統一。`dim_member` を `farm_fingerprint(concat(v.member_id, '|', cast(min(v.valid_from) as string)))`、`dim_company` を `farm_fingerprint(concat(v.company_id, '|', cast(v.valid_from as string)))` に変更（`dbt_utils.generate_surrogate_key` の使用箇所はゼロになった）。`fct_scout` の `job_posting_key` だけ `'-1'`（`dim_job_posting` は自然キーをそのまま使う STRING、03 回）に直し、他 3 キーと `dim_member_daily` の 2 キーは `-1` のまま。§5-a の「生成方法は 03 回の判断に従う」の一文を「SCD2 は自然キー + `'|'` + `valid_from` の `FARM_FINGERPRINT` ＝ INT64。型は下流のセンチネルと揃っている必要がある」に書き換え、§5-b の「センチネルの型はキーの型に合わせる」の説明と、`(v1)` / `(v2)` の注記（「ハッシュ値」→「`FARM_FINGERPRINT` の INT64 値」）も揃えた |
+
+## 参考 Minor への対応
+
+| 指摘 | 対応 |
+|---|---|
+| 図の帯（日単位）と `snap_members` 表（`06-15 09:12`）が半日ずれて見える | 図はブリーフの指定（〜6/14 / 6/15〜7/31 / 8/1〜）どおりなので触らず、§5-b の本文に「版の境界はソースの `updated_at` の精度そのままで、6/15 の変化は **09:12** に入っている（図の帯は日単位のラベルにしてある）」を追記して解消した |
+| §4 modern aside で「ただし」が 2 段落連続 | 後者を「だが彼の結論は」に変更 |
+| §2(b) 表の `member_profile_mini_key` の区間が 8/1 で切れて見える | 表頭が「`S001`（6/20）が当たる区間」で、`profile_versions` が実際にマッチする行の区間と一致しているため変更しない。畳まない理由（参照先が 15 行の静的表なのでキーは変わらない）は `fct_scout` の SQL コメントに既にある |
+
+## 未対応・持ち越し
+
+無し。N-1〜N-3 の 3 件すべてに本文で対応した。修正ラウンド 1 で挙げた「提案 4（`dim_company.corporate_number` を正典に足すか）」は正典 §4 に採用済みのため、提案としては解消（本文も追従済み）。
