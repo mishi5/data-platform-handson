@@ -41,15 +41,16 @@
 <body>
 
 <h1>star か One Big Table か</h1>
-<p class="meta">データマート設計 07 ／ 参照: DWT ch.1, A Dimensional Modeling Manifesto (1997) ／ 再解釈: dbt Discourse「Kimball は今も妥当か」, Fivetran Star Schema vs. OBT, Hightouch Modelling Part 2, BigQuery パーティション分割テーブル</p>
+<p class="meta">データマート設計 07 ／ 参照: DWT ch.1, A Dimensional Modeling Manifesto (1997) ／ 再解釈: Fowler (Coalesce 2020), Fivetran Star Schema vs. OBT, Hightouch Modelling Part 2, BigQuery パーティション分割テーブル</p>
 
 <h2>1. この回が決めること</h2>
 
 <p>列指向 DWH でスタースキーマを保つ理由は<strong>性能ではなく意味</strong>である。BigQuery では OBT（非正規化ワイドテーブル）の方が実測で速いことが分かっており、性能を根拠にした star の擁護はもう成立しない。それでも star を残すのは、<code>dim_company</code> の属性がどの時点の値かを 1 箇所で決められること、<code>fct_scout</code> と <code>fct_placement</code> を同じ <code>company_key</code> で横断できること、この 2 点のためである。</p>
 
+<h3>この回で固定する判断</h3>
+
 <div class="table-wrap">
 <table>
-<caption style="text-align:left;color:var(--muted);font-size:.85rem;padding-bottom:6px">この回で固定する判断</caption>
 <tr><th>論点</th><th>決定</th></tr>
 <tr><td>正本はどれか</td><td><strong>star が正本</strong>。<code>fct_scout_funnel</code> + <code>dim_member</code> / <code>dim_scout_sender</code> / <code>dim_job_posting</code> をマートの中心に置く</td></tr>
 <tr><td>OBT の位置づけ</td><td><strong>配布物</strong>。star の下流に <code>materialized='table'</code> の <code>obt_scout_funnel</code> を置き、BI と逆 ETL はここだけを見る</td></tr>
@@ -64,7 +65,7 @@
 <div class="table-wrap">
 <table>
 <tr><th>観点</th><th>star</th><th>snowflake</th><th>OBT</th></tr>
-<tr><th>結合数（返信率をエージェント階層別に見る）</th><td>2（<code>fct_scout_funnel</code> → <code>dim_scout_sender</code>, <code>dim_date</code>）</td><td>4 以上（<code>dim_scout_sender</code> の <code>agency_tier</code> をエージェンシー表へ分離すると 1 段増える）</td><td>0</td></tr>
+<tr><th>結合数（返信率をエージェント階層別に見る）</th><td>2（<code>fct_scout_funnel</code> → <code>dim_scout_sender</code>, <code>dim_date</code>）</td><td>3（<code>dim_scout_sender</code> の <code>agency_tier</code> をエージェンシー表へ分離すると 1 段増える）</td><td>0</td></tr>
 <tr><th>冗長</th><td>ディメンション内のみ（<code>dim_agent</code> に <code>agency_name</code> / <code>agency_tier</code> を平坦化）</td><td>最小</td><td>ファクト行数ぶん全属性が複製（<code>sender_name</code> が 1 行ずつ）</td></tr>
 <tr><th>更新時の整合</th><td><code>dim_company.name</code> の Type1 上書きは <code>dim_company</code> の 1 行だけ</td><td>star と同じ</td><td>同じ上書きが OBT 全行の書き換えになる</td></tr>
 <tr><th>BI からの使いやすさ</th><td>結合を BI 側に書かせる。ブリッジがあると fan-out する</td><td>star より悪い</td><td>1 表を選ぶだけ。fan-out しない</td></tr>
@@ -74,24 +75,32 @@
 </table>
 </div>
 
+<p>※ 正典の <code>dim_agency</code> は <code>fct_job_posting_daily</code> / <code>fct_placement</code> からファクト直結で使う<strong>縮約ディメンション</strong>（DWT ch.4）であって、ここで言う雪片化（ディメンションからさらにディメンションを引く形）とは別物である。上の snowflake 列は「<code>dim_scout_sender</code> の先にエージェンシー表をぶら下げたら」という仮定の話で、正典の設計ではない。</p>
+
 <h2>2. どこで壊れるか</h2>
 
 <h3>(a) Type1 上書きが全行の書き換えになる</h3>
 
-<p><code>C002</code> ネクスト技研が社名を変更した。正典では <code>dim_company.name</code> は Type1（履歴を残さず上書き）である。star なら <code>dim_company</code> の <code>is_current</code> 行 1 行の <code>UPDATE</code> で終わる。<code>fct_page_view</code>（数億行）を <code>company_name</code> 込みで OBT 化していると、同じ変更が数億行の書き換えになる。</p>
+<p><code>C002</code> ネクスト技研が社名を変更した。正典では <code>dim_company</code> は Type 6 相当で、<code>name</code> だけが Type1（履歴を残さず上書き）である。star なら <code>dim_company</code> の <code>C002</code> の行を上書きするだけで終わる。</p>
 
-<pre><code>-- star: 1 行
+<p>Type1 属性は履歴を持たないので、<code>is_current</code> で絞らず<strong>その自然キーの全 SCD2 版を揃えて上書きする</strong>（Type 6, DT#15）。<code>C002</code> は 2026-05-01 に <code>employee_size_band</code> が変わっているので現時点で 2 行あり、更新対象はその 2 行である。</p>
+
+<pre><code>-- star: C002 の SCD2 版すべて（現時点で 2 行）
 UPDATE marts.dim_company
 SET name = 'ネクスト技研ホールディングス'
-WHERE company_id = 'C002' AND is_current;
+WHERE company_id = 'C002';
 
 -- OBT を正本にした場合: 全パーティションを触る
-UPDATE marts.obt_page_view   -- fct_page_view を企業属性込みで非正規化した表
+-- （marts.obt_page_view は正典に無い。fct_page_view を企業属性込みで
+--   非正規化したと仮定した、この節だけの「やってはいけない設計」の例）
+UPDATE marts.obt_page_view
 SET company_name = 'ネクスト技研ホールディングス'
 WHERE company_id = 'C002';   -- 全期間のパーティションが対象
 </code></pre>
 
-<p>後者は <code>require_partition_filter=true</code> を付けていると実行すらできない（パーティション列 <code>view_date</code> の条件が無いため）。付けていなければ全期間を書き換える DML が走る。どちらにしても「Type1 の属性を数億行に焼き込む」時点で設計が誤っている。</p>
+<p>2 行と数億行の差である。後者は <code>require_partition_filter=true</code> を付けていると実行すらできない（パーティション列 <code>view_date</code> の条件が無いため）。付けていなければ全期間を書き換える DML が走る。</p>
+
+<p>どちらにしても「Type1 の属性を数億行に焼き込む」時点で設計が誤っている。</p>
 
 <h3>(b) as-of で焼いた後に「現在値で見たい」が来る</h3>
 
@@ -127,10 +136,13 @@ GROUP BY b.job_category_key;
 <h2>3. Kimball の原則</h2>
 
 <div class="aside kimball">
-<p>Manifesto（1997）の主張は 3 点に尽きる。<strong>理解しやすさ</strong>（"End users cannot understand or remember an ER model. End users cannot navigate an ER model."）、<strong>性能</strong>（star の "predictable, standard framework" が、オプティマイザの推測に頼らず "evaluate arbitrary n-way joins to a fact table in a single pass" を可能にする）、<strong>拡張への耐性</strong>（新しいファクト・新しいディメンション・新しい属性・粒度の変更の 4 種類が、既存のロードやレポートを壊さずに載る）。</p>
+<p>Manifesto（1997）が挙げる強みのうち、この回で使うのは 3 点。<strong>理解しやすさ</strong>（"End users cannot understand or remember an ER model. End users cannot navigate an ER model."）、<strong>性能</strong>（star の "predictable, standard framework" が、オプティマイザの推測に頼らず "evaluate arbitrary n-way joins to a fact table in a single pass" を可能にする）、<strong>拡張への耐性</strong>（新しいファクト・新しいディメンション・新しい属性・粒度の変更の 4 種類が、既存のロードやレポートを壊さずに載る）。</p>
+<p>同記事はほかに対称性（すべてのディメンションが等しく対等な入口になる）、標準技法（SCD・異種製品・ファクトレスファクト）、集約ナビゲーションも挙げる。<strong>そのどれもが意味の側の主張</strong>で、性能を根拠にしているのは上の 2 番目だけである。</p>
 </div>
 
-<p>ここで前置きが要る。DWT ch.1 が「正規化は DWH の敵」と書くとき、その敵対関係は<strong>行指向 RDBMS の物理特性</strong>に由来している。行指向では 1 行を読むと全列がディスクから上がってくるので、テーブルを分けるほど I/O が増える。列指向の BigQuery では、テーブルが何本あろうと読まれるのは参照した列だけである。つまり Manifesto の 3 点のうち<strong>「性能」の根拠だけが 2013 年以降に失効した</strong>。</p>
+<p>ここで前置きが要る。DWT ch.1 が「正規化は DWH の敵」と書くとき、その敵対関係は<strong>行指向 RDBMS の物理特性</strong>に由来している。行指向では 1 行を読むと全列がディスクから上がってくるので、テーブルを分けるほど I/O が増える。</p>
+
+<p>列指向の BigQuery では、テーブルが何本あろうと読まれるのは参照した列だけである。つまり Manifesto の主張のうち<strong>「性能」の根拠だけが、列指向 DWH が標準になった時点で失効した</strong>。残りは全て意味の側の主張なので、そのまま効いている。</p>
 
 <div class="table-wrap">
 <table>
@@ -148,11 +160,18 @@ GROUP BY b.job_category_key;
 <h3>軸: 性能のための技法か、意味のための技法か</h3>
 
 <div class="aside modern">
-<p>dbt Discourse の議論スレッド「Is Kimball dimensional modeling still relevant in a modern data warehouse?」では、Kimball の前提のうち何が失効したかが具体的に挙がっている。Ernesto は前提として "Databases are slow and expensive"、"SQL language is limited"、"You can never join fact tables" の 3 つを挙げ、いずれも現代のクラウド DWH では成り立たないとする。levelworm は "Columnar database welcomes wide table and hate a lot of joins. Kimball naturally needs a lot of joins for one analysis." と書く。</p>
-<p>一方 Josh は残るものを挙げる。コンフォームドディメンション（"if you are slicing a bunch of facts by, say, customer, it needs to be the same, common list"）、粒度の一貫性（"when we add new data it doesn't break existing reports"）、そして "a consistent conceptual way to get people to think about events we analyze (facts) versus the things we are analyzing them by"。</p>
+<p>Dave Fowler（Chartio）の Coalesce 2020 講演「Kimball in the context of the modern data warehouse: what's worth keeping, and what's not」は、star schema を捨てて<strong>結合可能な列を全て結合した大きな非正規化テーブルを 1 本作り、その上にビューでマートを切って利用者へ出す</strong>ことを提案した。根拠は、Kimball が star schema を採った動機の 1 つがストレージコストであり、クラウド DWH ではそのコストがもう当時ほど高くない、という点にある。</p>
+<p>この提案が有効なのは、star schema の技法のうち<strong>性能とコストを根拠に導入されたもの</strong>に限られる。粒度の宣言・コンフォームドディメンション・SCD のような<strong>意味を根拠に導入された技法</strong>は、ストレージが安くなっても何も変わらない。この回はこの区別を 1 本の軸として使う。<strong>性能を根拠に導入された技法は捨てる。意味を根拠に導入された技法は残す。</strong></p>
 </div>
 
-<p>この回はこの対立を 1 本の軸として使う。<strong>性能を根拠に導入された技法は捨てる。意味を根拠に導入された技法は残す。</strong>この題材への適用は下表になる。</p>
+<p>Fowler の提案のうち「ビューでマートを切る」は BigQuery ではそのまま採れない。<strong>ビューは実行のたびに下のテーブルをスキャンする</strong>ので、ワイドテーブルの上にビューを重ねてもスキャン量は減らない。この回が OBT を <code>materialized='table'</code> で置くのは、そのためである（マテリアライズド・ビューという選択肢もあるが、外部結合や一部の集計に制約がある）。</p>
+
+<div class="aside modern">
+<p><strong>関連議論</strong>: dbt Discourse のスレッド「Is Kimball dimensional modeling still relevant in a modern data warehouse?」（Fowler の講演より前の別議論）にも同じ対立が出ている。Ernesto は失効した前提として "Databases are slow and expensive"、"SQL language is limited"、"You can never join fact tables" の 3 つを挙げる。levelworm は "Columnar database welcomes wide table and hate a lot of joins. Kimball naturally needs a lot of joins for one analysis." と書く。</p>
+<p>一方 Josh は残るものを挙げる。コンフォームドディメンション（"if you are slicing a bunch of facts by, say, customer, it needs to be the same, common list"）、粒度の一貫性（"when we add new data it doesn't break existing reports"）、そして "a consistent conceptual way to get people to think about events we analyze (facts) versus the things we are analyzing them by"。<strong>軸の両側がそのまま揃っている。</strong></p>
+</div>
+
+<p>この題材への適用は下表になる。</p>
 
 <div class="table-wrap">
 <table>
@@ -169,10 +188,12 @@ GROUP BY b.job_category_key;
 
 <div class="aside modern">
 <p>Fivetran の "Star Schema vs. OBT for Data Warehouse Performance"（2022）は TPC-DS の scale 100 データ（<code>store_sales</code>, <code>date_dim</code>, <code>store</code>, <code>household_demographics</code>, <code>customer_address</code>）で star と非正規化 1 表を比較した。BigQuery では "the average improvement in query response time is 49%, with the denormalized table outperforming the star schema in every category"。Redshift は 25〜30%、Snowflake は約 25% で、Snowflake では単純なクエリで star が勝つこともあった。</p>
-<p>ただし同記事はコストも書いている。非正規化表は 60,250 MB、ファクト単体は 29,778 MB で<strong>ストレージは約 2 倍</strong>。そして "OBT is good for small teams and small projects that are focused on tracking a specific item"、"The star schema promotes better ELT / ETL code conceptualization and organization" と結んでいる。</p>
+<p>ただし同記事はコストも書いている。非正規化表は 60,250 MB、ファクト <code>store_sales</code> 単体は 29,778 MB（4 つのディメンションを足した star 全体でも 29,905 MB）で<strong>ストレージは約 2 倍</strong>。そして "OBT is good for small teams and small projects that are focused on tracking a specific item"、"The star schema promotes better ELT / ETL code conceptualization and organization" と結んでいる。</p>
 </div>
 
-<p>この 49% は<strong>クエリ応答時間</strong>の改善であって、スキャンされるバイト数の削減ではない。列指向ではスキャン量は「読んだ列 × 行数」で決まるので、同じ集計をするなら OBT の方が読むバイトは<strong>多い</strong>ことすらある（文字列属性が行ごとに複製されるため）。速いのは結合とシャッフルの段が消えるからである。BigQuery のオンデマンド課金はスキャンバイト数に対して発生するので、<strong>OBT にすると速くなるが安くはならない</strong>。</p>
+<p>この 49% は<strong>クエリ応答時間</strong>の改善であって、スキャンされるバイト数の削減ではない。列指向ではスキャン量は「読んだ列 × 行数」で決まるので、同じ集計をするなら OBT の方が読むバイトは<strong>多い</strong>ことすらある（文字列属性が行ごとに複製されるため）。速いのは結合とシャッフルの段が消えるからである。</p>
+
+<p>BigQuery のオンデマンド課金はスキャンバイト数に対して発生する。つまり <strong>OBT にすると速くなるが安くはならない</strong>。</p>
 
 <h3>層構成: star を正本、OBT を配布物に</h3>
 
@@ -194,12 +215,12 @@ GROUP BY b.job_category_key;
 
 <p>プルーニングが効かない書き方は明示的に列挙されている。サブクエリを使った動的な値との比較（<code>WHERE t1.ts = (SELECT timestamp FROM table3 WHERE key = 2)</code>）、非対応関数での加工（<code>FORMAT_DATE('%Y-%m-%d %H', ts)</code>、<code>EXTRACT(MONTH FROM ts)</code>）、パーティション列への算術（<code>WHERE ts + INTERVAL 1 DAY &gt; CURRENT_TIMESTAMP()</code>）、そして <code>AND</code> ではなく <code>OR</code> でつないだ述語。BI ツールが生成する SQL がこの形になっていないかは、実際に生成された SQL を見るまで分からない。</p>
 
-<svg id="dg-obt" viewBox="0 0 800 400" width="100%"
+<svg id="dg-obt" viewBox="0 0 800 424" width="100%"
      style="max-width:800px;height:auto;display:block"
      xmlns="http://www.w3.org/2000/svg"
      role="img" aria-labelledby="dg-obt-t dg-obt-d">
   <title id="dg-obt-t">star と OBT のスキャン範囲</title>
-  <desc id="dg-obt-d">同じ日付フィルタで送信主体別の返信率を集計したとき、star では細いファクト4列と小さいディメンションのブロードキャストで13MB、OBTでは同じ4列でも文字列が行ごとに複製されるため21MBを読む。パーティションプルーニングは両方に等しく効く。</desc>
+  <desc id="dg-obt-d">同じ日付フィルタで送信主体別の返信率を集計したとき、star では細いファクト4列と小さいディメンションのブロードキャストで、OBTでは同じ4列でも文字列が行ごとに複製されるぶん多くのバイトを読む。パーティションプルーニングは両方に等しく効く。数値は題材上の想定値。</desc>
   <style>
     #dg-obt{
       --paper:#fbfbfa; --ink:#22262e; --muted:#5b6472; --soft:#828b9a;
@@ -236,7 +257,7 @@ GROUP BY b.job_category_key;
       <path class="mkf" d="M0,0 L9,3.5 L0,7 Z"/></marker>
   </defs>
 
-  <rect class="bg" x="0" y="0" width="800" height="400"/>
+  <rect class="bg" x="0" y="0" width="800" height="424"/>
 
   <rect class="zone" x="32" y="56" width="336" height="288" rx="8"/>
   <rect class="zone" x="432" y="56" width="336" height="288" rx="8"/>
@@ -279,6 +300,7 @@ GROUP BY b.job_category_key;
 
   <text class="note" x="32" y="366">列指向ではスキャン量が「読む列」で決まる。パーティションプルーニングは両方に等しく効く。</text>
   <text class="note" x="32" y="386">OBT が速いのは読むバイトが減るからではなく、結合とシャッフルの段が消えるから。</text>
+  <text class="note" x="32" y="408">数値は題材上の想定値（実測ではない）。自分の表の実値は §5(d) の dry-run で取る。</text>
 </svg>
 
 <h2>5. BigQuery + dbt での実装</h2>
@@ -312,7 +334,9 @@ FROM {{ ref('int_scout_keyed') }} AS s
 
 <p>パーティションは <code>sent_date_key</code>（INT64 の <code>YYYYMMDD</code>）ではなく <code>sent_date</code>（DATE）に張る。正典が両方を持たせているのはこのためである。<code>sent_date_key</code> に整数レンジパーティションを張ることもできるが、<code>DATE_SUB</code> 系の関数がそのまま使えず BI の生成 SQL がプルーニングを外しやすい。</p>
 
-<p>クラスタ列は正典どおり <code>scout_sender_key</code>, <code>member_key</code> の順。順序に意味があり、前方の列ほど絞り込みが効く。「送信主体別の分析が主で、会員別は従」という利用実態を順序が表している。<code>sender_type</code>（<code>company</code> / <code>agent</code> の 2 値）をクラスタ列に入れないのは、カーディナリティが低く 1 ブロックも落とせないため。</p>
+<p>クラスタ列は正典どおり <code>scout_sender_key</code>, <code>member_key</code> の順。順序に意味があり、前方の列ほど絞り込みが効く。「送信主体別の分析が主で、会員別は従」という利用実態を順序が表している。</p>
+
+<p><code>sender_type</code>（<code>company</code> / <code>agent</code> の 2 値）をクラスタ列に入れないのは、カーディナリティが低く 1 ブロックも落とせないため。</p>
 
 <h3>(b) 配布物: <code>obt_scout_funnel</code></h3>
 
@@ -376,7 +400,9 @@ LEFT JOIN {{ ref('dim_date') }} AS d
     ON f.sent_date_key = d.date_key
 </code></pre>
 
-<p>結合条件が <code>valid_from</code> / <code>valid_to</code> の範囲比較になっていないことに注意する。<code>f.member_key</code> は<strong>すでに送信時点の SCD2 行を指すサロゲートキー</strong>なので、等値結合でそのまま as-of になる。時点解決はファクトのビルド時に済ませる（05 回）。OBT 側で範囲結合をやり直すと、そこが 2 つ目の時点解決ロジックになり、star と数字がずれる原因になる。</p>
+<p>結合条件が <code>valid_from</code> / <code>valid_to</code> の範囲比較になっていないことに注意する。<code>f.member_key</code> は<strong>すでに送信時点の SCD2 行を指すサロゲートキー</strong>なので、等値結合でそのまま as-of になる。時点解決はファクトのビルド時に済ませる（05 回）。</p>
+
+<p>OBT 側で範囲結合をやり直すと、そこが 2 つ目の時点解決ロジックになり、star と数字がずれる原因になる。</p>
 
 <p><code>LEFT JOIN</code> にしているのは、キーが <code>-1</code>（未知）でも行を落とさないため。<code>dim_*</code> 側に <code>-1</code> 行がある前提なので実際には <code>INNER</code> でも同じ結果になるが、ディメンションのロード漏れが起きたときに<strong>OBT の行が黙って消える</strong>のを防ぐ。</p>
 
@@ -416,14 +442,20 @@ GROUP BY sender_type;
 SELECT sender_type, COUNT(*) FROM marts.obt_scout_funnel GROUP BY sender_type;
 </code></pre>
 
-<p><code>require_partition_filter=true</code> は「うっかり全期間スキャン」を型で止める唯一の手段である。副作用が 2 つある。第 1 に、この OBT を参照する下流モデルも必ず <code>sent_date</code> で絞る必要がある。第 2 に、<code>unique</code> テストのような<strong>全表スキャンが前提の dbt テストが失敗する</strong>。上の <code>schema.yml</code> の <code>unique</code> / <code>not_null</code> は、そのままでは通らない。テスト側に <code>where</code> 設定を付けて直近パーティションに限定する。</p>
+<p><code>require_partition_filter=true</code> は「うっかり全期間スキャン」を型で止める唯一の手段である。副作用が 2 つある。</p>
 
-<pre><code>      - name: scout_id
-        tests:
-          - unique:
-              config:
-                where: "sent_date &gt;= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 7 DAY)"
+<p>第 1 に、この OBT を参照する下流モデルも必ず <code>sent_date</code> で絞る必要がある。第 2 に、<strong>生成 SQL にパーティション列の述語が入らない dbt テストが落ちる</strong>。上の <code>schema.yml</code> では <code>unique</code> と <code>relationships</code> がこれに当たり、そのままでは通らない。</p>
+
+<p>テスト単位ではなくモデル単位で <code>where</code> を掛けると、テストを足すたびに書き漏らす事故が無くなる。</p>
+
+<pre><code>models:
+  - name: obt_scout_funnel
+    config:
+      # このモデルのテストは全て直近パーティションに限定する
+      +where: "sent_date &gt;= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 7 DAY)"
 </code></pre>
+
+<p><code>not_null</code> は生成 SQL が <code>where sent_date is null</code> のようにパーティション列そのものへの述語になるので、<code>unique</code> / <code>relationships</code> とは挙動が違う可能性がある。実際に <code>dbt test</code> を回して、どのテストが落ちるかを自分の環境で確かめる。</p>
 
 <p>star 側の <code>fct_scout</code> / <code>fct_scout_funnel</code> には <code>require_partition_filter</code> を付けない。正本は全期間の再集計・バックフィル・整合テストの対象になるからである。<strong>フィルタ強制は配布物側にだけ掛ける</strong>のが、star = 正本 / OBT = 配布物という層構成の物理的な表現になる。</p>
 
@@ -443,7 +475,9 @@ WHERE table_name IN ('fct_scout_funnel', 'obt_scout_funnel')
 GROUP BY table_name;
 </code></pre>
 
-<p><code>INFORMATION_SCHEMA.PARTITIONS</code> はデータセット修飾が必須で、日次パーティションの <code>partition_id</code> は <code>'20260620'</code> の形。<code>__NULL__</code> と <code>__UNPARTITIONED__</code> の擬似パーティションを除かないと平均が歪む。このビュー自体のスキャンは課金されない。</p>
+<p><code>INFORMATION_SCHEMA.PARTITIONS</code> はデータセット修飾が必須で、日次パーティションの <code>partition_id</code> は <code>'20260620'</code> の形。<code>__NULL__</code> と <code>__UNPARTITIONED__</code> の擬似パーティションを除かないと平均が歪む。</p>
+
+<p>このビュー自体も課金対象である。オンデマンド課金では処理バイトが 10 MB 未満でも 1 回あたり最低 10 MB が課金され、しかも <code>INFORMATION_SCHEMA</code> へのクエリは結果がキャッシュされないので、同じクエリでも回すたびに課金される。</p>
 
 <p>クエリ 1 本ぶんの見積りは dry-run で取る。star と OBT を同じ問いで比べるときに使う。</p>
 

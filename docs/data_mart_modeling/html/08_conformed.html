@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>コンフォームドとドリルアクロス — データマート設計 08</title>
+<style>
+  :root { --bg:#ffffff; --fg:#1a1a1a; --muted:#666; --border:#e0e0e0;
+          --accent:#0b6bcb; --card:#f7f8fa; --code:#f3f4f6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171a; --fg:#e8e8e8; --muted:#9aa0a6; --border:#2c3136;
+            --accent:#6aa9ff; --card:#1b1f23; --code:#1f2429; }
+  }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+    line-height:1.8; max-width:900px; margin:0 auto; padding:24px 20px 64px; }
+  h1 { font-size:1.6rem; margin:0 0 4px; line-height:1.4; }
+  h2 { font-size:1.2rem; border-bottom:1px solid var(--border); padding-bottom:6px; margin:40px 0 16px; }
+  h3 { font-size:1.02rem; margin:24px 0 8px; }
+  .meta { color:var(--muted); font-size:.85rem; margin:0 0 24px; }
+  a { color:var(--accent); }
+  table { border-collapse:collapse; width:100%; margin:12px 0 20px; font-size:.9rem; }
+  th, td { border:1px solid var(--border); padding:6px 10px; vertical-align:top; text-align:left; }
+  th { background:var(--card); }
+  .table-wrap { overflow-x:auto; }
+  code { background:var(--code); border:1px solid var(--border); border-radius:4px; padding:1px 5px; font-size:.85em; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:8px; padding:14px 16px;
+        overflow-x:auto; font-size:.84rem; line-height:1.55; }
+  pre code { background:none; border:none; padding:0; font-size:inherit; }
+  .aside { border-left:3px solid var(--accent); background:var(--card); padding:10px 16px; margin:16px 0; font-size:.92rem; }
+  .kimball { border-left-color:#8a6d3b; }
+  .modern { border-left-color:#3b8a5a; }
+  details { border:1px solid var(--border); border-radius:8px; padding:8px 14px; margin:10px 0; background:var(--card); }
+  summary { cursor:pointer; font-weight:600; }
+  svg { max-width:100%; height:auto; display:block; margin:20px 0; }
+  ul, ol { padding-left:1.3em; }
+  .ref li { font-size:.88rem; }
+</style>
+</head>
+<body>
+
+<h1>コンフォームドとドリルアクロス</h1>
+<p class="meta">データマート設計 08 ／ 参照: DWT ch.4, The Soul of the Data Warehouse Part 1–2, Design Tip #135 ／ 再解釈: ECM, Hightouch 2</p>
+
+<h2>1. この回が決めること</h2>
+
+<p>クチコミ・スカウト・応募という別々のビジネスプロセスの数字を、同じ企業・同じ月で横に並べる方法を決める。並べるための技法がドリルアクロスで、その前提がコンフォームドディメンションである。あわせて「集約テーブルを何本持つか」と「エンティティ表 <code>agg_company_entity</code> に指標を入れてよい条件」を決める。</p>
+
+<div class="table-wrap">
+<table>
+<caption style="text-align:left;color:var(--muted);font-size:.85rem;padding-bottom:6px;">この回で確定する判断</caption>
+<thead><tr><th>論点</th><th>決定</th><th>根拠</th><th>節</th></tr></thead>
+<tbody>
+<tr><td>複数ファクトを横に並べる方法</td><td>ファクトごとに同じ行ヘッダへ集約してから <code>FULL OUTER JOIN</code>。ファクト同士を FK で直接 JOIN しない</td><td>fan-out で件数が壊れる（Soul 2）</td><td>2, 3, 5</td></tr>
+<tr><td>企業の行ヘッダ</td><td><code>dim_company</code> の <code>is_current</code> 版へ <code>company_id</code> で寄せた <code>company_key</code>。当時の属性で切りたいときは行ヘッダに属性を足す</td><td>SCD2 版がファクトごとに違うと同じ企業が割れる</td><td>2, 5</td></tr>
+<tr><td>集約テーブルの本数</td><td>日次の単一ファクト集約（<code>agg_company_rating_daily</code>）とエンティティ集約（<code>agg_company_entity</code>）の 2 系統だけ。問いごとには作らない</td><td>正本が分からなくなる</td><td>2, 6</td></tr>
+<tr><td><code>agg_company_entity</code> の位置づけ</td><td>ドリルアクロスを事前に済ませた企業 OBT。指標は窓付き（<code>_30d</code>, <code>_90d</code>）、正本は各ファクト</td><td>ECM。再計算可能な派生物として扱う</td><td>4, 5, 6</td></tr>
+<tr><td><code>avg_overall_score_90d</code></td><td>持ってよい。ただし算出は <code>sum/count</code> から。1 エンティティ 1 行の終端テーブルで再集約しない契約</td><td>04 回の原則の例外条件</td><td>6, 7</td></tr>
+<tr><td>BigQuery マテリアライズド・ビュー</td><td><code>agg_company_rating_daily</code> は候補。ドリルアクロスと <code>agg_company_entity</code> は MV にできない</td><td>MV は <code>FULL OUTER JOIN</code>・非決定関数・集約の後段計算が不可</td><td>5, 6</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>コンフォームドの 3 条件</h3>
+
+<p>Kimball の判定基準は「行ヘッダに使うフィールドが同じドメインを持つこと」で、片方がもう片方の部分集合でもよい。運用上はこれを 3 条件に分解して点検する。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>条件</th><th>意味</th><th>CareerVoice での点検</th><th>破れる例</th></tr></thead>
+<tbody>
+<tr><td>同じ意味</td><td>同じ値が同じ実体を指す</td><td><code>dim_company</code> の 1 行は法人 1 社。<code>corporate_number</code> が同一なら同一企業</td><td>片方が「掲載主体」、片方が「採用法人」を company と呼ぶ</td></tr>
+<tr><td>同じキー</td><td>行ヘッダに使うキーの採番が一致</td><td>全ファクトが <code>dim_company</code> 由来の <code>company_key</code> を持つ（<code>fct_scout</code> は <code>dim_scout_sender</code> 経由）</td><td>片方がイベント時点版、片方が現在値版</td></tr>
+<tr><td>同じ属性名</td><td>列名と値の集合が一致</td><td><code>employee_size_band</code> は <code>lt50</code>/<code>50_299</code>/<code>300_999</code>/<code>ge1000</code> の 4 値だけ</td><td>片方だけ <code>lt300</code> という区分を足す</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>CareerVoice のコンフォームドディメンション</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>ディメンション</th><th>行ヘッダに使う属性</th><th>結ぶファクト</th><th>注意</th></tr></thead>
+<tbody>
+<tr><td><code>dim_date</code></td><td><code>full_date</code>, <code>month</code>, <code>fiscal_year</code>, <code>iso_week</code></td><td>全ファクト（ロールプレイングで <code>submitted_date_key</code>, <code>sent_date_key</code>, <code>applied_date_key</code> …）</td><td>役割が違っても値のドメインは同一。<code>-1</code>（未到達）行を行ヘッダに出すか毎回決める</td></tr>
+<tr><td><code>dim_company</code></td><td><code>name</code>, <code>industry</code>, <code>employee_size_band</code>, <code>listing_status</code></td><td><code>fct_review</code>, <code>fct_review_moderation</code>, <code>fct_page_view</code>, <code>fct_job_posting_daily</code>, <code>fct_application_pipeline</code>, <code>fct_contract_monthly</code>, <code>fct_placement</code>, <code>fct_selection_event</code></td><td>SCD2。行ヘッダに使う前に版を揃える（§2a）</td></tr>
+<tr><td><code>dim_member</code></td><td><code>prefecture</code>, <code>region</code>, <code>birth_year</code></td><td><code>fct_scout</code>, <code>fct_scout_funnel</code>, <code>fct_page_view</code>, <code>fct_application_pipeline</code>, <code>fct_placement</code></td><td><code>fct_review</code> は匿名性の固定判断により <code>member_key</code> を持たない。会員はクチコミと横に並べられない</td></tr>
+<tr><td><code>dim_job_category</code></td><td><code>level1_name</code>, <code>level2_name</code>, <code>level3_name</code></td><td><code>fct_review</code>, <code>fct_job_posting_daily</code>, <code>fct_selection_event</code>, <code>fct_application_pipeline</code>, <code>fct_placement</code></td><td>不揃い階層を固定深さに平坦化済み。3 レベルの名前が全ファクトで共通の行ヘッダになる</td></tr>
+<tr><td><code>dim_agent</code> / <code>dim_agency</code></td><td><code>agent_name</code>, <code>agency_name</code>, <code>agency_tier</code></td><td><code>fct_scout</code>（<code>dim_scout_sender</code> 経由）, <code>fct_selection_event</code>, <code>fct_application_pipeline</code>, <code>fct_placement</code>, <code>fct_job_posting_daily</code></td><td><code>dim_agency</code> は <code>dim_agent</code> の縮約ディメンション。担当者が特定できないファクトはこちらに寄せる（DWT ch.4）</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>2. どこで壊れるか</h2>
+
+<h3>(a) ファクトごとに SCD2 の版がずれる</h3>
+
+<p><code>C002</code>（ネクスト技研）は 2026-05-01 に <code>employee_size_band</code> が <code>50_299</code> から <code>300_999</code> へ変わり、<code>dim_company</code> に 2 行を持つ。<code>fct_review</code> は投稿時点、<code>fct_application_pipeline</code> は応募時点の <code>company_key</code> を持つので、3 月のクチコミは旧版キー、6 月の応募は新版キーに乗る。この 2 つを <code>company_key</code> のまま横に並べると <code>C002</code> は 2 行に割れ、内部結合にすればどちらの行も相手を見つけられず消える。</p>
+
+<p><code>fct_scout</code> はさらに厄介で、そもそも <code>company_key</code> を持たない。送信主体は <code>scout_sender_key</code>（<code>dim_scout_sender</code>、これも SCD2）で、企業に戻すには <code>sender_type = 'company'</code> の <code>sender_id</code> を <code>company_id</code> と読み替える一段が要る。この「寄せ方」をモデルごとに各自が書くと、同じ <code>C002</code> の集計が 3 通り出る。</p>
+
+<div class="aside">
+<p>対策は 1 つ。ドリルアクロスの各パスの先頭で、必ず <code>company_id</code> を経由して <code>is_current</code> 版の <code>company_key</code> に寄せる（§5-1 の <code>company_map</code>）。投稿当時の規模で切りたい場合は、寄せた上で行ヘッダに <code>employee_size_band</code> を足す（それがドリルダウン）。</p>
+</div>
+
+<h3>(b) ファクト同士を直接 JOIN して fan-out する</h3>
+
+<p><code>C001</code>（アオゾラ商事）に 2026-06 のクチコミが 3 件、送信スカウトが 5 件あるとする。<code>fct_review</code> と <code>fct_scout</code> を <code>company_key</code> で JOIN すると 3 × 5 = 15 行になり、<code>SUM(review_count)</code> は 15、<code>SUM(scout_count)</code> も 15 になる。正解は 3 と 5 で、どちらも 5 倍・3 倍に膨らんでいる。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>クエリ</th><th><code>C001</code> / 2026-06 の結果</th><th>正しいか</th></tr></thead>
+<tbody>
+<tr><td>2 ファクトを <code>company_key</code> で直接 JOIN → <code>SUM</code></td><td>review 15 / scout 15</td><td>✗ 両方が相手の行数倍に膨らむ</td></tr>
+<tr><td>同上で <code>COUNT(DISTINCT review_id)</code> 等に逃げる</td><td>review 3 / scout 5</td><td>△ 件数は戻るが <code>SUM(overall_score)</code> は救えない</td></tr>
+<tr><td>各ファクトを企業×月に集約してから <code>FULL OUTER JOIN</code></td><td>review 3 / scout 5</td><td>✓ ドリルアクロス</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>片方が 0 件の月では逆に行が落ちる。Soul 2 はこの症状を、結果が低くも高くもなりうる（"too low or too high, or both"）と書いている。</p>
+
+<h3>(c) 問いごとに集約を作って正本が消える</h3>
+
+<p>「企業×月のクチコミ」「企業×職種×月のクチコミ」「企業×月のスカウト」「企業×四半期の応募」と問いのたびに集約を足すと、半年で 20 本になる。危険なのは本数ではなく、同じ名前の指標が本ごとに違う定義を持つことである。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>ずれる場所</th><th>具体例</th><th>結果</th></tr></thead>
+<tbody>
+<tr><td>母集団</td><td>片方は <code>status = 'published'</code> のクチコミだけ、片方は <code>submitted</code> 全件</td><td><code>C002</code> の 3 月クチコミ数が 1 と 2 に分かれる</td></tr>
+<tr><td>日付の役割</td><td>片方は <code>submitted_date</code>、片方は <code>published_date</code> で集計</td><td><code>R001</code>（3/10 投稿・3/12 公開）が別の月に落ちうる</td></tr>
+<tr><td>企業の版</td><td>片方は投稿時点 <code>company_key</code>、片方は現在値</td><td>(a) と同じ割れ方</td></tr>
+<tr><td>平均の持ち方</td><td>片方が <code>avg_overall_score</code> を持ってしまう</td><td>企業をまたぐ再集約が不能。04 回の原則違反</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>この回の決定は、集約を <code>agg_company_rating_daily</code>（日次・単一ファクト・和と件数）と <code>agg_company_entity</code>（企業 1 行・窓付き）の 2 系統に固定し、それ以外の問いはドリルアクロスのクエリで答えることである。</p>
+
+<h2>3. Kimball の原則</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>技法</th><th>定義</th><th>使う条件</th></tr></thead>
+<tbody>
+<tr><td>コンフォームドディメンション（DWT ch.4）</td><td>複数のファクトから同じ意味・同じキー・同じ属性名で参照されるディメンション</td><td>2 つ以上のビジネスプロセスを横断して見たいとき。バスマトリクスの列が正本</td></tr>
+<tr><td>縮約ディメンション（DWT ch.4）</td><td>コンフォームドディメンションの属性・行の部分集合。粒度の粗いファクトに結ぶ</td><td><code>dim_agency</code> は <code>dim_agent</code> の縮約。担当者が特定できない <code>fct_job_posting_daily</code> はこちらに結ぶ</td></tr>
+<tr><td>コンフォームドファクト（DWT ch.4）</td><td>複数プロセスに現れる同名メジャーの定義・単位・計算式を揃えること</td><td>揃えられないなら名前を変える。<code>fee_amount</code> と <code>monthly_fee</code> を「売上」に丸めない</td></tr>
+<tr><td>ドリルダウン（Soul 1）</td><td>SELECT に行ヘッダ（グルーピング列）を 1 つ足すこと</td><td>常に。階層を降りる操作ではない</td></tr>
+<tr><td>ドリルアクロス（Soul 2）</td><td>ファクトごとに別クエリを投げ、同一の行ヘッダで sort/merge（＝外部結合）して列を足すこと</td><td>2 つ以上のファクトを 1 つの表に並べるとき。UNION（行の追加）ではない</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="aside kimball">
+<p>Soul 1 は、ドリルダウンとは SELECT に "adding a row header" することであり、"Row headers and grouping columns are the same thing" だと言う。さらに "drilling down has nothing to do with descending a predetermined hierarchy" と念を押す。つまり <code>C001</code> の月次クチコミ数に <code>employee_size_band</code> を足すのも <code>dim_date.day_of_week</code> を足すのも、同格のドリルダウンである。</p>
+</div>
+
+<div class="aside kimball">
+<p>Soul 2 のドリルアクロスは、1 本の SQL で複数ファクトを結ぶのではなく "separate requests to the target fact tables followed by a simple sort/merge on the identical row headers returned from each request" である。前提は "All fact tables in a drill-across query must use conformed dimensions" で、その判定は "Two dimensions are conformed if the fields that you use as common row headers have the same domain"。完全一致は要らず、片方が部分集合でもよい（＝縮約ディメンションが使える）。</p>
+</div>
+
+<h3>バスマトリクスの列が正本</h3>
+
+<p>正典のバスマトリクス（<code>canon/domain.md</code> §3）で company 列に ✓ が付いた行が、企業でドリルアクロスできるプロセスの全部である。<code>fct_review</code> の member 列は ✗ なので、会員を行ヘッダにしたクチコミとスカウトの横並びは設計上できない。マトリクスは絵ではなく制約表として読む。</p>
+
+<div class="aside kimball">
+<p>Design Tip #135 は、コンフォームドディメンションがアジャイルを遅くするのではなく可能にすると論じる。ディメンションが揃うほど新プロセスはファクトを 1 本足すだけになり、"the development crank starts turning faster and faster"。全属性の合意は不要で、まず "identify a subset of attributes that have significance across the enterprise" から始めればよい。</p>
+</div>
+
+<p>逆側の警告も同じ Design Tip にある。個別に作られたマートは "inconsistent categorizations and labels" を持ち、さらに悪いことに一見比較可能なのに業務ルールが "slightly different" になる。§2(c) の 20 本問題は、この現象がチーム内で起きたものである。</p>
+
+<h2>4. 現代の再解釈</h2>
+
+<div class="aside modern">
+<p>ECM（Beauchemin, 2023）の出発点は、Kimball 自身の禁止事項である "A BI application must never issue SQL that joins two fact tables together across the fact table's foreign keys"。1 つのエンティティについて複数ファクトの指標を見るたびに回避策を書くのは摩擦が大きい、という主張である。解は、エンティティ表に窓付き指標（<code>visits_7d</code>, <code>visits_28d</code>, <code>visits_90d</code>）を直接持たせ、"simple queries (without having to use JOIN, UNION ALL, or subqueries)" を可能にすること。保証されるのは「every row is an instance of an entity」であり、<code>COUNT(*)</code> がエンティティ数になる。</p>
+</div>
+
+<p>ECM は Kimball の否定ではなく、ドリルアクロスの結果を事前に計算して物理化したものである。行ヘッダをエンティティ 1 列（<code>company_key</code>）に固定し、時間窓を <code>_30d</code> / <code>_90d</code> に固定した特殊形と読める。ECM 自身も欠点として保存の冗長、幅の広い表の性能劣化、"column overload" を挙げ、"restraint and limit the number of metrics" を勧めている。</p>
+
+<div class="aside modern">
+<p>Hightouch 2 は staging / core / consumption の 3 層を置き、"To get the best of both worlds, we can still utilize Kimball's Star Schema as an intermediate step after the staging layer, then materialize Wide Tables out of it" と書く。Wide Table 側の根拠は速度（"25-50% faster in Redshift, Snowflake and BigQuery than Star Schema and joins"）と、JOIN を理解しない利用者にも読めること。ただし結論は "there is no one-size-fits-all model" である。</p>
+</div>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>論点</th><th>Kimball（原典）</th><th>現代（ECM / Hightouch 2）</th><th>CareerVoice の決定</th></tr></thead>
+<tbody>
+<tr><td>複数ファクトの横断</td><td>クエリ時にドリルアクロス（マルチパス＋sort/merge）</td><td>事前に計算してエンティティ表に置く</td><td>両方。探索はドリルアクロス、定型は <code>agg_company_entity</code></td></tr>
+<tr><td>コンフォームドの必要性</td><td>ドリルアクロスの絶対条件</td><td>事前計算でも同じ。むしろ 1 回きりの計算に固定されるので条件が厳しい</td><td>変わらず必須。§1 の 3 条件で点検する</td></tr>
+<tr><td>指標の正本</td><td>ファクトテーブル</td><td>エンティティ表を触るのは利用者、正本は上流</td><td>正本は各ファクト。<code>agg_company_entity</code> は再計算可能な派生物</td></tr>
+<tr><td>時間軸</td><td>行ヘッダに <code>dim_date</code> の属性を足す（任意の期間）</td><td>固定窓（<code>_30d</code>, <code>_90d</code>）を列にする</td><td>固定窓だけをエンティティ表に。任意期間はドリルアクロスへ</td></tr>
+<tr><td>列数</td><td>ファクトは細く、ディメンションは広く</td><td>広い表を許容。ただし列の増やしすぎを自制</td><td>正典の 7 指標に固定。追加は正典改訂として扱う</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>5. BigQuery + dbt での実装</h2>
+
+<h3>5-1. ドリルアクロス（企業 × 月）</h3>
+
+<p>3 つのファクトをそれぞれ同じ行ヘッダ <code>(company_key, month_key)</code> に集約し、<code>FULL OUTER JOIN ... USING</code> で並べる。BigQuery の <code>USING</code> は結合キーを 1 列に併合し、<code>FULL OUTER JOIN</code> では両側の値を合成するので、3 段のチェーンでもキー列は 1 つのまま残る。フィルタは DATE 型のパーティション列（<code>submitted_date</code> / <code>sent_date</code> / <code>applied_date</code>）に掛ける。<code>_date_key</code>（INT64）で絞るとプルーニングが効かない。</p>
+
+<pre><code>-- analyses/drill_across_company_month.sql
+-- 企業 × 月で クチコミ / スカウト / 応募 を横に並べる
+WITH company_map AS (
+    -- 全 SCD2 版 -&gt; 現在版の company_key（§2a の対策）
+    SELECT
+        v.company_key,
+        cur.company_key AS current_company_key
+    FROM {{ ref('dim_company') }} AS v
+    INNER JOIN {{ ref('dim_company') }} AS cur
+        ON v.company_id = cur.company_id
+        AND cur.is_current
+),
+
+review_monthly AS (
+    SELECT
+        m.current_company_key AS company_key,
+        DATE_TRUNC(f.submitted_date, MONTH) AS month_key,
+        SUM(f.review_count) AS review_count,
+        SUM(f.overall_score) AS sum_overall_score
+    FROM {{ ref('fct_review') }} AS f
+    INNER JOIN company_map AS m
+        USING (company_key)
+    WHERE f.submitted_date BETWEEN DATE '2026-01-01' AND DATE '2026-08-31'
+    GROUP BY 1, 2
+),
+
+scout_monthly AS (
+    -- fct_scout は company_key を持たない。dim_scout_sender 経由で企業に戻す
+    SELECT
+        c.company_key,
+        DATE_TRUNC(f.sent_date, MONTH) AS month_key,
+        SUM(f.scout_count) AS scout_count
+    FROM {{ ref('fct_scout') }} AS f
+    INNER JOIN {{ ref('dim_scout_sender') }} AS s
+        ON f.scout_sender_key = s.scout_sender_key
+    INNER JOIN {{ ref('dim_company') }} AS c
+        ON c.company_id = s.sender_id
+        AND c.is_current
+    WHERE f.sent_date BETWEEN DATE '2026-01-01' AND DATE '2026-08-31'
+        AND s.sender_type = 'company'
+    GROUP BY 1, 2
+),
+
+application_monthly AS (
+    SELECT
+        m.current_company_key AS company_key,
+        DATE_TRUNC(f.applied_date, MONTH) AS month_key,
+        COUNT(*) AS application_count,
+        SUM(f.is_hired) AS hired_count
+    FROM {{ ref('fct_application_pipeline') }} AS f
+    INNER JOIN company_map AS m
+        USING (company_key)
+    WHERE f.applied_date BETWEEN DATE '2026-01-01' AND DATE '2026-08-31'
+    GROUP BY 1, 2
+),
+
+drilled AS (
+    -- sort/merge を FULL OUTER JOIN で書く。ファクト同士は結ばない
+    SELECT
+        company_key,
+        month_key,
+        r.review_count,
+        r.sum_overall_score,
+        s.scout_count,
+        a.application_count,
+        a.hired_count
+    FROM review_monthly AS r
+    FULL OUTER JOIN scout_monthly AS s
+        USING (company_key, month_key)
+    FULL OUTER JOIN application_monthly AS a
+        USING (company_key, month_key)
+)
+
+SELECT
+    c.name AS company_name,
+    d.month_key,
+    d.review_count,
+    SAFE_DIVIDE(d.sum_overall_score, d.review_count) AS avg_overall_score,
+    d.scout_count,
+    d.application_count,
+    SAFE_DIVIDE(d.application_count, d.scout_count) AS applications_per_scout
+FROM drilled AS d
+INNER JOIN {{ ref('dim_company') }} AS c
+    ON c.company_key = d.company_key
+    AND c.is_current
+ORDER BY company_name, month_key
+</code></pre>
+
+<p>読み方の要点は 3 つ。各パスは 1 ファクトしか触らない、平均や比率は結合したあとに <code>SAFE_DIVIDE</code> で作る、行ヘッダを増やしたければ 3 つのパス全部に同じ列を足す（Soul 1 のドリルダウン）。3 つ全部に足せない列は、そもそもコンフォームドではない。</p>
+
+<h3>5-2. グループ企業まで畳む</h3>
+
+<p><code>C003</code>（ヒノデ物流）は <code>parent_company_id</code> が <code>C001</code> なので、グループ単位で見たい問いがある。<code>br_company_hierarchy</code> の祖先側は <code>is_current</code> 版だけ、子孫側は全版を採り、<code>company_id</code>（自然キー）で畳む。</p>
+
+<pre><code>group_map AS (
+    SELECT DISTINCT
+        anc.company_id AS group_company_id,
+        des.company_id AS member_company_id
+    FROM {{ ref('br_company_hierarchy') }} AS b
+    INNER JOIN {{ ref('dim_company') }} AS anc
+        ON anc.company_key = b.ancestor_company_key
+        AND anc.is_current
+    INNER JOIN {{ ref('dim_company') }} AS des
+        ON des.company_key = b.descendant_company_key
+)
+</code></pre>
+
+<p><code>company_map</code> の代わりにこれを挟むと、行ヘッダが「グループ」に変わる。<code>C001</code> の行に <code>C001</code> 自身と <code>C003</code> の数字が合算される（<code>depth = 0</code> の自己行を含むため）。祖先側を全版にすると同じグループが版の数だけ増えるので、必ず <code>is_current</code> で絞る。</p>
+
+<h3>5-3. <code>agg_company_entity</code>（ECM 風エンティティ集約）</h3>
+
+<pre><code>-- models/marts/agg_company_entity.sql
+{{ config(
+    materialized='table',
+    cluster_by=['company_key']
+) }}
+
+{% set asof = "DATE(CURRENT_TIMESTAMP(), 'Asia/Tokyo')" %}
+
+WITH company_map AS (
+    SELECT
+        v.company_key,
+        cur.company_key AS current_company_key
+    FROM {{ ref('dim_company') }} AS v
+    INNER JOIN {{ ref('dim_company') }} AS cur
+        ON v.company_id = cur.company_id
+        AND cur.is_current
+),
+
+base AS (
+    -- 1 企業 1 行のスパイン。COUNT(*) = 現存企業数 を保証する
+    SELECT
+        company_key,
+        company_id,
+        name,
+        industry,
+        sector,
+        employee_size_band,
+        listing_status,
+        hq_prefecture,
+        parent_company_id,
+        founded_year
+    FROM {{ ref('dim_company') }}
+    WHERE is_current
+),
+
+rating AS (
+    -- 04 回の集約から。平均は取らず和と件数のまま持ち上げる
+    SELECT
+        m.current_company_key AS company_key,
+        SUM(a.review_count) AS review_count_total,
+        SUM(IF(a.rating_date &gt;= DATE_SUB({{ asof }}, INTERVAL 90 DAY),
+               a.sum_overall_score, 0)) AS sum_overall_score_90d,
+        SUM(IF(a.rating_date &gt;= DATE_SUB({{ asof }}, INTERVAL 90 DAY),
+               a.review_count, 0)) AS review_count_90d
+    FROM {{ ref('agg_company_rating_daily') }} AS a
+    INNER JOIN company_map AS m
+        USING (company_key)
+    GROUP BY 1
+),
+
+postings AS (
+    -- 半加法。日をまたいで足さず、最新スナップショット日の断面だけ取る
+    SELECT
+        m.current_company_key AS company_key,
+        SUM(f.is_open) AS open_postings
+    FROM {{ ref('fct_job_posting_daily') }} AS f
+    INNER JOIN company_map AS m
+        USING (company_key)
+    WHERE f.snapshot_date = DATE_SUB({{ asof }}, INTERVAL 1 DAY)
+    GROUP BY 1
+),
+
+scouts AS (
+    SELECT
+        c.company_key,
+        SUM(f.scout_count) AS scouts_sent_30d
+    FROM {{ ref('fct_scout') }} AS f
+    INNER JOIN {{ ref('dim_scout_sender') }} AS s
+        ON f.scout_sender_key = s.scout_sender_key
+    INNER JOIN {{ ref('dim_company') }} AS c
+        ON c.company_id = s.sender_id
+        AND c.is_current
+    WHERE f.sent_date &gt;= DATE_SUB({{ asof }}, INTERVAL 30 DAY)
+        AND s.sender_type = 'company'
+    GROUP BY 1
+),
+
+applications AS (
+    -- パーティション列は applied_date。hired_date で絞ってもプルーニングは効かないので
+    -- applied_date 側にも広めの下限を置く
+    SELECT
+        m.current_company_key AS company_key,
+        COUNTIF(f.applied_date &gt;= DATE_SUB({{ asof }}, INTERVAL 30 DAY)) AS applications_30d,
+        COUNTIF(f.is_hired = 1
+                AND f.hired_date &gt;= DATE_SUB({{ asof }}, INTERVAL 90 DAY)) AS hires_90d
+    FROM {{ ref('fct_application_pipeline') }} AS f
+    INNER JOIN company_map AS m
+        USING (company_key)
+    WHERE f.applied_date &gt;= DATE_SUB({{ asof }}, INTERVAL 365 DAY)
+    GROUP BY 1
+),
+
+contracts AS (
+    -- 半加法。当月分だけを取る（月をまたいで足さない）
+    SELECT
+        m.current_company_key AS company_key,
+        SUM(f.monthly_fee) AS mrr
+    FROM {{ ref('fct_contract_monthly') }} AS f
+    INNER JOIN company_map AS m
+        USING (company_key)
+    WHERE f.month_date = DATE_TRUNC({{ asof }}, MONTH)
+        AND f.is_active = 1
+    GROUP BY 1
+)
+
+SELECT
+    b.company_key,
+    b.company_id,
+    b.name,
+    b.industry,
+    b.sector,
+    b.employee_size_band,
+    b.listing_status,
+    b.hq_prefecture,
+    b.parent_company_id,
+    b.founded_year,
+    COALESCE(r.review_count_total, 0) AS review_count_total,
+    -- 平均は保存された和と件数から作る。avg の avg を取らない
+    SAFE_DIVIDE(r.sum_overall_score_90d, r.review_count_90d) AS avg_overall_score_90d,
+    COALESCE(p.open_postings, 0) AS open_postings,
+    COALESCE(sc.scouts_sent_30d, 0) AS scouts_sent_30d,
+    COALESCE(ap.applications_30d, 0) AS applications_30d,
+    COALESCE(ap.hires_90d, 0) AS hires_90d,
+    COALESCE(k.mrr, 0) AS mrr
+FROM base AS b
+LEFT JOIN rating AS r ON r.company_key = b.company_key
+LEFT JOIN postings AS p ON p.company_key = b.company_key
+LEFT JOIN scouts AS sc ON sc.company_key = b.company_key
+LEFT JOIN applications AS ap ON ap.company_key = b.company_key
+LEFT JOIN contracts AS k ON k.company_key = b.company_key
+</code></pre>
+
+<p>スパインを <code>dim_company</code> の現在版にし、指標側を全て <code>LEFT JOIN</code> にしているのが要点である。これで ECM の保証（1 行 = 1 エンティティ、<code>COUNT(*)</code> が企業数）が成立し、指標のないスタートアップ企業も 0 で残る。<code>FULL OUTER JOIN</code> のドリルアクロスと違い、行ヘッダが片側に固定されているぶん構造は単純になる。</p>
+
+<p><code>agg_*</code> は正典のファクトではないので <code>audit_key</code> を持たない。ロードの追跡は元ファクト側の <code>audit_key</code>（生成は <code>{{ audit_key() }}</code>。10 回で定義するマクロで、それまでは <code>-1</code>）と <code>dim_audit</code> で辿る。</p>
+
+<h4>schema.yml</h4>
+
+<pre><code>version: 2
+
+models:
+  - name: agg_company_entity
+    description: |
+      企業エンティティ集約（ECM 風 OBT）。1 行 = 現存企業 1 社。
+      ドリルアクロスを事前計算した派生物であり、指標の正本は各ファクト。
+      窓は列名の接尾辞（_30d / _90d）が示す固定窓のみ。
+      このテーブルの avg_overall_score_90d を企業をまたいで再集約してはならない。
+    columns:
+      - name: company_key
+        description: dim_company の is_current 版のキー
+        tests: [unique, not_null]
+      - name: company_id
+        tests: [not_null]
+      - name: review_count_total
+        description: 全期間のクチコミ件数。加法
+        tests: [not_null]
+      - name: avg_overall_score_90d
+        description: |
+          直近 90 日の overall_score 平均。sum_overall_score_90d / review_count_90d。
+          該当クチコミが 0 件なら NULL（0 ではない）。非加法。
+      - name: scouts_sent_30d
+        description: 直近 30 日に当該企業が送信したスカウト数。加法
+      - name: mrr
+        description: 当月の有効契約の monthly_fee 合計。企業をまたいでは加法、月をまたいでは非加法
+
+    tests:
+      - dbt_utils.expression_is_true:
+          expression: "avg_overall_score_90d is null or avg_overall_score_90d between 1.0 and 5.0"
+      - dbt_utils.expression_is_true:
+          expression: "review_count_total &gt;= 0"
+</code></pre>
+
+<h3>5-4. マテリアライズド・ビューで自動維持する選択肢</h3>
+
+<p>BigQuery のマテリアライズド・ビューは、ベーステーブルの変更を検知して差分更新し、ベーステーブルへのクエリを自動で書き換える。dbt では <code>materialized='materialized_view'</code> で扱える。<code>agg_company_rating_daily</code> は単一ファクト・<code>SUM</code>/<code>COUNT</code> のみ・パーティション整合という条件を満たすので候補になる。</p>
+
+<pre><code>-- models/marts/agg_company_rating_daily.sql を MV にする場合
+{{ config(
+    materialized='materialized_view',
+    partition_by={'field': 'rating_date', 'data_type': 'date', 'granularity': 'day'},
+    cluster_by=['company_key'],
+    enable_refresh=true,
+    refresh_interval_minutes=60,
+    on_configuration_change='apply'
+) }}
+
+SELECT
+    f.submitted_date_key AS date_key,
+    f.submitted_date AS rating_date,
+    f.company_key,
+    SUM(f.review_count) AS review_count,
+    SUM(f.score_compensation) AS sum_score_compensation,
+    SUM(f.score_morale) AS sum_score_morale,
+    SUM(f.score_openness) AS sum_score_openness,
+    SUM(f.score_respect) AS sum_score_respect,
+    SUM(f.score_growth_20s) AS sum_score_growth_20s,
+    SUM(f.score_long_term_dev) AS sum_score_long_term_dev,
+    SUM(f.score_compliance) AS sum_score_compliance,
+    SUM(f.score_eval_fairness) AS sum_score_eval_fairness,
+    SUM(f.overall_score) AS sum_overall_score
+FROM {{ ref('fct_review') }} AS f
+GROUP BY 1, 2, 3
+</code></pre>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>MV の制約</th><th>この回のモデルへの影響</th></tr></thead>
+<tbody>
+<tr><td><code>RIGHT</code>/<code>FULL OUTER JOIN</code> と自己結合が不可（<code>LEFT OUTER JOIN</code> と <code>UNION ALL</code> はプレビュー）</td><td>§5-1 のドリルアクロスは MV にできない。<code>company_map</code>（<code>dim_company</code> の自己結合）も不可</td></tr>
+<tr><td>集約は出力そのものでなければならない。集約値をさらに計算・フィルタ・結合できない</td><td><code>SAFE_DIVIDE(sum, count)</code> を MV 内に持てない。04 回の「和と件数だけ持つ」方針と一致する</td></tr>
+<tr><td>使える集約関数は限定（<code>SUM</code>, <code>COUNT</code>, <code>COUNTIF</code>, <code>AVG</code>, <code>MIN</code>, <code>MAX</code>, <code>APPROX_COUNT_DISTINCT</code>, <code>HLL_COUNT.INIT</code> ほか）</td><td>一覧外の <code>COUNT(DISTINCT ...)</code> は不可。近似でよければ <code>APPROX_COUNT_DISTINCT</code>（内部はスケッチ）</td></tr>
+<tr><td>非決定的関数（<code>CURRENT_DATE()</code> など）と UDF、ウィンドウ関数が不可</td><td><code>agg_company_entity</code> の <code>_30d</code> / <code>_90d</code> 窓は <code>CURRENT_TIMESTAMP()</code> 起点なので MV にできない</td></tr>
+<tr><td>MV の <code>partition_by</code> はベーステーブルのパーティションと粒度を合わせる必要がある。MV の上に MV は作れない</td><td><code>rating_date</code> は <code>fct_review</code> の <code>submitted_date</code> と同粒度。<code>agg_company_entity</code> は MV 化した <code>agg_company_rating_daily</code> を参照できなくなる</td></tr>
+<tr><td>定義 SQL は後から変更できない（<code>--full-refresh</code> で drop/create）</td><td>集約定義が動く時期は通常のテーブルで運用し、固まってから MV に移す</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>最後の行が実務上いちばん効く。<code>agg_company_rating_daily</code> を MV にすると <code>agg_company_entity</code> がそれを <code>ref</code> できなくなるため、この回では <code>agg_company_rating_daily</code> は通常のテーブル（09 回で増分）に置き、MV は「単一ファクトの集約を BI が直接叩く」ケースの選択肢として保留する。</p>
+
+<h2>6. 判断基準</h2>
+
+<h3>集約テーブルを持つ条件</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>クエリ頻度</th><th>元ファクト行数</th><th>再集約可能性</th><th>選択</th><th>理由</th></tr></thead>
+<tbody>
+<tr><td>日次以上・定型</td><td>大（億行級）</td><td>和と件数に分解できる／単一ファクト</td><td>BigQuery MV</td><td>自動維持とクエリ書き換えが効く。定義が SQL 1 本に閉じる</td></tr>
+<tr><td>日次以上・定型</td><td>大</td><td>複数ファクト or 現在値解決あり</td><td>dbt table（<code>agg_company_entity</code>）</td><td>MV の制約に当たる。full refresh のコストが許容できるうちはこれで足りる</td></tr>
+<tr><td>日次以上・定型</td><td>大／日々追記</td><td>集約も日付粒度で閉じる</td><td>dbt incremental（<code>insert_overwrite</code>・ルックバック 3 日）</td><td>再実行の冪等性。09 回</td></tr>
+<tr><td>週次以下・探索的</td><td>中</td><td>—</td><td>集約を作らない</td><td>ドリルアクロスのクエリを <code>analyses/</code> に置く。本数増加のコストの方が高い</td></tr>
+<tr><td>任意</td><td>任意</td><td>平均・比率しか持てない</td><td>作らない、または <code>sum</code> + <code>count</code> に分解して作る</td><td>再集約不能な集約は必ず下流で誤用される（04 回）</td></tr>
+<tr><td>任意</td><td>任意</td><td>母集団・日付役割が既存集約と違うだけ</td><td>作らない。既存集約に行ヘッダを足す</td><td>§2(c) の定義ずれを増やさない。ドリルダウンは行ヘッダの追加（Soul 1）</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>エンティティ表に指標を入れる条件</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>条件</th><th>入れてよい</th><th>入れない</th></tr></thead>
+<tbody>
+<tr><td>粒度</td><td>1 エンティティ 1 行が保証でき、<code>COUNT(*)</code> がエンティティ数になる</td><td>行が増えうる（多値属性、履歴版）</td></tr>
+<tr><td>時間窓</td><td>固定窓で足り、列名に窓が現れる（<code>scouts_sent_30d</code>）</td><td>任意期間の指定が要る（ドリルアクロスへ）</td></tr>
+<tr><td>再集約</td><td>この表の上で再集約しない契約が書ける（<code>schema.yml</code> の description に明記）</td><td>企業をまたいで足し直す用途がある</td></tr>
+<tr><td>正本</td><td>元ファクトから毎回作り直せ、この表を消しても復元できる</td><td>この表にしか無い値がある</td></tr>
+<tr><td>非加法指標</td><td><code>sum</code>/<code>count</code> から算出し、0 件は <code>NULL</code> にする</td><td>上流で丸めた平均を持ち込む</td></tr>
+<tr><td>機微</td><td>公開データセットの結合だけで作れる</td><td><code>int_review_member_link</code> のような制限データセットの再結合が要る</td></tr>
+<tr><td>列数</td><td>正典に列挙された範囲。追加は正典改訂として審査</td><td>問いのたびに列を足す（ECM の言う "column overload"）</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>7. 演習</h2>
+
+<h3>(a) 「クチコミ平均が上がった企業は応募率も上がるか」</h3>
+
+<p>この問いに答える SQL の骨格を書け。どのファクトを何で結ぶか、応募率の分母を何にするかを先に決めること。</p>
+
+<details>
+<summary>解答例</summary>
+<p>結ぶのは <code>fct_review</code>（企業×月の <code>sum_overall_score</code> と <code>review_count</code>）と <code>fct_scout</code>（企業×月の送信数）と <code>fct_application_pipeline</code>（企業×月の応募数）の 3 パス。応募率はここでは「送ったスカウト 1 通あたりの応募数」と定義する。ファクト同士は結ばず、§5-1 の <code>drilled</code> を入力にして前月差を取る。</p>
+<pre><code>-- §5-1 の CTE 群（company_map / *_monthly / drilled）をそのまま前置する
+SELECT
+    company_key,
+    month_key,
+    SAFE_DIVIDE(sum_overall_score, review_count) AS avg_score,
+    SAFE_DIVIDE(sum_overall_score, review_count)
+        - LAG(SAFE_DIVIDE(sum_overall_score, review_count)) OVER w AS d_avg_score,
+    SAFE_DIVIDE(application_count, scout_count) AS apply_rate,
+    SAFE_DIVIDE(application_count, scout_count)
+        - LAG(SAFE_DIVIDE(application_count, scout_count)) OVER w AS d_apply_rate
+FROM drilled
+WINDOW w AS (PARTITION BY company_key ORDER BY month_key)
+</code></pre>
+<p>上に <code>CORR(d_avg_score, d_apply_rate)</code> を被せれば相関が出る。ただし <code>FULL OUTER JOIN</code> は「どちらかにデータがある月」しか作らないので、クチコミも応募も 0 の月は行ごと欠け、<code>LAG</code> が飛ぶ。厳密にやるなら <code>dim_date</code> から企業 × 月のスパインを作り、そこへ <code>drilled</code> を <code>LEFT JOIN</code> する。</p>
+</details>
+
+<h3>(b) <code>avg_overall_score_90d</code> は 04 回の原則と矛盾しないか</h3>
+
+<p>04 回の固定判断は「集約テーブルは <code>avg_*</code> を持たず <code>sum_*</code> + <code>count</code> を持つ」である。<code>agg_company_entity</code> が <code>avg_overall_score_90d</code> を持つのは違反か。違反でないとすれば、どの条件が効いているか。</p>
+
+<details>
+<summary>解答例</summary>
+<p>違反ではない。04 回の原則が守るのは「再集約可能性」であり、再集約しないと契約できる終端テーブルでは要件が外れる。§6「エンティティ表に指標を入れる条件」の 3 行（粒度・再集約・非加法指標）を適用した結果である。</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>効いている条件</th><th>成立の仕方</th><th>破れたら</th></tr></thead>
+<tbody>
+<tr><td>1 エンティティ 1 行の終端テーブル</td><td>スパインが <code>dim_company</code> の <code>is_current</code>。企業をまたぐ再集約の用途を持たせない</td><td>業界別平均を <code>AVG(avg_overall_score_90d)</code> で出され、企業ごとの件数差が消える</td></tr>
+<tr><td>算出は <code>sum</code>/<code>count</code> から</td><td><code>SAFE_DIVIDE(sum_overall_score_90d, review_count_90d)</code>。日次平均の平均を取らない</td><td>1 件の日と 50 件の日が同じ重みになる</td></tr>
+<tr><td>窓が固定で列名に現れる</td><td><code>_90d</code>。任意期間の平均は <code>agg_company_rating_daily</code> から作る</td><td>「平均」が何期間かの合意が失われる</td></tr>
+</tbody>
+</table>
+</div>
+<p>正本は <code>agg_company_rating_daily</code>（さらに遡れば <code>fct_review</code>）のままである。業界別・グループ別の平均が要るときは、そちらから <code>SUM(sum_overall_score)/SUM(review_count)</code> で作る。</p>
+</details>
+
+<h3>(c) <code>agg_member_entity</code> には何を持てるか</h3>
+
+<p><code>dim_member</code> を中心にした会員版のエンティティ集約を検討する。匿名性の固定判断（<code>fct_review</code> は <code>member_key</code> を持たない）を踏まえ、持てる指標と持てない指標を分けよ。</p>
+
+<details>
+<summary>解答例</summary>
+<p><code>agg_member_entity</code> は正典未登録の候補である（この回の report に正典への変更提案として記録）。スパインは <code>dim_member</code> の <code>is_current</code> 版 1 行。</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>候補指標</th><th>元ファクト</th><th>可否</th></tr></thead>
+<tbody>
+<tr><td>受信スカウト数（30 日）</td><td><code>fct_scout</code></td><td>✓ <code>member_key</code> を全 SCD2 版から現在版に寄せる</td></tr>
+<tr><td>開封率・返信率（90 日）</td><td><code>fct_scout_funnel</code></td><td>✓ ただし <code>SUM(is_opened)</code> と件数を別列で持ち、比率は下流で作る</td></tr>
+<tr><td>応募数（30 日）・入社（90 日）</td><td><code>fct_application_pipeline</code></td><td>✓ <code>M001</code> の <code>P001</code>（6/23 応募・8/1 入社）が両方に立つ</td></tr>
+<tr><td>閲覧企業数（30 日）</td><td><code>fct_page_view</code></td><td>△ <code>COUNT(DISTINCT company_key)</code> は再集約不能。持つなら会員単位の終端値と割り切る</td></tr>
+<tr><td>投稿クチコミ数・平均スコア</td><td><code>fct_review</code></td><td>✗ <code>member_key</code> が無い。<code>int_review_member_link</code> の再結合は制限データセット外に出せない</td></tr>
+<tr><td>希望職種</td><td><code>br_member_desired_job_category</code></td><td>△ 多値。1 行 1 会員を壊すので <code>priority = 1</code> の 1 件だけを属性として持つ</td></tr>
+<tr><td>現在の年収帯・転職意欲</td><td><code>dim_member_profile_mini</code></td><td>✓ 指標ではなく属性。<code>M001</code> は 6/15 以降 <code>600_800</code>/<code>active</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>クチコミ由来の指標を 1 列でも入れた瞬間に、会員とクチコミの結合結果を公開層へ持ち出したことになる。少人数企業では属性の組合せで投稿者が特定されうるため、この列は「集計値だから安全」とは言えない。会員×クチコミの分析は <code>int_review_member_link</code> 側に閉じたままにする。</p>
+</details>
+
+<h2>8. 参考: 手元の基盤ではどうか</h2>
+
+<div class="aside">
+<p><code>dbt_logs_analysis</code> の <code>mart_url_performance</code> と <code>mart_error_analysis</code> は、どちらも <code>url_path</code> と日付を行ヘッダに持つ。この 2 本を横に並べるドリルアクロスは形の上では成立する。ただし共通ディメンションのテーブルが無く、両者が <code>stg_access_logs</code> から独立に <code>url_path</code> を導出しているため、片方の正規化ルールだけが変わると「同じ名前で違うドメイン」になる（Soul 2 の conformed 条件が破れる）。</p>
+<p><code>news_pipeline</code> の <code>summaries</code> と <code>raw_articles</code> は <code>article_id</code> で横に並ぶが、日時列が <code>raw_articles</code> 側にしかない。日付を行ヘッダにするには必ず片側結合が要る状態で、<code>dim_date</code> に相当する共通軸が存在しない。この回の基準で言えば、日付がコンフォームドディメンションになっていない。</p>
+<p>試せる種: <code>dim_url_path</code> を 1 本作って両マートから <code>ref</code> し、<code>mart_url_performance</code> と <code>mart_error_analysis</code> を <code>FULL OUTER JOIN USING (url_path, date)</code> で並べる analysis を書く。</p>
+</div>
+
+<h2>参照文献</h2>
+
+<ul class="ref">
+<li>Ralph Kimball, Margy Ross, <em>The Data Warehouse Toolkit</em>, 3rd ed., ch.4（Inventory: エンタープライズ・データウェアハウス・バスアーキテクチャ、コンフォームドディメンション、縮約ディメンション、コンフォームドファクト、ドリルアクロス） — <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/data-warehouse-dw-toolkit/">kimballgroup.com</a></li>
+<li>Ralph Kimball, The Soul of the Data Warehouse, Part 1: Drilling Down（2003） — <a href="https://www.kimballgroup.com/2003/03/the-soul-of-the-data-warehouse-part-one-drilling-down/">kimballgroup.com</a></li>
+<li>Ralph Kimball, The Soul of the Data Warehouse, Part 2: Drilling Across（2003） — <a href="https://www.kimballgroup.com/2003/04/the-soul-of-the-data-warehouse-part-two-drilling-across/">kimballgroup.com</a></li>
+<li>Margy Ross, Design Tip #135: Conformed Dimensions as the Foundation for Agile Data Warehousing（2011） — <a href="https://www.kimballgroup.com/2011/06/design-tip-135-conformed-dimensions-as-the-foundation-for-agile-data-warehousing/">kimballgroup.com</a></li>
+<li>Maxime Beauchemin, Entity-Centric Data Modeling for Analytics（Preset, 2023） — <a href="https://preset.io/blog/introducing-entity-centric-data-modeling-for-analytics/">preset.io</a></li>
+<li>Hightouch, A Guide to Modern Data Warehouse Modelling — Part 2 — <a href="https://hightouch.com/blog/data-warehouse-modelling-part-2">hightouch.com</a></li>
+</ul>
+
+</body>
+</html>

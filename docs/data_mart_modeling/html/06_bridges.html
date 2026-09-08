@@ -41,7 +41,7 @@
 <body>
 
 <h1>多対多・不揃い階層・異種ディメンション</h1>
-<p class="meta">データマート設計 06 ／ 参照: DWT ch.6–8, Design Tip #142, Kimball Dimensional Modeling Techniques ／ 再解釈: BigQuery ネスト・繰り返し列</p>
+<p class="meta">データマート設計 06 ／ 参照: DWT ch.7 ch.8 ch.10, Design Tip #142, Kimball Dimensional Modeling Techniques ／ 再解釈: BigQuery ネスト・繰り返し列</p>
 
 <h2>1. この回が決めること</h2>
 
@@ -65,20 +65,22 @@
 
 <h3>(a) 重みなしでブリッジを結合してスカウトが 2 倍になる</h3>
 
-<p>2026-06 に <code>M002</code> 宛のスカウトが 10 件送られたとする（<code>fct_scout</code> に 10 行）。<code>M002</code> の希望職種は 2 件なので <code>br_member_desired_job_category</code> には <code>M002</code> の行が 2 本ある。</p>
+<p>正典の <code>S003</code>（<code>AG02</code> → <code>M002</code>、<code>J001</code>、2026-06-18 送信）は <code>fct_scout</code> の 1 行である。<code>M002</code> の希望職種は <code>ENG-BE</code> と <code>ENG-DATA</code> の 2 件なので、<code>br_member_desired_job_category</code> には <code>M002</code> の行が 2 本ある。この 1 行に重みなしでブリッジを結合すると 2 行になる。</p>
 
 <div class="table-wrap">
 <table>
 <thead><tr><th>クエリ</th><th>結果</th><th>正しい値</th></tr></thead>
 <tbody>
-<tr><td><code>SUM(scout_count)</code>（<code>fct_scout</code> のみ）</td><td>10</td><td>10</td></tr>
-<tr><td>ブリッジを結合して <code>SUM(scout_count)</code></td><td><strong>20</strong></td><td>10</td></tr>
-<tr><td>ブリッジを結合して <code>SUM(scout_count * weighting_factor)</code></td><td>10</td><td>10</td></tr>
+<tr><td><code>SUM(scout_count)</code>（<code>fct_scout</code> のみ）</td><td>1</td><td>1</td></tr>
+<tr><td>ブリッジを結合して <code>SUM(scout_count)</code></td><td><strong>2</strong></td><td>1</td></tr>
+<tr><td>ブリッジを結合して <code>SUM(scout_count * weighting_factor)</code></td><td>1</td><td>1</td></tr>
 </tbody>
 </table>
 </div>
 
-<p>職種別に割ると、重み付きは <code>ENG-BE</code> 5 件 / <code>ENG-DATA</code> 5 件で合計 10。重みなしは 10 / 10 で合計 20。壊れるのは数字そのものではなく、<strong>「明細を足すと総数になる」という読み手の前提</strong>である。ダッシュボードの上段に「6 月のスカウト送信数 1,240 件」を置き、下段に職種別の内訳を置くと、内訳の合計が 1,240 を超える。</p>
+<p>職種別に割ると、重み付きは <code>ENG-BE</code> 0.5 / <code>ENG-DATA</code> 0.5 で合計 1。重みなしは 1 / 1 で合計 2。</p>
+
+<p>壊れるのは数字そのものではなく、<strong>「明細を足すと総数になる」という読み手の前提</strong>である。<code>S003</code> と同型のスカウトが 6 月に 1,240 件あれば、上段の「6 月のスカウト送信数 1,240 件」に対して下段の職種別内訳の合計が 1,240 を超える。</p>
 
 <h3>(b) level3 固定で <code>ENG-DATA</code> が NULL に落ちる</h3>
 
@@ -123,16 +125,19 @@
 
 <div class="aside kimball">
 <p><strong>Kimball Dimensional Modeling Techniques より。</strong></p>
-<p>不揃い階層について: <em>“All these objections can be overcome in relational databases by modeling a ragged hierarchy with a specially constructed bridge table. This bridge table contains a row for every possible path in the ragged hierarchy.”</em>（SQL の再帰拡張では代替階層の差し替え・共有所有・時間変化が扱えない、その全部をブリッジ表が解く）</p>
+<p>不揃い階層について: <em>“All these objections can be overcome in relational databases by modeling a ragged hierarchy with a specially constructed bridge table. This bridge table contains a row for every possible path in the ragged hierarchy and enables all forms of hierarchy traversal to be accomplished with standard SQL rather than using special language extensions.”</em>（SQL の再帰拡張では代替階層の差し替え・共有所有・時間変化が扱えない。その全部をブリッジ表が解き、しかも標準 SQL のまま辿れる）</p>
 <p>異種ディメンションについて: <em>“The solution is to build a single supertype fact table that has the intersection of the facts from all the account types (along with a supertype dimension table containing the common attributes), and then systematically build separate fact tables (and associated dimension tables) for each of the subtypes.”</em></p>
 <p>多値について: <em>“the multivalued dimension must be attached to the fact table through a group dimension key to a bridge table with one row for each simultaneous diagnosis in a group.”</em> さらに、両端が Type 2 の場合はブリッジ自身に有効/失効タイムスタンプが要り、<em>“the requesting application must constrain the bridge table to a specific moment in time”</em>。</p>
 </div>
 
 <div class="aside kimball">
-<p><strong>DT#142「Building Bridges」（Warren Thornthwaite）。</strong>ブリッジを 2 種類に分ける。1 つは<strong>静的</strong>ブリッジで、1 ファクト行に紐づく値の集合が時間変化しない（救急外来の受診時診断）。もう 1 つは<strong>時間可変</strong>ブリッジで、関係が測定対象のトランザクションとは独立に存在し、時間で変わる（顧客と口座）。作り方は、値の組合せを重複排除して<strong>グループ</strong>を作り、グループに一意キーを振り、それを行方向に展開してブリッジにする。この Design Tip 自身は静的ブリッジの手順だけを扱い、重み付けには触れていない。重み付け係数と impact / weighted の対比は DWT の口座-顧客ブリッジ（金融サービスの章）側の議論。</p>
+<p><strong>DT#142「Building Bridges」（Warren Thornthwaite）。</strong>ブリッジを 2 種類に分ける。1 つは<strong>静的</strong>ブリッジで、1 ファクト行に紐づく値の集合が時間変化しない（救急外来の受診時診断）。もう 1 つは<strong>時間可変</strong>ブリッジで、関係が測定対象のトランザクションとは独立に存在し、時間で変わる（顧客と口座）。</p>
+<p>作り方は、値の組合せを重複排除して<strong>グループ</strong>を作り、グループに一意キーを振り、それを行方向に展開してブリッジにする。</p>
+<p>この Design Tip 自身は静的ブリッジの手順だけを扱い、重み付けには触れていない。重み付け係数と impact / weighted の対比は <strong>DWT ch.10（Financial Services）</strong>の口座-顧客ブリッジ側の議論。</p>
 </div>
 
-<p>CareerVoice の 3 つを、この表のどこに当てるか。<strong>希望職種は静的ブリッジ</strong>（ソースの <code>member_desired_job_categories</code> に履歴が無く、<code>updated_at</code> しか持たない）。<strong>企業グループは時間可変の不揃い階層</strong>（<code>C003</code> が <code>C001</code> から離脱しうる）。<strong>職種はわずかに不揃いな階層</strong>で、深さの幅が 1〜3 に収まるので force-fit して <code>dim_job_category</code> に平坦化する。<strong>スカウト送信主体は supertype</strong>で、企業とエージェントの共通属性（名前・種別）に対して固有属性が <code>company_industry</code> と <code>agency_tier</code> の 2 列しかないので、subtype 表を分けずに 1 本に畳む。</p>
+<p>CareerVoice の 3 つを、この表のどこに当てるか。<strong>希望職種は静的ブリッジ</strong>（ソースの <code>member_desired_job_categories</code> に履歴が無く、<code>updated_at</code> しか持たない）。<strong>企業グループは時間可変の不揃い階層</strong>（<code>C003</code> が <code>C001</code> から離脱しうる）。</p>
+<p><strong>職種はわずかに不揃いな階層</strong>で、深さの幅が 1〜3 に収まるので force-fit して <code>dim_job_category</code> に平坦化する。<strong>スカウト送信主体は supertype</strong>で、企業とエージェントの共通属性（名前・種別）に対して固有属性が <code>company_industry</code> と <code>agency_tier</code> の 2 列しかないので、subtype 表を分けずに 1 本に畳む。</p>
 
 <h2>4. 現代の再解釈</h2>
 
@@ -147,7 +152,7 @@
 </ul>
 </div>
 
-<p>下の図は同じ問い（「<code>M002</code> 宛のスカウトを希望職種別に割る」）を 2 通りの物理設計で表したもの。ブリッジは行を 2 本に増やし、ARRAY は <code>dim_member</code> の 1 行に畳む。<strong>どちらも <code>weight</code> を持つ</strong>。重みは物理設計ではなく意味の問題なので、ARRAY にしても消えない。</p>
+<p>下の図は同じ問い（「<code>S003</code> のような <code>M002</code> 宛のスカウトを希望職種別に割る」）を 2 通りの物理設計で表したもの。ブリッジは行を 2 本に増やし、ARRAY は <code>dim_member</code> の 1 行に畳む。<strong>どちらも <code>weight</code> を持つ</strong>。重みは物理設計ではなく意味の問題なので、ARRAY にしても消えない。</p>
 
 <svg id="dg-brv" viewBox="0 0 800 424" width="100%"
      style="max-width:800px;height:auto;display:block"
@@ -195,7 +200,7 @@
 
   <rect class="zone" x="432" y="56" width="336" height="320" rx="8"/>
   <rect class="mask" x="448" y="48" width="104" height="16"/>
-  <text class="tag-accent" x="452" y="59">ARRAY IN DIM</text>
+  <text class="tag" x="452" y="59">ARRAY IN DIM</text>
 
   <line class="lead" x1="200" y1="144" x2="200" y2="176"/>
   <line class="lead" x1="200" y1="264" x2="200" y2="296"/>
@@ -203,7 +208,7 @@
 
   <rect class="box-soft" x="56" y="88" width="288" height="56" rx="6"/>
   <text class="name" x="200" y="114" text-anchor="middle">fct_scout</text>
-  <text class="sub" x="200" y="132" text-anchor="middle">member_key = M002</text>
+  <text class="sub" x="200" y="132" text-anchor="middle">S003 / member_key = M002</text>
 
   <rect class="box-focal" x="56" y="176" width="288" height="88" rx="6"/>
   <text class="name" x="200" y="200" text-anchor="middle">br_member_desired_job_category</text>
@@ -216,7 +221,7 @@
 
   <rect class="box-soft" x="456" y="88" width="288" height="56" rx="6"/>
   <text class="name" x="600" y="114" text-anchor="middle">fct_scout</text>
-  <text class="sub" x="600" y="132" text-anchor="middle">member_key = M002</text>
+  <text class="sub" x="600" y="132" text-anchor="middle">S003 / member_key = M002</text>
 
   <rect class="box-focal" x="456" y="176" width="288" height="176" rx="6"/>
   <text class="name" x="600" y="200" text-anchor="middle">dim_member</text>
@@ -238,7 +243,7 @@
 <tr><td>結合コスト</td><td>ブリッジ 1 本の追加は結合 2 回分の負担。避けられるなら避ける</td><td><code>UNNEST</code> は同一テーブル内の展開でシャッフルが起きない。スキャン課金も ARRAY 列を読むぶんだけ</td><td>CareerVoice の規模ではどちらも無視できる。<strong>性能は決め手にならない</strong></td></tr>
 <tr><td>重み</td><td>ブリッジ行に <code>weighting_factor</code>。合計 1</td><td><code>STRUCT</code> の中に <code>weight FLOAT64</code>。持たないと同じ二重計上が起きる</td><td><strong>そのまま残る</strong>。物理設計ではなく意味の問題</td></tr>
 <tr><td>グループキー</td><td>組合せを重複排除してグループ表を作り、ファクトはグループキーを持つ（DT#142）</td><td>不要。ARRAY はファクトやディメンションの行に直接ぶら下がる</td><td>組合せの数が少なく再利用されるなら、グループ化はストレージではなく<strong>一貫性</strong>のために効く</td></tr>
-<tr><td>BI からの見え方</td><td>ブリッジは普通の表。BI ツールが素の JOIN で扱える</td><td>繰り返しフィールドは多くの BI ツールがディメンションとして直接扱えない。カスタムクエリで <code>UNNEST</code> して平坦化するか、モデリング層（LookML 等）で展開済みビューを定義する必要がある</td><td><strong>ここが最大の差</strong>。セルフサービス BI を前提にするならブリッジが強い</td></tr>
+<tr><td>BI からの見え方</td><td>ブリッジは普通の表。BI ツールが素の JOIN で扱える</td><td>繰り返しフィールドを「ディメンションとして直接選べるか」は BI ツールごとに違う。直接選べないツールでは、カスタムクエリで <code>UNNEST</code> して平坦化するか、モデリング層（LookML 等）で展開済みビューを先に定義することになる</td><td><strong>ここが最大の差</strong>。セルフサービス BI を前提にするならブリッジが強い</td></tr>
 <tr><td>更新</td><td>希望職種が 1 件変わればブリッジの 1 行を差し替える</td><td>配列は部分更新できない。1 要素の変更で <code>dim_member</code> の行全体を書き直す。SCD2 と組むと版が丸ごと 1 本増える</td><td>更新頻度が高い多値は ARRAY に向かない</td></tr>
 </tbody>
 </table>
@@ -279,8 +284,11 @@ INNER JOIN {{ ref('dim_job_category') }} AS jc
     ON w.job_category_code = jc.job_category_code
 </code></pre>
 
+<p>ここでは <code>member_key</code> がグループキーを兼ねる。会員ごとに希望職種のグループが 1 つしかないので、DT#142 の「組合せを重複排除してグループを作る」段は利得を生まない。</p>
+
 <div class="aside kimball">
-<p><strong>ここで 1 つ判断している。</strong>DT#142 の分類では、関係が時間変化するなら時間可変ブリッジ（有効/失効タイムスタンプ付き）が要る。しかしソースの <code>member_desired_job_categories</code> は <code>updated_at</code> しか持たず、過去の希望職種は残っていない。<strong>取れない履歴は作れない</strong>ので、現在値の希望職種を <code>dim_member</code> の全版に複製する静的ブリッジにする。代償は「2026-06 時点で <code>M002</code> が何を希望していたか」に答えられないこと。答える必要が出たらソース側にスナップショット（<code>snap_*</code>）を足すのが先で、ブリッジの形を変えるのは後。</p>
+<p><strong>ここで 1 つ判断している。</strong>DT#142 の分類では、関係が時間変化するなら時間可変ブリッジ（有効/失効タイムスタンプ付き）が要る。しかしソースの <code>member_desired_job_categories</code> は <code>updated_at</code> しか持たず、過去の希望職種は残っていない。</p>
+<p><strong>取れない履歴は作れない</strong>ので、現在値の希望職種を <code>dim_member</code> の全版に複製する静的ブリッジにする（正典もこの展開を明記している）。代償は「2026-06 時点で <code>M002</code> が何を希望していたか」に答えられないこと。答える必要が出たらソース側にスナップショット（<code>snap_*</code>）を足すのが先で、ブリッジの形を変えるのは後。</p>
 </div>
 
 <pre><code>-- 希望職種別のスカウト送信数。impact と weighted を 1 クエリで並べる
@@ -409,7 +417,7 @@ INNER JOIN flags AS fd ON p.descendant_company_id = fd.company_id
 INNER JOIN flags AS fa ON p.ancestor_company_id = fa.company_id
 </code></pre>
 
-<p>BigQuery の <code>WITH RECURSIVE</code> は、再帰項が CTE を<strong>ちょうど 1 回</strong>参照すること、<code>UNION ALL</code> で基底項と繋ぐこと、再帰項に集計関数・分析関数・<code>LIMIT</code> を置かないことを要求する。反復上限は 500 で、それを超えるとエラーで止まる。<strong>この上限が実質的な循環参照検出になる</strong>（<code>C001</code> の親を <code>C003</code> にしてしまうと、エラーで落ちる。無限ループにはならない）。</p>
+<p>BigQuery の <code>WITH RECURSIVE</code> は、再帰項が CTE を<strong>ちょうど 1 回</strong>参照すること、<code>UNION ALL</code> で基底項と繋ぐこと、再帰項に集計関数・分析関数・<code>LIMIT</code> を置かないことを要求する。反復上限は 500 で、それを超えるとエラーで止まる。<code>C001</code> の親を <code>C003</code> にして循環を作ってしまった場合も、新しい行が出続けて 500 反復に達しエラーで落ちる。<strong>無限ループにはならない。</strong></p>
 
 <pre><code>-- 「C001 グループのクチコミ数」。C001 自身 + C003 が 1 回ずつ数えられる
 SELECT
@@ -432,15 +440,19 @@ GROUP BY anc.name
 <pre><code>-- models/marts/dim_scout_sender.sql
 {{ config(materialized='table') }}
 
+-- 版（valid_from / valid_to）は 05回の snapshot から受け取る。
+-- supertype 化はその上で、列を揃えて UNION ALL するだけ
 WITH company_senders AS (
 
     SELECT
-        'company'            AS sender_type,
-        c.company_id         AS sender_id,
-        c.name               AS sender_name,
-        i.name               AS company_industry,   -- company 固有
-        CAST(NULL AS STRING) AS agency_tier         -- agent 固有 → NULL
-    FROM {{ ref('stg_careervoice__companies') }} AS c
+        'company'                                       AS sender_type,
+        c.company_id                                    AS sender_id,
+        c.name                                          AS sender_name,
+        i.name                                          AS company_industry,   -- company 固有
+        CAST(NULL AS STRING)                            AS agency_tier,        -- agent 固有 → NULL
+        c.dbt_valid_from                                AS valid_from,
+        IFNULL(c.dbt_valid_to, TIMESTAMP '9999-12-31')  AS valid_to
+    FROM {{ ref('snap_companies') }} AS c
     LEFT JOIN {{ ref('stg_careervoice__industries') }} AS i
         ON c.industry_code = i.industry_code
 
@@ -449,12 +461,14 @@ WITH company_senders AS (
 agent_senders AS (
 
     SELECT
-        'agent'              AS sender_type,
-        a.agent_id           AS sender_id,
-        a.name               AS sender_name,
-        CAST(NULL AS STRING) AS company_industry,
-        ag.tier              AS agency_tier
-    FROM {{ ref('stg_careervoice__agents') }} AS a
+        'agent'                                         AS sender_type,
+        a.agent_id                                      AS sender_id,
+        a.name                                          AS sender_name,
+        CAST(NULL AS STRING)                            AS company_industry,
+        ag.tier                                         AS agency_tier,
+        a.dbt_valid_from                                AS valid_from,
+        IFNULL(a.dbt_valid_to, TIMESTAMP '9999-12-31')  AS valid_to
+    FROM {{ ref('snap_agents') }} AS a
     INNER JOIN {{ ref('stg_careervoice__agencies') }} AS ag
         ON a.agency_id = ag.agency_id
 
@@ -469,17 +483,25 @@ unioned AS (
 )
 
 SELECT
-    -- サロゲートキーの生成方式そのものは 03回の判断に従う
-    {{ dbt_utils.generate_surrogate_key(['sender_type', 'sender_id']) }} AS scout_sender_key,
+    -- SCD2 なので、ハッシュの入力に版を識別する valid_from を必ず入れる（03回の結論）。
+    -- 生成方式（FARM_FINGERPRINT / generate_surrogate_key）は 03回の判断に従う
+    FARM_FINGERPRINT(
+        CONCAT(sender_type, '|', sender_id, '|', CAST(valid_from AS STRING))
+    ) AS scout_sender_key,
     sender_type,
     sender_id,
     sender_name,
     company_industry,
-    agency_tier
+    agency_tier,
+    valid_from,
+    valid_to,
+    valid_to = TIMESTAMP '9999-12-31' AS is_current
 FROM unioned
 </code></pre>
 
-<p><code>UNION ALL</code> の両側で列の順序・型を完全に揃えるのがこのパターンの全部で、<strong>固有属性は「無い側で <code>CAST(NULL AS …)</code>」</strong>と書く。<code>SELECT *</code> で繋ぐなら位置が意味を持つので、列を足すときは両側を同時に直す。<code>valid_from</code> / <code>valid_to</code> / <code>is_current</code> の付与（正典では <code>dim_scout_sender</code> は SCD2）は 05回の方式に従う。</p>
+<p><code>UNION ALL</code> の両側で列の順序・型を完全に揃えるのがこのパターンの全部で、<strong>固有属性は「無い側で <code>CAST(NULL AS …)</code>」</strong>と書く。<code>SELECT *</code> で繋ぐなら位置が意味を持つので、列を足すときは両側を同時に直す。</p>
+<p><strong>キーの入力に <code>valid_from</code> を入れるのは省略可能なオプションではない。</strong>正典で <code>dim_scout_sender</code> は SCD2 なので、自然キー（<code>sender_type</code>, <code>sender_id</code>）だけでハッシュすると同じ送信主体の全版が同一の <code>scout_sender_key</code> を持つ。<code>fct_scout</code> を結合した瞬間に 1 スカウトが版の数だけ増え、§2(a) と同じ二重計上が supertype 側で起きる。</p>
+<p><code>agency_tier</code> は現在値を引いている。エージェンシーの tier 変更でも版を作るなら、そちら側も snapshot して版に展開する（05回）。</p>
 
 <p>属性の NULL 率が高い supertype は、BI で「業種で絞ると agent 発のスカウトが全部消える」事故を生む。防ぐのは列名の規律で、<strong>片方にしか無い属性は名前に出自を残す</strong>（<code>company_industry</code>、<code>agency_tier</code>）。共通属性のつもりで <code>industry</code> と名付けると、読み手は両方に入っていると思う。</p>
 
@@ -514,15 +536,25 @@ desired AS (
 
 member_versions AS (
 
-    -- dim_member の既存本体（SCD2 版の会員行）。この対案では一切変えない
-    SELECT * FROM {{ ref('snap_members') }}
+    -- dim_member の既存本体。05回の SCD2 変換（snapshot → 版付きキーの付与）まで
+    -- 済んだ会員行。この対案では一切変えない
+    SELECT
+        FARM_FINGERPRINT(
+            CONCAT(member_id, '|', CAST(dbt_valid_from AS STRING))
+        ) AS member_key,
+        member_id,
+        -- 属性列（birth_year, prefecture, region, …）は省略
+        dbt_valid_from                               AS valid_from,
+        IFNULL(dbt_valid_to, TIMESTAMP '9999-12-31') AS valid_to,
+        dbt_valid_to IS NULL                         AS is_current
+    FROM {{ ref('snap_members') }}
 
 )
 
 SELECT
     m.*,
-    -- 希望を登録していない会員は NULL ではなく空配列。BigQuery は
-    -- NULL 配列を読み戻すと空配列になるので、型付き空配列で明示的に揃える
+    -- 希望を登録していない会員は NULL ではなく空配列。クエリ内では NULL 配列と
+    -- 空配列は別値なので、下流で取り違えないようここで揃える
     IFNULL(
         d.desired_job_categories,
         ARRAY&lt;STRUCT&lt;code STRING, priority INT64, weight FLOAT64&gt;&gt;[]
@@ -547,7 +579,13 @@ WHERE f.sent_date BETWEEN DATE '2026-06-01' AND DATE '2026-06-30'
 GROUP BY jc.level2_name
 </code></pre>
 
-<p>結果は (a) と同じ。差は 3 点ある。<strong>1.</strong> <code>CROSS JOIN UNNEST</code> は空配列の行を落とす（ブリッジへの <code>INNER JOIN</code> と同じ挙動）。希望職種を登録していない会員のスカウトも数えたいなら <code>LEFT JOIN UNNEST(…) AS d</code> にする。<strong>2.</strong> <code>weight</code> は <code>STRUCT</code> の中にあるので、書き忘れの結果は (a) と同じ二重計上になる。ARRAY にしても重みの規律は緩まない。<strong>3.</strong> この <code>UNNEST</code> を BI ツールのセルフサービス画面から書かせることはできない。カスタムクエリかモデリング層のどちらかで、誰かが先に平坦化しておく必要がある。</p>
+<p>結果は (a) と同じ。差は 3 点ある。</p>
+
+<ol>
+<li><code>CROSS JOIN UNNEST</code> は空配列の行を落とす（ブリッジへの <code>INNER JOIN</code> と同じ挙動）。希望職種を登録していない会員のスカウトも数えたいなら <code>LEFT JOIN UNNEST(…) AS d</code> にする。</li>
+<li><code>weight</code> は <code>STRUCT</code> の中にあるので、書き忘れの結果は (a) と同じ二重計上になる。ARRAY にしても重みの規律は緩まない。</li>
+<li>この <code>UNNEST</code> を誰が書くかが変わる。BI のセルフサービス画面が繰り返しフィールドを直接扱えないなら、カスタムクエリかモデリング層のどちらかで、誰かが先に平坦化しておく必要がある。</li>
+</ol>
 
 <h2>6. 判断基準</h2>
 
@@ -556,9 +594,9 @@ GROUP BY jc.level2_name
 <table>
 <thead><tr><th>多値の個数の分布</th><th>BI の <code>UNNEST</code> 可否</th><th>更新頻度</th><th>選択</th><th>理由</th></tr></thead>
 <tbody>
-<tr><td>上限が仕様で決まっている（希望職種は <code>priority</code> 1..3）</td><td>セルフサービス BI が直結する（<code>UNNEST</code> 不可）</td><td>低</td><td><strong>ブリッジ</strong></td><td>素の JOIN で見える。CareerVoice の決定はこれ</td></tr>
+<tr><td>上限が仕様で決まっている（希望職種は <code>priority</code> 1..3）</td><td>セルフサービス BI が直結する（<code>UNNEST</code> を書かせられない）</td><td>低</td><td><strong>ブリッジ</strong></td><td>素の JOIN で見える。CareerVoice の決定はこれ</td></tr>
 <tr><td>同上</td><td>クエリは dbt / モデリング層が書く</td><td>低</td><td><strong>ARRAY</strong></td><td>結合が 1 つ減り、行数が増えない</td></tr>
-<tr><td>数十〜数百（閲覧履歴、応募履歴）</td><td>問わない</td><td>高</td><td><strong>別ファクト表</strong></td><td>ディメンションが肥大する。ガイドが明示的に外す高カーディナリティ</td></tr>
+<tr><td>数十〜数百（閲覧履歴、応募履歴）</td><td>問わない</td><td>問わない</td><td><strong>別ファクト表</strong></td><td>更新頻度ではなく<strong>カーディナリティ</strong>で落ちる。ガイドが明示的に外す形で、ディメンションが肥大する</td></tr>
 <tr><td>個数が可変で頻繁に変わる</td><td>問わない</td><td>高</td><td><strong>ブリッジ</strong></td><td>ARRAY は部分更新できず、1 要素の変更で行全体を書き直す</td></tr>
 <tr><td>関係自体が時間変化し、過去の状態を問う</td><td>問わない</td><td>問わない</td><td><strong>時間可変ブリッジ</strong></td><td>有効/失効タイムスタンプを持てるのはブリッジだけ（DT#142）</td></tr>
 </tbody>
@@ -574,7 +612,7 @@ GROUP BY jc.level2_name
 <tr><td>1〜3 で幅が狭い（<code>job_categories</code>）</td><td>同上</td><td><strong>平坦化 + 終端埋め</strong></td><td><code>dim_job_category</code>。<code>level3_name</code> を <code>level2_name</code> で埋め、<code>leaf_level</code> に実際の終端を残す（DT#43）</td></tr>
 <tr><td>不定。買収で伸びる（企業グループ）</td><td>「<code>C001</code> 配下の全社を合計」</td><td><strong>階層ブリッジ</strong></td><td>全経路 1 行。<code>depth</code> でレベル別にも切れる</td></tr>
 <tr><td>不定だが「祖先の集合」しか要らない</td><td>「<code>C001</code> 傘下かどうか」</td><td><strong>pathstring / 祖先 ARRAY</strong></td><td>ブリッジより軽い。代替階層の差し替えは捨てる</td></tr>
-<tr><td>共有所有（1 社が複数の親を持つ）</td><td>任意</td><td><strong>ブリッジ一択</strong></td><td>再帰 CTE でも pathstring でも表現できない。加えて重み付けが要る</td></tr>
+<tr><td>共有所有（1 社が複数の親を持つ）</td><td>任意</td><td><strong>ブリッジ一択</strong></td><td>クエリ時に親子表を辿るだけでは解けず（pathstring も同じ）、あり得る全経路を持つ表が要る。再帰 CTE は §5(b) と同じくその<strong>生成手段</strong>としては使える。経路が複数になるので重み付けも要る</td></tr>
 <tr><td>階層自体が時間変化する</td><td>「2026-01 時点のグループで集計」</td><td><strong>ブリッジ + 有効期間</strong></td><td>祖先-子孫の行に <code>valid_from</code>/<code>valid_to</code>。§7(b) で扱う</td></tr>
 </tbody>
 </table>
@@ -612,7 +650,8 @@ GROUP BY jc.level2_name
 </tbody>
 </table>
 </div>
-<p><strong>重みは持つが、既定の見せ方は impact。</strong>「残業少なめのタグが付いたクチコミは何件か」が主な問いで、合計が総クチコミ数と一致する必要はない。ただし <code>weighting_factor</code> の列自体は作っておく。「タグ別の平均 <code>overall_score</code>」を出す時に、重みなしだとタグを多く付けたクチコミが平均を強く引っ張るため。</p>
+<p><strong>重みは持つが、既定の見せ方は impact。</strong>「残業少なめのタグが付いたクチコミは何件か」が主な問いで、合計が総クチコミ数と一致する必要はない。</p>
+<p>ただし <code>weighting_factor</code> の列自体は作っておく。タグ別の件数を<strong>合計して総クチコミ数と突き合わせる</strong>ときと、タグ展開後の全行をプールして 1 本の平均を出すときに、重みが無いと 3 タグのクチコミが 3 回数えられるため。<strong>タグ 1 つの中での平均には掛けない</strong>（掛けると多タグのクチコミだけが不当に軽くなり、答えが変わる）。</p>
 <p><strong><code>fct_review</code> 側に <code>ARRAY&lt;STRING&gt;</code> で持たない理由</strong>がもう 1 つある。<code>fct_review</code> はパーティション付きのファクトで行数が最も伸びる表であり、タグの付け直し（審査のやり直し）が起きるたびにファクト行を書き換えることになる。ブリッジなら差分はブリッジ側の数行で済む。</p>
 </details>
 
@@ -643,10 +682,13 @@ GROUP BY jc.level2_name
 
 <details>
 <summary>解答例</summary>
-<p><strong>まず <code>-1</code> の意味を確定させる。</strong><code>fct_placement</code> の粒度は「1 行 = 1 入社（エージェント経由）」なので、<code>agency_key</code> は必ず埋まる。埋まらないのは <code>agent_key</code> のほうで、その意味は「直接応募」ではなく<strong>「仲介した担当者を特定できない」</strong>である。<code>source_channel</code> が <code>agent_referral</code> でスカウトを経由していない入社がこれに当たる。意味が「該当なし」なのか「不明」なのかで表示名が変わるので、ここを曖昧にしたまま <code>-1</code> 行を作ってはいけない。</p>
-<p><strong><code>dim_agent</code> に <code>-1</code> 行を持つ。</strong>DT#43 の「ディメンションの外部キーに NULL を置かない」がそのまま効く。<code>-1</code> 行の <code>agent_name</code> には「担当者不明」を入れる。これが無いと、<code>fct_placement</code> と <code>dim_agent</code> の <code>INNER JOIN</code> でこれらの入社が静かに消える。消えたことは画面に出ない（§2(b) と同じ壊れ方）。</p>
+<p><strong>まず <code>-1</code> の意味を確定させる。</strong><code>fct_placement</code> の粒度は「1 行 = 1 入社（エージェント経由）」なので、<code>agency_key</code> は必ず埋まる。埋まらないのは <code>agent_key</code> のほうで、その意味は「直接応募」ではなく<strong>「仲介した担当者を特定できない」</strong>である。</p>
+<p><code>source_channel</code> が <code>agent_referral</code> でスカウトを経由していない入社がこれに当たる。意味が「該当なし」なのか「不明」なのかで表示名が変わるので、ここを曖昧にしたまま <code>-1</code> 行を作ってはいけない。</p>
+<p><strong><code>dim_agent</code> に <code>-1</code> 行を持つ。</strong>DT#43 の「ディメンションの外部キーに NULL を置かない」がそのまま効く。<code>-1</code> 行の <code>agent_name</code> には「担当者不明」を入れる。</p>
+<p>これが無いと、<code>fct_placement</code> と <code>dim_agent</code> の <code>INNER JOIN</code> でこれらの入社が静かに消える。消えたことは画面に出ない（§2(b) と同じ壊れ方）。</p>
 <p><strong>ただし、この問いには正典側の先回りがある。</strong><code>dim_agency</code>（<code>dim_agent</code> の縮約ディメンション）が用意されており、<code>fct_placement</code> は <code>agency_key</code> も持つ。担当者別に切れない分析は最初から <code>dim_agency</code> を主軸にするのが正しく、<code>agent_key = -1</code> は「担当者別のドリルダウンでは不明として1 行に集まる」という副次的な扱いになる。<strong><code>-1</code> 行を置くことと、<code>-1</code> が多い軸を主軸にしないことは別の判断で、両方要る。</strong></p>
-<p><strong><code>dim_scout_sender</code> には統一しない。</strong>DT#3 の「部門ではなくビジネスプロセス」がそのまま効く。<code>dim_scout_sender</code> の意味は「スカウトを送った主体」で、値域には企業が入る。<code>fct_placement.agent_key</code> の意味は「入社を仲介した担当者」で、企業は入らない。別プロセスの別の役割であり、畳むと「送信主体別の入社数」という、企業側の行が常に空になる軸ができる。判断基準の 3 番目の表の第 3 行「属性もメジャーも粒度も違う → 分離」。</p>
+<p><strong><code>dim_scout_sender</code> には統一しない。</strong>DT#3 の「部門ではなくビジネスプロセス」がそのまま効く。<code>dim_scout_sender</code> の意味は「スカウトを送った主体」で、値域には企業が入る。<code>fct_placement.agent_key</code> の意味は「入社を仲介した担当者」で、企業は入らない。</p>
+<p>別プロセスの別の役割であり、畳むと「送信主体別の入社数」という、企業側の行が常に空になる軸ができる。判断基準の 3 番目の表の第 3 行「属性もメジャーも粒度も違う → 分離」。</p>
 <p>同じ担当者が <code>dim_agent</code> と <code>dim_scout_sender</code> の両方に出る重複は許容する。<code>dim_scout_sender</code> の自然キーは (<code>sender_type</code>, <code>sender_id</code>) なので <code>agent_id</code> から辿れる。コンフォームドディメンションとして共有すべきなのは <code>dim_agent</code> のほうで、<code>dim_scout_sender</code> はスカウトプロセス専用の supertype と割り切る。</p>
 </details>
 
@@ -661,7 +703,7 @@ GROUP BY jc.level2_name
 <h2>参照文献</h2>
 
 <ul class="ref">
-<li><em>The Data Warehouse Toolkit, 3rd ed.</em> (Kimball &amp; Ross, 2013) ch.6–8 — <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/data-warehouse-dw-toolkit/">kimballgroup.com</a></li>
+<li><em>The Data Warehouse Toolkit, 3rd ed.</em> (Kimball &amp; Ross, 2013) ch.7（不揃い階層）, ch.8（多値ディメンションとブリッジ）, ch.10（heterogeneous products と口座-顧客ブリッジの weighting factor） — <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/data-warehouse-dw-toolkit/">kimballgroup.com</a></li>
 <li>Kimball Dimensional Modeling Techniques (2013) — <a href="https://www.kimballgroup.com/wp-content/uploads/2013/08/2013.09-Kimball-Dimensional-Modeling-Techniques11.pdf">PDF</a>（多値ブリッジ / 不揃い階層 / pathstring / supertype-subtype の定義）</li>
 <li>Design Tip #142: Building Bridges — <a href="https://www.kimballgroup.com/2012/02/design-tip-142-building-bridges/">kimballgroup.com</a></li>
 <li>Design Tip #43: Dealing With Nulls In The Dimensional Model — <a href="https://www.kimballgroup.com/2003/02/design-tip-43-dealing-with-nulls-in-the-dimensional-model/">kimballgroup.com</a></li>

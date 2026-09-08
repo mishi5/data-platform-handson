@@ -67,3 +67,43 @@ n/a（この回に図は無い。ブリーフ「図: なし（技法一覧・置
 - **DWT 3rd ed. 本体（ch.3 / ch.6）は原典 PDF を参照できていない。** 書籍の目次ページ（kimballgroup.com）以外に本文の入手経路が無いため、章の内容は同じ内容を要約した公式 PDF *Kimball Dimensional Modeling Techniques*(2013) と各 Design Tip で代替した。引用は全て Techniques / Design Tips / SK 記事の原文からで、DWT の本文を記憶で引いた箇所は無い。`p.meta` と §3 の技法表では出典を Techniques と明記している。
 - 図は無し（ブリーフ指定）。`check_svg.py` は実行していない（対象ファイルに SVG が無いため）。
 - `-1` 行を持つべきディメンションの一覧は §1 の技法表に列挙したが、ファクトごとの「どの FK が `-1` を取りうるか」の網羅表は密度の都合で入れていない（02 回・06 回と重複するため）。
+
+---
+
+## 修正ラウンド1（レビュー `review/03_review.md` への対応）
+
+| ID | 対応 |
+|---|---|
+| Critical-1 | `dim_review_attributes` / `dim_member_profile_mini` / `dim_member` の3モデルの末尾セミコロンを削除（`create or replace table … as ( … )` の内側で文が終わり BigQuery が構文エラーになるため）。§5 のロールプレイングクエリ先頭に `-- 分析クエリ（モデルではない）` を追記して、セミコロン有無の使い分けを明示 |
+| Important-1 | SK の結論を SCD2 の **5 本**（`dim_member` / `dim_company` / `dim_agent` / **`dim_agency`** / `dim_scout_sender`）へ統一。§1「この回の決定」表・§1 技法一覧のサロゲートキー行・§3 SK 表の SCD 行・§5 判断表の4箇所を修正。§1 の `-1` 行の列挙に `dim_agency`（`fct_job_posting_daily.agency_key` = 直接掲載）を追加し、`dim_agent` 側を「`fct_application_pipeline` / `fct_placement` の `agent_key` = スカウト経由でない」に書き分け。§5 判断表に縮約ディメンションの行（`dim_agency` は `dim_agent` の shrunken rollup, Techniques p.10 / DWT ch.4。同じ SK 規則で作る）を1行追加 |
+| Important-2 | §4 の3手法比較表の3行目を「ECM / FDE の日次スナップショット（正典 `dim_member_daily`、05回）」に改め、行数欄に `partition_by=snapshot_date` ＋ `require_partition_filter=true` で1クエリのスキャンが1日分（≒300 万行）に閉じることを明記。結論を排他形（「ミニを採る」）から併存形（「正典はどちらか一方を選ばず両方を置く」＋整合条件は `dim_member_daily.member_profile_mini_key` がミニ側と一致すること）へ変更。§5 の schema.yml に `dim_member_daily.member_profile_mini_key` の `relationships` テストを追加。§7 問3 の結びも「ミニでは足りない → `dim_member_daily` かファクトレスファクト表（05回）」に修正 |
+| Important-3 | SK(1998) を再取得して数え直し、`aside kimball` を「本番系がキーを踏む6通り ＋ 未知値の符号化 ＋ 4バイト整数の容量削減 ＋ 結合性能 の計9つ」に訂正。結合性能の理由（「私が思いつく最後の理由は、強く疑ってはいるが証明したことのないものだ」）を原文引用で追加。成否判定の表を7行→**9行**に拡張し、9行目「結合性能」を **△ 測ってから決める** と判定。§4 の「§3 の表の7理由」も「9つの理由」に修正 |
+| Important-4 | §2(c) の壊れた SQL を **3本**に分割（1: INNER JOIN が行を落とす／2: LEFT JOIN で `COUNT(*)` と `COUNT(d.date_key)` がずれる（`WHERE` なし）／3: 絞り込みを1つ足すと1本目に戻る）。直後の段落も3文＋2文に書き直し、`WHERE` 付きクエリで「a と b がずれる」と主張していた自己矛盾を解消 |
+| Important-5 | §2(a) の締めを「(i) が消え、(ii)(iii) が桁で軽くなる」に訂正し、「正典の `dim_member` は SCD2 のままなので `M001` は 8/1 に版が増え、会員数は `member_id` で数える必要が残り、as-of 結合も残る（05回）」を段落追加。§5(c) の「§2(a) の 3,000 万行への範囲結合と比べてほしい」も「15 行への参照と `dim_member` 側 2 行への as-of 結合に縮む」に修正 |
+| Minor-1 | 4文以上の段落 19 箇所を全て 3 文以内に分割（DT#100 の8文 aside を「原典の主張」と「この題材への当てはめ」の3ブロックに、§4 の7文/6文、§3 のミニ手順（`<ol>` 化）、§1・§5(b)・§6・§7 問2/問3 など）。機械カウントで残 0 |
+| Minor-2 | `（Techniques, p.5）` → `（Techniques, p.4）`（目次・本文とも p.4 であることを `pdftotext` で確認） |
+| Minor-3 | 「開始日と次の行の終了日が一致すると」→「ある行の `valid_to` と次の行の `valid_from` が一致すると、その境界の瞬間に `BETWEEN` が2行を返す」に訂正（DT#100 理由3 の原文を `pdftotext` で確認） |
+| Minor-4 | 耐久キーの引用を原文どおり「従業員の版が増えるにつれ複数のサロゲートキーがその従業員に結び付きうるが、耐久キーは決して変わらない」に戻し、「CareerVoice では `member_id` / `company_id` / `agency_id` が耐久キーにあたる」を地の文で接続 |
+| Minor-5 | `p.meta` の Design Tip 列に `#164` を追加 |
+| Minor-6 | ロールプレイングのクエリで別名衝突を解消（テーブル別名 `applied_d` / `hired_d`、出力列 `applications` / `still_open` / `hired_count`）。§2(c)・§5 の恒等式の記述も `hired_count` に統一 |
+| Minor-7 | §2(b) の表内の式を `applied_at`（TIMESTAMP）→ `applied_date`（DATE）に統一。`DATE_SUB` は DATE 専用なので型エラーになる例示を排除 |
+| Minor-8 | §2(a) の初出に「以下、規模は会員 300 万人・`fct_page_view` 日次 2,000 万行を仮定する（正典はデータ量を定めていない）」を追加（下の提案8も参照） |
+| Minor-9 | 「15 行」を**組合せ数**の意味に統一。§1 技法一覧で「組合せ 15 通り。実装は `-1` の既定行を足して 16 行。以降『15 行』は組合せ数を指す」と最初に断り、§1 決定表・§3・§4 比較表・§5(c) の SQL コメント・§7 問3 の表現を揃えた。schema.yml の description と singular test のコメントも「組合せ 15 通り ＋ -1 の既定行」に統一 |
+| Minor-10 | §3 の技法表を「ミニディメンション（**Type 4**, DT#127）」に修正し、「本体にも現在のミニキーを Type1 で埋めると Type 5 だが、正典は採らない（時点解決の経路が2本になる）」を1行で併記 |
+| Minor-11 | 「DT#100 の要件は満たす」→「DT#100 の中心の要件（単一列・整数・ETL 時に対応付けを解決）は満たす。残る理由9（自然キーの中身への依存）はハッシュの入力が自然キーである以上まともに当たるが、ソースが `src_careervoice` 単一である限り効かない——2つ目のソースが来たら表の6行目と一緒に ✓ に変わる」に修正 |
+
+### 追加の正典への変更提案（ラウンド1で判明）
+
+8. **`domain.md` §4 の散文が表と食い違っている。** 散文は「SCD2 のディメンション（`dim_member` / `dim_company` / `dim_agent` / `dim_scout_sender`）は一律に…」と4本を挙げるが、同 §4 の表は `dim_agency` を SCD **2** としている。本文は表（5本）に従った。散文側に `dim_agency` を追加する訂正を提案する。
+9. **`dim_member_profile_mini` は「組合せ 15 通り ＋ `-1` の既定行 = 16 行」。** `fct_page_view.member_key` が `-1`（匿名）を取る以上、同じ行の `member_profile_mini_key` にも既定行が要る。§4 の備考に明記を提案する（ラウンド0 の提案4 の再提出）。
+10. **データ量の前提を正典に置く。** 会員 300 万人・`fct_page_view` 日次 2,000 万行という規模は本文（§2(a)・§4・§7 問2）の判断を左右するが正典に記述が無い。本文では「仮定する」と条件形にしたが、`domain.md` §5 に規模の前提行を1行足すと、後続の回が別の数字を使う事故を防げる。
+
+### 検証（修正後に実行）
+
+- `python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py html/03_dimensions.html` → **`0 errors, 1 warnings`**（warning は「`<svg>` が見つからない」＝ブリーフ「図: なし」どおり）
+- タグ対応 0 エラー / 未閉タグ 0 / `<pre><code>` 内の生の山括弧 0 / バッククォート残り 0
+- `<h2>` 9本（1〜8 ＋ 参照文献）／ 表 12 個すべて `.table-wrap` 包み ／ SVG 0 個
+- 4文以上の `<p>` = **0**（`<pre>` 除外・機械カウント）
+- モデル SQL ブロックの末尾セミコロン = 0（機械チェック）
+- 本文の `dim_*` / `fct_*` / `stg_*` / `snap_*` を `canon/domain.md` と再突合 → 非収録は `snap_members` / `stg_careervoice__scouts`（命名規約適合）と `stg_product`（dbt 記事の引用内）の3件のみ
+- 本文の URL 13 本すべて `canon/references.md` に存在
