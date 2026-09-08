@@ -49,3 +49,5 @@
 - 03 再レビュー: 17件 ADDRESSED、新規 Critical 1（dim_member_daily テストが require_partition_filter で落ちる）+ Important 1 → 修正ラウンド 2/3 送付
 - 06 再レビュー: 13件 ADDRESSED、新規 Important 1（ARRAY 対案が dim_member を作り直して畳み込みを落とす）→ 修正ラウンド 2/3 送付。Ruling: 対案は ref('dim_member') を参照し dim_member_with_desired と命名
 - 09 執筆完了（DONE_WITH_CONCERNS）。Ruling: references に dbt incremental-strategy / microbatch を追加、fct_scout の物理設計（partition sent_date / cluster scout_sender_key, member_key）を正典に明記、検証用一時表は正典外で可、ブリーフの dbt.partition_range は実在しないため置換を是認 → レビュー起動
+- 2026-09-08 09:45 頃 2度目のレート制限（resets 14:00）。20:41 再開。状態: 06 ラウンド2 完了（HTML/report とも）、03 ラウンド2 は着手直後（3行差分・report 未追記）、07 再レビュー REVISE（新規 Critical 1: モデル単位 +where は効かない / Important 1 / Minor 3）、08・09 レビュー未着手、10 は HTML 完成・report 無し
+- 06: complete（ラウンド2 N-1 を grep で確認: ref('dim_member') 参照・dim_member_with_desired・svg 0 errors。Ruling: 再々レビュー省略）

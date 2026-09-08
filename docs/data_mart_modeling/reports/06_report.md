@@ -100,3 +100,34 @@
 
 - 4 文の段落が 12 残る（m-1 を完全には満たしていない。いずれも「A。B。C。D。」の列挙型で、分けると対応関係が読めなくなると判断した）。
 - DWT 3rd ed. 本体は書籍のため WebFetch できていない。章番号は正典・ブリーフの裁定に従い、技法定義の帰属は引き続き Techniques PDF（一次情報）。
+
+---
+
+## 修正ラウンド 2（再レビュー `review/06_rereview.md` への対応）
+
+| ID | 重み | 対応 |
+|---|---|---|
+| N-1 | Important | §5(d) の `member_versions` を、05回の変換を再現する形から**参照するだけ**の形に変更。`FARM_FINGERPRINT(CONCAT(member_id,'\|',CAST(dbt_valid_from AS STRING)))` によるキー再計算と `snap_members` 直読みを削除し、`SELECT member_key, member_id, valid_from, valid_to, is_current FROM {{ ref('dim_member') }}` に。コメントも「版の畳み込み・`deleted_at` 除外・`member_key` の生成は 05回で済んでいる。ここでは再現も再計算もしない」に書き換えた。オーケストレータ裁定に従い**モデル名を `dim_member_with_desired`（対案）**にして本体 `dim_member` と衝突させず、`UNNEST` クエリの `ref()` も同名に変更。さらに `<ol>` の直前に段落を 1 つ足し、「`M001` は `snap_members` では 3 版だが 05回の畳み込みを経て `dim_member` で 2 行になっており、この対案でも 2 行のまま。`fct_scout.member_key` との突き合わせが (a) と同じに保たれるのはこのためで、キーを作り直すとここが崩れる」と明記 |
+| n-2 | Minor | 図の `fct_scout` ノード（左右とも）の `sub` を `S003 / member_key = M002` → `S003 / member_id = M002` に。`member_key` は `FARM_FINGERPRINT` の INT64 であって `M002` ではないため。右パネルの `member_id = M002` と表記が揃った。本文にも `member_key = M002` の残存は 0 件 |
+| n-3 | Minor | 参照文献に 1 行追加: `Google Cloud, BigQuery 再帰 CTE（WITH RECURSIVE）— https://cloud.google.com/bigquery/docs/recursive-ctes（自己参照 1 回・UNION ALL・反復上限 500）`。`references.md` に `BQ recursive` が入った（提案 8 が採用された）ことへの追従。`p.meta` の「再解釈」は BQ nested のまま（再帰 CTE は再解釈ではなく実装の仕様確認のため） |
+
+### 検証
+
+| 項目 | 結果 |
+|---|---|
+| `check_svg.py` | **0 errors, 0 warnings** |
+| SVG の well-formed | OK |
+| `<pre><code>` 内の生 `<` | 0 件（9 ブロック） |
+| 本文 URL 7 本 × `references.md` 突合 | 全件一致（kimballgroup.com 4 本 + decisionworks 1 本 + cloud.google.com 2 本） |
+| `<p>` の 5 文以上 | 0 件 |
+| `member_key = M002` の残存 | 0 件 |
+
+### 正典への変更提案（このラウンドで新規）
+
+11. **`dim_member_with_desired` を正典に載せるかどうか。** オーケストレータ裁定で命名は確定したが、`domain.md` §4 のディメンション表には無い。ARRAY 対案（＝採用しない設計）の説明用モデルなので、正典に載せず「06回の対案として本文にのみ登場する」扱いでよいと考えているが、判断は正典側に委ねる。
+
+### 未達（このラウンドでも解消していないもの）
+
+- 4 文の段落が 13 件残る（m-1 の parked 分。列挙型のため分割しない判断を維持）。
+- 図の右パネルのノード名は `dim_member` のまま（§1 の判断表・§4 本文と揃えた概念表記）。物理モデル名が `dim_member_with_desired` に分かれるのは §5(d) の実装上の都合で、図で分けると「ARRAY 内包」という比較軸が読みにくくなるため変えていない。
+- DWT 3rd ed. 本体は書籍のため WebFetch できていない（章番号は正典・ブリーフの裁定に従う）。

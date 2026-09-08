@@ -1,0 +1,777 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>レイヤ・命名・契約・テスト・監査 — データマート設計 10</title>
+<style>
+  :root { --bg:#ffffff; --fg:#1a1a1a; --muted:#666; --border:#e0e0e0;
+          --accent:#0b6bcb; --card:#f7f8fa; --code:#f3f4f6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171a; --fg:#e8e8e8; --muted:#9aa0a6; --border:#2c3136;
+            --accent:#6aa9ff; --card:#1b1f23; --code:#1f2429; }
+  }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+    line-height:1.8; max-width:900px; margin:0 auto; padding:24px 20px 64px; }
+  h1 { font-size:1.6rem; margin:0 0 4px; line-height:1.4; }
+  h2 { font-size:1.2rem; border-bottom:1px solid var(--border); padding-bottom:6px; margin:40px 0 16px; }
+  h3 { font-size:1.02rem; margin:24px 0 8px; }
+  .meta { color:var(--muted); font-size:.85rem; margin:0 0 24px; }
+  a { color:var(--accent); }
+  table { border-collapse:collapse; width:100%; margin:12px 0 20px; font-size:.9rem; }
+  th, td { border:1px solid var(--border); padding:6px 10px; vertical-align:top; text-align:left; }
+  th { background:var(--card); }
+  .table-wrap { overflow-x:auto; }
+  code { background:var(--code); border:1px solid var(--border); border-radius:4px; padding:1px 5px; font-size:.85em; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:8px; padding:14px 16px;
+        overflow-x:auto; font-size:.84rem; line-height:1.55; }
+  pre code { background:none; border:none; padding:0; font-size:inherit; }
+  .aside { border-left:3px solid var(--accent); background:var(--card); padding:10px 16px; margin:16px 0; font-size:.92rem; }
+  .kimball { border-left-color:#8a6d3b; }
+  .modern { border-left-color:#3b8a5a; }
+  details { border:1px solid var(--border); border-radius:8px; padding:8px 14px; margin:10px 0; background:var(--card); }
+  summary { cursor:pointer; font-weight:600; }
+  svg { max-width:100%; height:auto; display:block; margin:20px 0; }
+  ul, ol { padding-left:1.3em; }
+  .ref li { font-size:.88rem; }
+</style>
+</head>
+<body>
+
+<h1>レイヤ・命名・契約・テスト・監査</h1>
+<p class="meta">データマート設計 10 ／ 参照: DWT ch.19, Subsystems of ETL Revisited, An Architecture for Data Quality, Design Tip #108 #164 ／ 再解釈: dbt structure, dbt Kimball, dbt model contracts</p>
+
+<h2>1. この回が決めること</h2>
+
+<p>ここまでの 9 回で決めたのは「何を作るか」だった。この回で決めるのは「作ったものをどこに置き、どう名付け、何を保証し、どう変えるか」の運用規約である。中心の判断は 1 つで、<strong>テストは粒度・参照整合性・加法性の 3 種を層ごとに置き分ける</strong>。</p>
+
+<div class="table-wrap">
+<table>
+<caption class="meta">この回の決定</caption>
+<thead><tr><th>決めること</th><th>決定</th><th>根拠</th></tr></thead>
+<tbody>
+<tr><td>モデルの置き場</td><td>staging / intermediate / marts / snapshots の 4 層。<code>stg_</code> は 1 ソース 1 モデルで結合も集約も置かない</td><td>dbt structure</td></tr>
+<tr><td>命名</td><td><code>domain.md</code> §4 の規約をそのまま正本にする（下表に転載）</td><td>正典</td></tr>
+<tr><td>テストの種類</td><td>層ごとに固定。staging = 列、intermediate = 粒度、marts = 粒度・参照整合性・加法性・契約</td><td>Data Quality の 3 スクリーン</td></tr>
+<tr><td>公開面の保証</td><td>BI・逆 ETL から参照される marts のモデルに <code>contract: enforced: true</code> を置き、列名と型を凍結する</td><td>dbt contracts</td></tr>
+<tr><td>改版</td><td>破壊的変更は <code>versions:</code> ＋ <code>latest_version</code> ＋ <code>deprecation_date</code>。<strong>モデル名にバージョンを埋め込まない</strong></td><td>dbt model versions</td></tr>
+<tr><td>監査</td><td>全ファクトに <code>audit_key</code>。<code>dim_audit</code> は <code>invocation_id</code> と <code>run_started_at</code> から 1 実行 × 品質フラグごとに 1 行</td><td>DT#164 / Data Quality</td></tr>
+<tr><td>設計完了の条件</td><td>バスマトリクスのレビューから始め、3 種類の聴衆のレビューを通ったら設計完了とする</td><td>DT#108</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>層 × 役割 × マテリアライズ × テスト</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>層</th><th>役割</th><th>マテリアライズ</th><th>置くテスト</th></tr></thead>
+<tbody>
+<tr><td><code>staging/careervoice/</code></td><td>1 ソーステーブル 1 モデル。改名・キャスト・区分値の正規化・論理削除の除去まで。結合と集約は置かない</td><td><code>view</code>（<code>+schema: staging</code>）</td><td>列スクリーン: <code>not_null</code> / <code>accepted_values</code> / 自然キーの <code>unique</code></td></tr>
+<tr><td><code>intermediate/</code></td><td>結合・ピボット・粒度合わせ・as-of join。公開面ではない</td><td><code>ephemeral</code>、重いものは制限データセットの <code>view</code> / <code>table</code></td><td>構造スクリーン: 粒度（<code>unique_combination_of_columns</code>）</td></tr>
+<tr><td><code>marts/</code> <code>dim_*</code></td><td>ディメンション。SCD2 の版付きも含む</td><td><code>table</code>（<code>+schema: marts</code>）</td><td><code>unique</code>(<code>_key</code>) / <code>not_null</code> / <code>accepted_values</code> / <code>-1</code> 既定行の存在</td></tr>
+<tr><td><code>marts/</code> <code>fct_*</code></td><td>ファクト。1 ビジネスプロセス 1 テーブル</td><td><code>table</code> または <code>incremental</code>（<code>partition_by</code> は DATE の <code>&lt;role&gt;_date</code>）</td><td>粒度 / <code>relationships</code> / 加法性（<code>expression_is_true</code>）/ <code>contract</code></td></tr>
+<tr><td><code>marts/</code> <code>agg_*</code></td><td>集約。和と件数だけを持ち平均は持たない（04回）</td><td><code>table</code> / <code>incremental</code></td><td>粒度 / 素のファクトとの合計一致</td></tr>
+<tr><td><code>marts/</code> <code>br_*</code></td><td>ブリッジ（多値・不揃い階層）</td><td><code>table</code></td><td>複合キーの粒度 / <code>weighting_factor</code> の会員内合計が 1</td></tr>
+<tr><td><code>marts/</code> <code>obt_*</code></td><td>star の下流に置く結合済み配布テーブル（07回）</td><td><code>table</code> / <code>incremental</code></td><td>行数がファクト側と一致すること（結合による増殖の検知）</td></tr>
+<tr><td><code>snapshots/</code> <code>snap_*</code></td><td>SCD2 の原資。ソースの版を保存する</td><td><code>dbt snapshot</code></td><td><code>dbt_valid_from</code> / <code>dbt_valid_to</code> の重なりが無いこと</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>命名規約（<code>domain.md</code> §4 の転載）</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>対象</th><th>規約</th><th>例</th></tr></thead>
+<tbody>
+<tr><td>staging モデル</td><td><code>stg_careervoice__&lt;table&gt;</code></td><td><code>stg_careervoice__scouts</code></td></tr>
+<tr><td>intermediate モデル</td><td><code>int_&lt;entity&gt;_&lt;verb&gt;</code></td><td><code>int_review_member_link</code></td></tr>
+<tr><td>marts モデル</td><td><code>dim_*</code> / <code>fct_*</code> / <code>agg_*</code> / <code>br_*</code> / <code>obt_*</code></td><td><code>fct_scout</code>, <code>obt_scout_funnel</code></td></tr>
+<tr><td>snapshot</td><td><code>snap_*</code></td><td><code>snap_companies</code></td></tr>
+<tr><td>サロゲートキー</td><td><code>&lt;entity&gt;_key</code>（SCD2 の 5 本のみ。Type0/1 は自然キーをそのまま <code>_key</code> にする＝03回）</td><td><code>member_key</code>, <code>company_key</code></td></tr>
+<tr><td>自然キー</td><td>ソースの <code>&lt;entity&gt;_id</code> をそのまま持つ</td><td><code>scout_id</code></td></tr>
+<tr><td>日付キー</td><td><code>date_key</code> INT64 <code>YYYYMMDD</code>。ロールプレイングは <code>&lt;role&gt;_date_key</code></td><td><code>sent_date_key</code></td></tr>
+<tr><td>パーティション列</td><td>日付キーと並べて DATE 型の <code>&lt;role&gt;_date</code>。<code>partition_by</code> も <code>WHERE</code> もこの列</td><td><code>sent_date</code></td></tr>
+<tr><td>未知・未達</td><td><code>-1</code>（キーが STRING のディメンションでは <code>'-1'</code>）</td><td><code>hired_date_key = -1</code></td></tr>
+<tr><td>SCD2 の版列</td><td><code>valid_from</code> / <code>valid_to</code>（現行行は <code>9999-12-31</code>）/ <code>is_current</code></td><td><code>dim_company</code></td></tr>
+<tr><td>監査</td><td>全ファクトが <code>audit_key</code> を持つ</td><td><code>fct_scout.audit_key</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>2. どこで壊れるか</h2>
+
+<h3>(a) モデル名にバージョンを埋め、両方が本番から参照される</h3>
+
+<p><code>fct_scout</code> の <code>member_key</code> を「現在版」で解決していた誤りを直すとき、既存の数字を守るために <code>fct_scout_v2</code> という別モデルを作ったとする。<code>obt_scout_funnel</code> は旧 <code>fct_scout</code> のまま、Looker Studio のスカウトファネルだけ <code>fct_scout_v2</code> に差し替わる。半年後、同じ 2026-06 のスカウト件数が 2 箇所で違う値を返し、どちらが正しいかを判定する手段が無い。</p>
+
+<p>壊れているのは SQL ではなく手順である。旧版に終了日が無く、誰がまだ旧版を見ているかを機械が知らず、「移行が終わった」と宣言する条件が定義されていない。<code>versions:</code> はこの 3 つを YAML に書かせる仕組みで、後述の §5(c) で扱う。</p>
+
+<h3>(b) staging に集約が入り、marts に型変換が入る</h3>
+
+<pre><code># models/staging/careervoice/stg_careervoice__scouts.sql（悪い例）
+SELECT
+    member_id,
+    COUNT(*) AS scout_count,
+    MIN(sent_at) AS first_sent_at
+FROM {{ source('careervoice', 'scouts') }}
+GROUP BY member_id</code></pre>
+
+<p>この時点で <code>fct_scout</code> の粒度（1 行 = 送信された 1 スカウト）はもう作れない。<code>scout_id</code> も <code>template_id</code> も消えており、原子粒度に戻すにはソースへ再アクセスするしかない（DT#77）。staging は「下流が何をしたいかを知らない」層なので、粒度を落とす操作を置いてはいけない。</p>
+
+<p>逆向きの事故も同じ根から出る。<code>sent_at</code> のキャストを staging に置かず各 mart で書くと、<code>fct_scout</code> は <code>SAFE_CAST</code>、<code>fct_scout_funnel</code> は <code>CAST</code> になり、不正値を含む日の行数が 2 つのファクトでずれる。同じ変換が 2 箇所にあれば、いつかは片方だけ直される。</p>
+
+<h3>(c) <code>not_null</code> だけでは粒度が守られない</h3>
+
+<p><code>stg_careervoice__reviews</code> を作るとき、審査結果を一緒に持たせようとして <code>review_moderation_events</code> を結合したとする。<code>R001</code> は <code>submitted</code> → <code>screening</code> → <code>published</code> で審査イベントが 2 行あるので、クチコミが 2 行に増える。列は全て埋まっているので、既存の <code>not_null</code> テストは全て通る。</p>
+
+<pre><code>-- fct_review に R001 が 2 行入った状態で、C002 のクチコミを数える
+SELECT
+    c.name,
+    SUM(f.review_count)                     AS review_count,      -- 2（正しくは 1）
+    SAFE_DIVIDE(SUM(f.overall_score), SUM(f.review_count)) AS avg_overall_score  -- 3.5（偶然一致する）
+FROM {{ ref('fct_review') }} AS f
+JOIN {{ ref('dim_company') }} AS c
+    ON f.company_key = c.company_key
+WHERE f.submitted_date &gt;= DATE '2026-03-01'
+  AND c.company_id = 'C002'
+GROUP BY c.name</code></pre>
+
+<p>件数だけが 2 倍になり、平均は同じ値を返す。<strong>平均が正しく見えるので気づかない</strong>のがこの壊れ方の質の悪さで、企業別の投稿数ランキングと評価スコアが静かに矛盾する。粒度宣言をテストに翻訳していれば、<code>fct_review</code> のビルド直後に落ちる。</p>
+
+<h3>(d) <code>dim_audit</code> が無く、どの実行が壊れた行を入れたか追えない</h3>
+
+<p>2026-06-21 の実行で as-of join の結合条件を間違え、その日に読み込んだ <code>fct_scout</code> の <code>member_key</code> が全て <code>-1</code> になったとする。<code>audit_key</code> が無いと、消すべき行を特定する手掛かりは <code>sent_date</code> しか無い。ところが増分実行はルックバック 3 日で過去日も書き直すので（09回）、<code>sent_date</code> で消すと正常に入り直した行まで巻き添えになる。</p>
+
+<pre><code>-- audit_key があれば、壊れた実行の行だけを名指しできる
+SELECT
+    a.dbt_invocation_id,
+    a.batch_id,
+    a.loaded_at,
+    COUNT(*)                              AS rows_loaded,
+    COUNTIF(f.member_key = -1)            AS unresolved_member_rows
+FROM {{ ref('fct_scout') }} AS f
+JOIN {{ ref('dim_audit') }} AS a
+    ON f.audit_key = a.audit_key
+WHERE f.sent_date &gt;= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+GROUP BY 1, 2, 3
+ORDER BY a.loaded_at DESC</code></pre>
+
+<h2>3. Kimball の原則</h2>
+
+<h3>ETL 34 サブシステムのうち、マート設計に直接効くもの</h3>
+
+<p>DWT ch.19 と Subsystems of ETL Revisited（2007）は ETL を 34 のサブシステムに分解する。抽出（3）・クレンジングとコンフォーム（5）・デリバリ（13）・管理（13）の 4 群のうち、マートの<strong>設計</strong>そのものを規定するのは次の 7 つである。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>#</th><th>サブシステム</th><th>原典での役割</th><th>CareerVoice での置き場所</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Data Profiling</td><td>ソースを調べ、取り込む価値があるかを判定する</td><td>設計前の <code>src_careervoice</code> 調査。<code>scouts.sender_company_id</code> と <code>sender_agent_id</code> の排他性、<code>job_categories</code> の level 2 終端の枝数</td></tr>
+<tr><td>5</td><td>Error Event Tracking</td><td>品質改善の入力になる全エラー事象を捕捉する</td><td>dbt のテスト結果（<code>run_results.json</code>）。エラー事象スキーマの縮小版</td></tr>
+<tr><td>6</td><td>Audit Dimension Creation</td><td>メタデータをディメンションとして各ファクトに接続する</td><td><code>dim_audit</code> ＋ 全ファクトの <code>audit_key</code></td></tr>
+<tr><td>9</td><td>Slowly Changing Dimension Manager</td><td>SCD 属性の処理ロジックを実装する</td><td><code>snapshots/snap_*.sql</code>（05回）。<code>dim_member</code> / <code>dim_company</code> / <code>dim_agent</code> / <code>dim_agency</code> / <code>dim_scout_sender</code></td></tr>
+<tr><td>10</td><td>Surrogate Key Generator</td><td>各ディメンションのサロゲートキーを独立に生成する</td><td>SCD2 の 5 本のみ（03回）。自然キー ＋ <code>valid_from</code> の決定的ハッシュ</td></tr>
+<tr><td>16</td><td>Late Arriving Data Handler</td><td>遅れて到着したデータに通常と違う処理を適用する</td><td>ルックバック 3 日の <code>insert_overwrite</code>（09回）＋ 未達マイルストーンの <code>-1</code></td></tr>
+<tr><td>19</td><td>Aggregate Builder</td><td>集約ナビゲーションから透過的に使える集約を作り、維持する</td><td><code>agg_company_rating_daily</code> / <code>agg_company_entity</code>（04・08回）</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="aside kimball">
+<p>34 のうち、残る 27 は「ジョブスケジューラ」「バックアップ」「リネージと依存」「並列化」のようなインフラ側である。dbt を採ると 22（Job Scheduler）と 29（Lineage and Dependency）は道具に置き換わるが、1（Data Profiling）だけは道具では代われない。設計の前にソースを見る作業は人間に残る。</p>
+</div>
+
+<h3>設計はいつ終わるか（DT#108）</h3>
+
+<p>Bob Becker は「モデルが書けた時点ではまだ終わっていない。最後の主要な設計活動はレビューと検証である」と位置づけ、最低 3 種類の聴衆を挙げる。技術レベルとビジネス理解の度合いが違う相手に順に見せることで、別々の欠陥が出てくるという構成になっている。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>聴衆</th><th>見つかるもの</th><th>CareerVoice での相手</th></tr></thead>
+<tbody>
+<tr><td>ソースシステムの開発者と DBA</td><td>モデルの誤りを即座に指摘できる。ただし 3NF 志向なので、先にディメンショナルモデリングの説明が要る</td><td><code>scouts</code> / <code>applications</code> を書いた開発者。<code>sender_type</code> と 2 本の nullable FK の実際の埋まり方を知っている</td></tr>
+<tr><td>モデル開発に関わらなかったコア業務ユーザー</td><td>業務の実態とのずれ。より詳細な議論に耐える</td><td>スカウト運用と成果報酬の担当。「エージェント経由の入社」の定義</td></tr>
+<tr><td>より広い利用者コミュニティ</td><td>使い方の想定漏れ。教育の場も兼ねる</td><td>ダッシュボード利用者。代表者を選んでよい</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>進め方も指定がある。<strong>まずバスマトリクスをレビューし</strong>、スコープ・コンフォームドディメンションの役割・プロセスの優先順位を共有してから、選んだ行がどうモデルに翻訳されるかを示す。広い利用者向けのセッションでは時間の約 3 分の 1 を「このモデルで実際の問いにどう答えるか」の実演に充て、要件定義から拾った質問を歩いて見せる。</p>
+
+<div class="aside kimball">
+<p>DT#108 は最後をこう締める。ここまで来ればモデルの修正は軽微で、ユーザーは大した感動を示さない。モデルが当たり前に見えて筋が通っているなら、それは自分たちの業務の反射だからで、仕事がうまくいった印である。</p>
+</div>
+
+<h3>品質スクリーンとエラー事象（An Architecture for Data Quality）</h3>
+
+<p>Kimball の品質アーキテクチャの中心は<strong>品質スクリーン</strong>で、ETL パイプラインの中に置く診断フィルタと定義される。テストに成功したら何も起きず副作用も無い。失敗したときだけ 2 つの責務が発生する。</p>
+
+<ol>
+<li>エラー事象スキーマに 1 レコード落とす（<code>error event fact</code> の粒度は 1 スクリーンイベント、<code>error event detail</code> の粒度は 1 エラーに関わった 1 フィールド）。</li>
+<li>プロセスを止める／該当レコードを保留（suspension）へ送る／タグを付けてそのまま通す、のいずれかを選ぶ。</li>
+</ol>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>スクリーンの種類</th><th>原典の定義</th><th>dbt での対応</th><th>CareerVoice の例</th></tr></thead>
+<tbody>
+<tr><td>列スクリーン</td><td>単一列の中を検査する。NULL でない、有限の値集合に属する、範囲内、書式に合う</td><td><code>not_null</code> / <code>accepted_values</code> / <code>dbt_utils.accepted_range</code></td><td><code>reviews.status</code> が 4 値のいずれか、<code>score_*</code> が 1.0〜5.0</td></tr>
+<tr><td>構造スクリーン</td><td>列をまたぐ関係を検査する。複合キーが主キーになっている、FK と PK の対応、階層の整合</td><td><code>unique_combination_of_columns</code> / <code>relationships</code></td><td><code>fct_scout</code> の <code>scout_id</code> が一意、<code>member_key</code> が <code>dim_member</code> に解決する</td></tr>
+<tr><td>業務ルールスクリーン</td><td>上の 2 つに収まらない複雑な規則。集約した閾値による検査（件数が想定外に多い等）も含む</td><td><code>dbt_utils.expression_is_true</code> / singular test</td><td><code>scouts_remaining = scout_quota - scouts_sent</code>、日次スカウト件数が前 7 日中央値の 3 倍以内</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>3 択のうち原典が推すのは<strong>タグを付けて通す</strong>である。停止は手動介入を要求し、保留ファイルは「いつ直って戻るのか」が不明なまま行が欠けるので、その間データベース全体の整合性が疑わしくなる。欠損・破損した数値は least biased estimator（もっともらしい推定値）で埋め、その事実を監査ディメンションに記述するほうが、NULL や 0 で置くより合計が実態に近い。</p>
+
+<h3>監査ディメンション（Data Quality / DT#164）</h3>
+
+<p>監査ディメンションはファクト行が作られた時点のメタデータを、普通のディメンションとして持つ。原典の狙いは「メタデータを通常のデータに格上げし、BI ツールの画面の第一階層に出す」ことで、レポートの行ヘッダに out-of-bounds 指標を 1 つ足すだけで、同じレポートがそのまま品質評価付きレポートになる。粒度は 1 行 = 1 つの異なる監査条件で、完璧に流れた実行なら 1 行しか生まれず、その日に読み込んだ全ファクト行が同じ 1 行を指す。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>DT#164 の分類</th><th>原典の列</th><th>CareerVoice の <code>dim_audit</code></th></tr></thead>
+<tbody>
+<tr><td>環境変数</td><td>ETL マスタ版番号、通貨換算版、配賦ロジック版</td><td><code>batch_id</code>, <code>source_system</code>, <code>dbt_invocation_id</code>, <code>loaded_at</code></td></tr>
+<tr><td>品質指標</td><td>欠損フラグ、推定値で埋めたフラグ、ありえない値のフラグ</td><td><code>quality_flag</code>（<code>ok</code> / <code>estimated</code> / <code>suspect</code>）</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="aside kimball">
+<p>DT#164 の指示は「単純に始めよ、最初から理想主義になるな、優雅さで賞を狙うな」である。正典の <code>dim_audit</code> が 5 列しか持たないのはこれに従っている。Data Quality 白書の完全版（completeness / validation / out-of-bounds / screens failed / record modified / 3 つの時刻）は、エラー事象スキーマを別に運用して初めて埋まる列なので、先に置いても NULL が並ぶだけになる。</p>
+</div>
+
+<h2>4. 現代の再解釈</h2>
+
+<h3>34 サブシステムのうち、dbt が引き取った分</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>サブシステム</th><th>dbt での実体</th><th>残る手作業</th></tr></thead>
+<tbody>
+<tr><td>1 Data Profiling</td><td>—</td><td>全部。設計前にソースを見るのは人間</td></tr>
+<tr><td>5 Error Event Tracking</td><td><code>dbt test</code> の結果と <code>run_results.json</code></td><td>結果を永続化してエラー事象ファクトにする部分</td></tr>
+<tr><td>6 Audit Dimension Creation</td><td><code>invocation_id</code> / <code>run_started_at</code> ＋ <code>dim_audit</code> モデル</td><td>品質フラグの判定条件を書くこと（§5(b)）</td></tr>
+<tr><td>9 SCD Manager</td><td><code>dbt snapshot</code>（<code>dbt_valid_from</code> / <code>dbt_valid_to</code>）</td><td>Type 6 の混在（<code>dim_company.name</code> だけ Type1）はモデル側で書く</td></tr>
+<tr><td>10 Surrogate Key Generator</td><td><code>dbt_utils.generate_surrogate_key</code> / <code>FARM_FINGERPRINT</code></td><td>何をキーの入力にするかの判断（03回）</td></tr>
+<tr><td>19 Aggregate Builder</td><td><code>agg_*</code> モデル ＋ 増分</td><td>集約ナビゲーションは無い。どの集約を使うかは BI 側で明示</td></tr>
+<tr><td>22 Job Scheduler</td><td>DAG は dbt、起動は外部（Cloud Scheduler 等）</td><td>—</td></tr>
+<tr><td>29 Lineage and Dependency</td><td><code>dbt docs</code> ＋ <code>exposures</code></td><td>dbt の外の依存（BI・逆 ETL）を <code>exposures</code> に登録すること</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>dbt structure が言う層の役割</h3>
+
+<p>dbt の How we structure our dbt projects は、staging を「常に必要で、下流の重複を消す変換だけを置く層」と定義する。許すのは改名・型変換・単純な計算（セントからドル等）・条件による区分化の 4 つで、<strong>結合と集約は明示的に禁止</strong>される。理由も書かれていて、結合は計算の重複と分かりにくい関係を生み、集約はソースの粒度を壊して下流の柔軟性を奪うからである。</p>
+
+<p>intermediate 層のガイドは「DAG を狭め、テーブルを広くする」と表現される。入力は複数でよいが出力は 1 つにし、marts へ向かって矢尻の形になる DAG を作る。マテリアライズは <code>ephemeral</code> が既定で、可視性が要るなら本番外の専用スキーマに view を置き、権限を絞る（§7 問 3 の <code>int_review_member_link</code> はこの但し書きに乗る）。</p>
+
+<div class="aside modern">
+<p>ただし marts の命名では、dbt の 2 つの公式文書が食い違う。structure ガイドは「業務エンティティの平易な名前（<code>orders</code>, <code>customers</code>）で名付けよ」と書き、<code>fct_</code> / <code>dim_</code> の接頭辞に触れない。一方 dbt Developer Blog の Building a Kimball dimensional model with dbt は <code>dim_product</code> / <code>fct_sales</code> をそのまま使う。正典は後者を採る（<code>domain.md</code> §4）。ファクトとディメンションの区別は物理設計ではなく「加法性を持つか、文脈を与えるか」という意味の区別なので、名前で見えているほうが 11 本のドキュメントを跨ぐときに安い。</p>
+</div>
+
+<h3>dbt Kimball 記事のテストと、そこに足りないもの</h3>
+
+<p>Neo の記事は 4 ステップ（ビジネスプロセスの特定 → ファクトとディメンションの特定 → スキーマの選択 → モデルの作成と文書化）を AdventureWorks で実演し、ディメンションには <code>product_key</code> の <code>not_null</code> ＋ <code>unique</code>、自然キーにも <code>not_null</code> ＋ <code>unique</code>、ファクトには <code>sales_key</code> の <code>not_null</code> ＋ <code>unique</code> と各 FK の <code>not_null</code> を置く。ここまでは正典と同じ結論になる。</p>
+
+<p>足りないのは 3 つで、<strong>参照整合性（<code>relationships</code>）・加法性・契約</strong>が無い。記事のファクトはサロゲートキーを都度ハッシュで作り直しているので、ディメンション側に無いキーが入っても誰も気づかない。この回で <code>relationships</code> を marts の必須テストに入れるのはそのためである。</p>
+
+<h3>契約と改版</h3>
+
+<p>model contracts は「このモデルが返す列の名前・型・制約」を YAML に固定し、ビルド前に照合する。BigQuery では <code>not_null</code> だけが実際に強制され、<code>primary_key</code> / <code>foreign_key</code> は宣言できるがメタデータ扱いで強制されない（<code>unique</code> / <code>check</code> は宣言もできない）。契約が守るのは<strong>形</strong>だけで、列名も型も変えずに値の意味を変える種類の事故は検知しない。</p>
+
+<p>破壊的変更（列の削除・改名、型の変更、制約の追加削除）を検知したとき、dbt は版付きモデルではエラー、版無しモデルでは警告を出す。<code>versions:</code> は「新版を作る → <code>latest_version</code> を上げる → 旧版に <code>deprecation_date</code> を立てる → 下流の参照を移す → 旧版を消す」という手順を YAML に固定する仕組みで、docs 側では旧版を参照している下流に通知が出る。<code>deprecation_date</code> は dbt Core 1.6 で入った。</p>
+
+<h2>5. BigQuery + dbt での実装</h2>
+
+<h3>(a) <code>fct_scout</code> の契約とテスト</h3>
+
+<p>契約は列の型を書かざるを得ないので、03回の割当に従う（SCD2 のキーは <code>FARM_FINGERPRINT</code> 由来の INT64、Type0/1 のキーは自然キーの型そのまま、<code>date_key</code> は INT64）。<code>require_partition_filter = true</code> を張ると、テストの生成 SQL がパーティションフィルタ無しでテーブルを読むため全て落ちる。<code>config: where:</code> でフィルタを注入するのが回避策で、これはテスト対象のリレーションを <code>(SELECT * FROM ... WHERE ...) dbt_subquery</code> に差し替える機能である。</p>
+
+<pre><code># models/marts/schema.yml
+version: 2
+
+models:
+  - name: fct_scout
+    description: |
+      1 行 = 送信された 1 スカウト（01回の粒度宣言をそのまま転記）。
+      sender_type は dim_scout_sender 側に持つ（06回の異種ディメンション）。
+    config:
+      materialized: incremental
+      incremental_strategy: insert_overwrite
+      partition_by:
+        field: sent_date
+        data_type: date
+        granularity: day
+      cluster_by: [scout_sender_key, member_key]
+      require_partition_filter: true
+      contract:
+        enforced: true
+
+    columns:
+      - name: scout_id
+        description: 退化ディメンション（scouts.scout_id）
+        data_type: string
+        constraints:
+          - type: not_null
+      - name: template_id
+        description: 退化ディメンション
+        data_type: string
+      - name: sent_date_key
+        data_type: int64
+        constraints:
+          - type: not_null
+      - name: sent_date
+        description: パーティション列（sent_date_key と同じ日）
+        data_type: date
+        constraints:
+          - type: not_null
+      - name: member_key
+        description: 送信時点の dim_member 版。解決できない場合は -1
+        data_type: int64
+        constraints:
+          - type: not_null
+      - name: member_profile_mini_key
+        data_type: int64
+        constraints:
+          - type: not_null
+      - name: scout_sender_key
+        data_type: int64
+        constraints:
+          - type: not_null
+      - name: job_posting_key
+        description: scouts.job_posting_id が NULL のときは '-1'
+        data_type: string
+        constraints:
+          - type: not_null
+      - name: audit_key
+        data_type: int64
+        constraints:
+          - type: not_null
+      - name: scout_count
+        description: 常に 1。加法
+        data_type: int64
+        constraints:
+          - type: not_null
+
+    data_tests:
+      # 粒度: 01回の宣言「1 行 = 送信された 1 スカウト」の機械翻訳
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - scout_id
+          config:
+            where: "sent_date &gt;= date_sub(current_date(), interval 90 day)"
+
+      # 加法性: scout_count は 1 以外を取らない
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "scout_count = 1"
+          config:
+            where: "sent_date &gt;= date_sub(current_date(), interval 90 day)"
+
+      # 既定行に落ちた行の監視（落とさず警告に留める）
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "member_key != -1"
+          config:
+            where: "sent_date &gt;= date_sub(current_date(), interval 90 day)"
+            severity: warn</code></pre>
+
+<p><code>relationships</code> は列側に置く。<code>where</code> はテスト対象（子＝ファクト）だけを絞り、<code>to:</code> のディメンションには効かないので、<code>dim_member</code> 側にパーティションフィルタは要らない。</p>
+
+<pre><code>      - name: member_key
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_member')
+                field: member_key
+              config:
+                where: "sent_date &gt;= date_sub(current_date(), interval 90 day)
+                        and member_key != -1"
+
+      - name: sent_date_key
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+              config:
+                where: "sent_date &gt;= date_sub(current_date(), interval 90 day)"
+
+# dim_scout_sender 側（sender_type の列スクリーン）
+  - name: dim_scout_sender
+    columns:
+      - name: sender_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['company', 'agent']</code></pre>
+
+<p><code>data_tests:</code> の下で引数を <code>arguments:</code> に入れる書き方は dbt 1.10.5 以降で、それより前は引数をテスト名の直下に直接書く（<code>config:</code> の位置は同じ）。</p>
+
+<p><code>member_key != -1</code> を外す判断には代償がある。正典は <code>dim_member</code> に <code>-1</code> の既定行を置く方針（03回）なので、外さなくてもテストは通る。外すと「実在するキーが解決できるか」だけを測る純度の高いテストになる代わりに、<strong>既定行そのものを消してしまった事故を検知できなくなる</strong>ので、既定行の存在を別に確かめる singular test を対にする。</p>
+
+<pre><code>-- tests/assert_default_rows_exist.sql
+-- -1 の既定行が消えていないこと（DT#43。消えると relationships の where が穴になる）
+SELECT 'dim_member' AS dimension
+FROM (SELECT 1)
+WHERE NOT EXISTS (SELECT 1 FROM {{ ref('dim_member') }} WHERE member_key = -1)
+
+UNION ALL
+
+SELECT 'dim_date'
+FROM (SELECT 1)
+WHERE NOT EXISTS (SELECT 1 FROM {{ ref('dim_date') }} WHERE date_key = -1)
+
+UNION ALL
+
+SELECT 'dim_job_posting'
+FROM (SELECT 1)
+WHERE NOT EXISTS (SELECT 1 FROM {{ ref('dim_job_posting') }} WHERE job_posting_key = '-1')</code></pre>
+
+<div class="aside modern">
+<p><code>where</code> による窓（ここでは 90 日）は、パーティションフィルタ必須テーブルでテストを走らせるための代償である。全期間の粒度を保証したいなら、<code>where</code> を外した同じテストを別ジョブ（月次など）で回す。<code>+where</code> は <code>dbt_project.yml</code> にパス単位で既定値を書けるが、ファクトごとにパーティション列名が違う（<code>sent_date</code> / <code>applied_date</code> / <code>view_date</code>）ので、正典では各テストに書く。</p>
+</div>
+
+<h3>(b) <code>audit_key()</code> マクロと <code>dim_audit</code></h3>
+
+<p><code>dim_audit</code> は 1 実行 × 品質フラグごとに 1 行を作る増分モデルにする。<code>invocation_id</code> は dbt コマンド 1 回ごとに生成される UUID で、<code>run_started_at</code> は実行開始時刻の Python <code>datetime</code>（既定 UTC）である。両方ともコンパイル時に確定するので、同じ実行で作られた全ファクト行が同じ <code>audit_key</code> を指す。</p>
+
+<pre><code>-- models/marts/dim_audit.sql
+{{ config(
+    materialized = 'incremental',
+    unique_key = 'audit_key',
+    incremental_strategy = 'merge'
+) }}
+
+-- 監査ディメンション（DT#164）。1 行 = 1 dbt 実行 × 1 品質フラグ。
+-- 完璧に流れた実行では ok の 1 行しか参照されない。
+WITH quality_flags AS (
+    SELECT flag
+    FROM UNNEST(['ok', 'estimated', 'suspect']) AS flag
+)
+
+SELECT
+    FARM_FINGERPRINT(CONCAT('{{ invocation_id }}', '|', flag)) AS audit_key,
+    '{{ run_started_at.strftime("%Y%m%d%H%M%S") }}'            AS batch_id,
+    'careervoice'                                              AS source_system,
+    TIMESTAMP '{{ run_started_at.strftime("%Y-%m-%d %H:%M:%S") }}' AS loaded_at,
+    '{{ invocation_id }}'                                      AS dbt_invocation_id,
+    flag                                                       AS quality_flag
+FROM quality_flags</code></pre>
+
+<pre><code>-- macros/audit_key.sql
+{% macro audit_key(quality_flag='ok') -%}
+    {#- 値としては使わないが、dim_audit を必ず先にビルドさせるために依存を張る。
+        これで `dbt build -s +fct_scout` に dim_audit が入る。 -#}
+    {%- do ref('dim_audit') -%}
+    farm_fingerprint(concat('{{ invocation_id }}', '|', '{{ quality_flag }}'))
+{%- endmacro %}</code></pre>
+
+<p>ファクト側は列を 1 本足すだけで済む。品質フラグの引数は Data Quality 白書の「タグを付けて通す」に対応し、止めるほどではないが疑わしい行を分けて残すために使う。</p>
+
+<pre><code>-- models/marts/fct_scout_v2.sql（抜粋）
+SELECT
+    s.scout_id,
+    s.template_id,
+    CAST(FORMAT_DATE('%Y%m%d', DATE(s.sent_at, 'Asia/Tokyo')) AS INT64) AS sent_date_key,
+    DATE(s.sent_at, 'Asia/Tokyo')                                       AS sent_date,
+    IFNULL(m.member_key, -1)                                            AS member_key,
+    IFNULL(m.member_profile_mini_key, -1)                               AS member_profile_mini_key,
+    IFNULL(snd.scout_sender_key, -1)                                    AS scout_sender_key,
+    IFNULL(s.job_posting_id, '-1')                                      AS job_posting_key,
+    -- as-of join で会員の版を解決できなかった行は suspect として残す
+    CASE
+        WHEN m.member_key IS NULL THEN {{ audit_key('suspect') }}
+        ELSE {{ audit_key() }}
+    END                                                                 AS audit_key,
+    1                                                                   AS scout_count
+FROM scouts AS s
+LEFT JOIN member_versions AS m
+    ON  s.member_id = m.member_id
+    AND s.sent_at &gt;= m.valid_from
+    AND s.sent_at &lt;  m.valid_to
+LEFT JOIN sender_versions AS snd
+    ON  snd.sender_type = s.sender_type
+    AND snd.sender_id = IFNULL(s.sender_company_id, s.sender_agent_id)
+    AND s.sent_at &gt;= snd.valid_from
+    AND s.sent_at &lt;  snd.valid_to</code></pre>
+
+<div class="aside modern">
+<p><code>-s fct_scout</code> のようにファクト単体を選んで実行すると、<code>dim_audit</code> はビルドされず新しい <code>audit_key</code> が宙に浮く。<code>{% do ref('dim_audit') %}</code> は依存グラフに辺を足すだけで、選択を広げはしないからである。<code>audit_key</code> の <code>relationships</code> テストを <code>dim_audit</code> に張っておくと、この運用ミスが <code>dbt test</code> で落ちる。</p>
+</div>
+
+<h3>(c) <code>fct_scout</code> を v2 にする</h3>
+
+<p>v1 は <code>member_key</code> を「現在版」で解決していて、<code>member_profile_mini_key</code> を持たなかった。v2 は送信時点の版で解決し、ミニディメンションのキーを足す。<strong>列の追加は破壊的変更ではないが、<code>member_key</code> の意味の変更は過去の全ての数字を静かに変える</strong>ので、契約が検知しなくても版を切る。</p>
+
+<pre><code># models/marts/schema.yml
+models:
+  - name: fct_scout
+    latest_version: 2
+    config:
+      contract:
+        enforced: true
+    columns:
+      # ここは最新版（v2）の列定義。(a) の columns: をそのまま使う
+      - name: scout_id
+        data_type: string
+      # ...（中略）...
+      - name: member_profile_mini_key
+        data_type: int64
+
+    versions:
+      - v: 1
+        deprecation_date: 2026-12-31
+        columns:
+          - include: all
+            exclude: [member_profile_mini_key]
+      - v: 2</code></pre>
+
+<p>ファイル名の規約は <code>&lt;model_name&gt;_v&lt;v&gt;.sql</code>（最新版だけ接尾辞無しの <code>fct_scout.sql</code> でもよい）、生成されるリレーションは <code>fct_scout_v1</code> と <code>fct_scout_v2</code> になる。参照は常にモデル名で行い、版を固定したい下流だけが <code>v=</code> を付ける。</p>
+
+<pre><code>-- 移行が済むまで旧版に固定する下流
+SELECT * FROM {{ ref('fct_scout', v=1) }}
+
+-- 版を指定しなければ latest_version（= 2）に解決する
+SELECT * FROM {{ ref('fct_scout') }}</code></pre>
+
+<pre><code># v1 だけ / v2 だけをビルドする
+dbt build --select fct_scout.v1
+dbt build --select fct_scout.v2
+
+# 旧版を参照している下流を洗い出す
+dbt list --select fct_scout.v1+</code></pre>
+
+<p>BI から <code>project.marts.fct_scout</code> という物理名で直接叩かれている場合は、版付きにするとテーブル名が <code>fct_scout_v2</code> に変わって参照が切れる。旧名を残すなら該当版に <code>config: alias: fct_scout</code> を置くか、常に最新版を指すビューを作る <code>latest_version_pointer</code> を使う（新しめの config なので、使う前に導入版を dbt docs で確認する）。</p>
+
+<h3>(d) ソースの鮮度</h3>
+
+<p>下流の <code>not_null</code> は「昨日の分がまだ来ていない」を検知しない。行が無いだけならテストは全て通るからである。<code>updated_at</code> を持たないテーブル（<code>page_views</code> は <code>viewed_at</code>、<code>selection_events</code> は <code>occurred_at</code>）はテーブル側で <code>loaded_at_field</code> を上書きする。</p>
+
+<pre><code># models/staging/careervoice/sources.yml
+version: 2
+
+sources:
+  - name: careervoice
+    schema: src_careervoice
+    description: Datastream(CDC) による OLTP の複製
+    config:
+      loaded_at_field: updated_at
+      freshness:
+        warn_after: {count: 6, period: hour}
+        error_after: {count: 24, period: hour}
+
+    tables:
+      - name: members
+      - name: companies
+      - name: scouts
+      - name: applications
+
+      - name: page_views          # updated_at を持たない
+        config:
+          loaded_at_field: viewed_at
+          freshness:
+            warn_after: {count: 1, period: hour}
+            error_after: {count: 3, period: hour}
+          # 全件スキャンを避ける（日次 2,000 万行）
+          filter: viewed_at &gt;= timestamp_sub(current_timestamp(), interval 2 day)
+
+      - name: selection_events    # updated_at を持たない
+        config:
+          loaded_at_field: occurred_at
+
+      - name: job_categories      # マスタ。鮮度を測らない
+        config:
+          freshness: null</code></pre>
+
+<pre><code>dbt source freshness --select source:careervoice
+dbt source freshness --select source:careervoice.page_views</code></pre>
+
+<p><code>freshness</code> と <code>loaded_at_field</code> を <code>config:</code> の下に置く書き方は新しめで、古い版ではソース／テーブルの直下に直接書く。</p>
+
+<h3>(e) <code>exposures</code> で BI を依存に登録する</h3>
+
+<p>dbt の依存グラフは <code>ref()</code> の届く範囲で終わる。ダッシュボードが <code>obt_scout_funnel</code> を読んでいることは dbt からは見えないので、<code>exposures</code> に書いて初めて「このモデルを壊すと誰が困るか」が機械可読になる。§2(a) の「誰がまだ旧版を見ているか分からない」はここで解ける。</p>
+
+<pre><code># models/marts/exposures.yml
+version: 2
+
+exposures:
+  - name: scout_funnel_dashboard
+    label: スカウトファネル
+    type: dashboard
+    maturity: high
+    description: |
+      送信主体（企業 / エージェント）別の 開封 → 返信 → 応募 → 入社 ファネル。
+      更新: 毎日 08:00 JST。fct_scout は v2 に移行済み。
+    depends_on:
+      - ref('obt_scout_funnel')
+      - ref('fct_scout')
+      - ref('dim_scout_sender')
+    owner:
+      name: Data Platform
+      email: data-platform@example.invalid
+
+  - name: agency_fee_report
+    label: 成果報酬レポート
+    type: analysis
+    maturity: medium
+    description: エージェント別の成果報酬。v1 からの移行が未了。
+    depends_on:
+      - ref('fct_placement')
+      - ref('dim_agency')
+    owner:
+      name: Revenue Ops
+      email: revops@example.invalid</code></pre>
+
+<pre><code># ダッシュボードが依存する全モデルをビルドしてテストする
+dbt build --select +exposure:scout_funnel_dashboard</code></pre>
+
+<h2>6. 判断基準</h2>
+
+<h3>テストを置く層と種類</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>層</th><th>必須</th><th>任意</th><th>置かない（理由）</th></tr></thead>
+<tbody>
+<tr><td>source</td><td><code>freshness</code>（<code>loaded_at_field</code>）</td><td>—</td><td>行レベルのテスト。全件スキャンのコストに対して、直せない相手を叩くだけになる</td></tr>
+<tr><td>staging</td><td><code>not_null</code>（自然キー・時刻列）、<code>accepted_values</code>（区分値）、自然キーの <code>unique</code></td><td><code>accepted_range</code>（<code>score_*</code> が 1.0〜5.0）</td><td><code>relationships</code>。キーはまだ解決していないので、失敗しても原因がソースかモデルか切り分けられない</td></tr>
+<tr><td>intermediate</td><td>粒度（<code>unique_combination_of_columns</code>）</td><td>結合前後の行数一致</td><td><code>contract</code>。公開面ではなく、形を凍結すると分割・統合の自由が消える</td></tr>
+<tr><td>marts <code>dim_*</code></td><td><code>_key</code> の <code>unique</code> ＋ <code>not_null</code>、<code>-1</code> 既定行の存在</td><td><code>accepted_values</code>、SCD2 の版の重なり無し</td><td>加法性。メジャーが無い</td></tr>
+<tr><td>marts <code>fct_*</code></td><td>粒度、全 FK の <code>relationships</code>、加法性（<code>expression_is_true</code>）、<code>contract</code></td><td>原子ファクトとの件数照合（DT#77）、業務ルールスクリーン</td><td>—</td></tr>
+<tr><td>marts <code>agg_*</code></td><td>粒度、素のファクトとの合計一致</td><td>—</td><td><code>relationships</code>。上流のファクトで保証済みで、二重に走らせるだけ</td></tr>
+<tr><td>marts <code>obt_*</code></td><td>行数が元のファクトと一致（結合による増殖の検知）</td><td>—</td><td>粒度・参照整合性。star 側で保証済み</td></tr>
+<tr><td>snapshots</td><td><code>dbt_valid_from</code> / <code>dbt_valid_to</code> の重なりが無いこと</td><td>—</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>改版するか、上書きするか</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>変更</th><th>契約での扱い</th><th>判断</th><th>理由</th></tr></thead>
+<tbody>
+<tr><td>列を足す（<code>fct_scout</code> に <code>member_profile_mini_key</code>）</td><td>非破壊</td><td>上書き。<code>columns:</code> に足す</td><td>既存の参照は壊れない。ただし契約下では YAML を更新しないとビルドが落ちる</td></tr>
+<tr><td>列を消す・改名する</td><td>破壊</td><td>新版</td><td>下流の <code>SELECT</code> が壊れる</td></tr>
+<tr><td>型を変える</td><td>破壊</td><td>新版</td><td>BI 側の集計・書式が壊れる</td></tr>
+<tr><td>制約（<code>not_null</code>）を足す・外す</td><td>破壊（1.6 以降）</td><td>新版</td><td>NULL を前提にしていた下流が壊れる</td></tr>
+<tr><td>列も型も同じまま値の意味を変える（<code>member_key</code> を現在版から時点版へ）</td><td><strong>検知されない</strong></td><td>新版</td><td>過去の全ての数字が黙って変わる。契約は形しか守らない</td></tr>
+<tr><td>粒度を変える</td><td>検知されない</td><td>新モデル</td><td>粒度が違えば別のファクト（01回）。版ではない</td></tr>
+<tr><td>バグ修正（過去の数字が正しくなる）</td><td>—</td><td>上書き ＋ 告知</td><td>版を切ると誤った版が本番に残り続ける</td></tr>
+<tr><td>モデル名に <code>_v2</code> を埋める</td><td>—</td><td><strong>しない</strong></td><td><code>latest_version</code> も <code>deprecation_date</code> も無く、両方が本番参照される（§2(a)）</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>7. 演習</h2>
+
+<h3>(a) <code>fct_application_pipeline</code> に置くべきテストを列挙し、それぞれがどの壊れ方を捕まえるか</h3>
+
+<details>
+<summary>解答例</summary>
+<div class="table-wrap">
+<table>
+<thead><tr><th>テスト</th><th>対象</th><th>捕まえる壊れ方</th></tr></thead>
+<tbody>
+<tr><td><code>dbt_utils.unique_combination_of_columns: [application_id]</code></td><td>モデル</td><td>§2(c)。<code>selection_events</code> をピボットせずに結合して <code>P001</code> が 7 行に増える</td></tr>
+<tr><td>全 <code>_key</code> 列の <code>not_null</code></td><td>列</td><td>NULL の外部キー。<code>hired_date_key</code> が NULL だと <code>JOIN dim_date</code> で入社前の応募が丸ごと落ちる（DT#43）</td></tr>
+<tr><td><code>relationships</code>: 8 本の日付キー → <code>dim_date.date_key</code></td><td>列</td><td>未達を <code>-1</code> にし忘れて <code>19700101</code> 等を入れる事故。<code>dim_date</code> に <code>-1</code> 行があるので <code>where</code> で除かない</td></tr>
+<tr><td><code>relationships</code>: <code>member_key</code> / <code>company_key</code> / <code>job_posting_key</code> / <code>agency_key</code> / <code>agent_key</code> / <code>job_category_key</code> / <code>channel_key</code></td><td>列</td><td>as-of join の窓がずれて、応募時点に存在しない版のキーを引く</td></tr>
+<tr><td><code>accepted_values</code>: <code>current_stage</code></td><td>列</td><td>ソースに新しい <code>stage</code> が増えたのに気づかない。列スクリーン</td></tr>
+<tr><td><code>expression_is_true</code>: <code>not (is_hired = 1 and hired_date_key = -1)</code></td><td>モデル</td><td>マイルストーンのフラグと日付キーの不整合。累積スナップショットの更新漏れ</td></tr>
+<tr><td><code>expression_is_true</code>: <code>days_applied_to_offer &gt;= 0</code></td><td>モデル</td><td>タイムゾーン（JST / UTC）の取り違えで負のリードタイムが出る</td></tr>
+<tr><td>singular test: <code>fct_selection_event</code> の <code>stage='hired'</code> 件数と <code>SUM(is_hired)</code> の一致</td><td>プロジェクト</td><td>累積スナップショットだけがずれる。サマリー単独は危険（DT#77）</td></tr>
+<tr><td><code>contract: enforced: true</code></td><td>モデル</td><td>16 本の FK のうち 1 本を消す・改名する変更が、BI に届く前にビルドで落ちる</td></tr>
+</tbody>
+</table>
+</div>
+<p>粒度・参照整合性・加法性の 3 種が揃っている。<code>require_partition_filter</code> を張る場合は、全テストの <code>config</code> に <code>where: "applied_date &gt;= date_sub(current_date(), interval 90 day)"</code> を足す。</p>
+</details>
+
+<h3>(b) <code>dim_company</code> の <code>industry</code> と <code>sector</code> の間に中間分類を 1 階層足す変更は、改版か上書きか</h3>
+
+<details>
+<summary>解答例</summary>
+<p><strong>列を 1 本足すだけなら上書き。</strong> §6 の改版表の第 1 行を適用する。契約の観点では非破壊（既存の列名も型も制約も変わらない）で、dbt も破壊的変更として扱わない。ただし <code>contract: enforced: true</code> を張っているなら <code>columns:</code> への追記が必須で、忘れるとビルドが「契約と形が違う」で落ちる。</p>
+<p><strong>ただし同じ依頼が「再分類」を含むなら新版。</strong> 中間分類を足すついでに <code>industry</code> の値の割り当てを変える（<code>C002</code> を IT から別分類へ移す等）と、列も型も変わらないまま過去の全ての業界別集計が変わる。これは §6 の第 5 行「値の意味を変える」で、契約は検知しない。</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>依頼の実体</th><th>判断</th><th>やること</th></tr></thead>
+<tbody>
+<tr><td>列を 1 本足すだけ</td><td>上書き</td><td>モデル ＋ <code>columns:</code> に追記。<code>not_null</code> は付けない（過去行が埋まらない）</td></tr>
+<tr><td>足したうえで既存の <code>industry</code> を再分類</td><td>新版</td><td><code>versions:</code> に v2。旧版に <code>deprecation_date</code>。<code>exposures</code> を見て下流に告知</td></tr>
+<tr><td>SCD2 の版を切り直して過去も新分類にする</td><td>新版 ＋ 再表明</td><td>Type1 として全履歴を上書きするか、Type2 として新版を積むかは 05回の判断。どちらでも数字は変わるので告知が要る</td></tr>
+</tbody>
+</table>
+</div>
+</details>
+
+<h3>(c) <code>int_review_member_link</code> をどの層・どのデータセットに置き、テストで何を保証するか</h3>
+
+<details>
+<summary>解答例</summary>
+<p><strong>層は intermediate、データセットは marts と別のアクセス制限つきスキーマ。</strong> 名前が <code>int_</code> なのは正典の命名どおりで、役割も intermediate の定義（結合を担い公開面ではない）に合う。ただし <code>ephemeral</code> にはしない。会員とクチコミの結合という<strong>使うたびに監査したい操作</strong>なので、実体を持つテーブルとして残し、権限で守る。</p>
+<pre><code># dbt_project.yml
+models:
+  careervoice:
+    intermediate:
+      +materialized: ephemeral
+      +schema: intermediate
+      restricted:
+        +materialized: table
+        +schema: restricted     # BigQuery 側で IAM を分ける
+        +tags: ['pii']</code></pre>
+<div class="table-wrap">
+<table>
+<thead><tr><th>保証すること</th><th>テスト</th></tr></thead>
+<tbody>
+<tr><td>粒度が 1 行 = 1 クチコミであること（結合で増えていない）</td><td><code>dbt_utils.unique_combination_of_columns: [review_id]</code></td></tr>
+<tr><td><code>review_id</code> が <code>fct_review</code> の退化ディメンションと一致</td><td><code>relationships: to: ref('fct_review'), field: review_id</code></td></tr>
+<tr><td><code>member_key</code> が投稿時点の版に解決している</td><td><code>relationships: to: ref('dim_member'), field: member_key</code> ＋ <code>member_key != -1</code> の <code>expression_is_true</code></td></tr>
+<tr><td><strong><code>fct_review</code> が <code>member_key</code> を持たないこと</strong>（匿名性の固定判断が破られていない）</td><td><code>fct_review</code> の <code>contract: enforced: true</code>。列を足せばビルドが落ちる</td></tr>
+<tr><td>公開データセットに漏れていないこと</td><td>singular test で <code>int_review_member_link</code> の下流に <code>marts</code> のモデルが無いことを確認するか、<code>+tags: ['pii']</code> を CI で <code>dbt list --select tag:pii+</code> して差分を見る</td></tr>
+</tbody>
+</table>
+</div>
+<p>最後の 1 行が本題である。粒度も参照整合性も守れているのに公開面へ繋いでしまう事故は SQL のテストでは捕まらないので、依存グラフ側で守る（<code>exposures</code> と <code>tags</code>）。<code>fct_review</code> の契約は、匿名性という設計判断を機械が守れる形に翻訳したものになっている。</p>
+</details>
+
+<h2>8. 参考: 手元の基盤ではどうか</h2>
+
+<div class="aside">
+<ul>
+<li><code>dbt_logs_analysis</code> には <code>mart_url_performance</code> / <code>mart_url_performance_v2</code> / <code>mart_url_performance_incremental</code> の 3 本が別モデル名で並び、<code>models/marts/exposures.yml</code> の <code>weekly_performance_report</code> が <code>_incremental</code> と <code>_v2</code> の<strong>両方</strong>に依存している。§2(a) の形そのもので、この回の基準なら <code>versions:</code> ＋ <code>latest_version</code> にまとめ、旧版に <code>deprecation_date</code> を立てる。</li>
+<li><code>mart_url_performance_incremental</code> は <code>unique_key=['url_path', 'date']</code> を config に書きながら、<code>models/marts/schema.yml</code> に項目自体が無く、テストは 0 件。宣言した粒度をテストに翻訳していないので §2(c) が起きても気づけない。<code>dbt_utils</code> を <code>packages.yml</code> に入れて <code>unique_combination_of_columns: [url_path, date]</code> を 1 本足すのが最短。</li>
+<li><code>models/staging/sources.yml</code> に <code>loaded_at_field</code> と <code>freshness</code> が無い。Glue Crawler の出力が止まっても、下流の <code>not_null</code> は「行が無い」を検知しないので全部通る。</li>
+<li>一方 <code>exposures.yml</code> は 3 件（dashboard / application / notebook）が既に登録済みで、§5(e) は実装済みと言える。足りないのは登録ではなく、そこから逆算した改版手順のほう。</li>
+<li><code>news_pipeline</code> の <code>summaries.scoring_version</code> は「どの版の採点ロジックで付けたスコアか」を行に持つ列で、監査ディメンションの発想を 1 列に縮めたものになっている。<code>raw_articles.collected_at</code> と合わせると <code>dim_audit</code> の <code>batch_id</code> / <code>loaded_at</code> 相当は揃うが、実行 ID（<code>invocation_id</code> 相当）が無いので「どの実行が入れた行か」は特定できない（§2(d)）。</li>
+<li>試せる種: <code>dbt_logs_analysis</code> に <code>versions:</code> を導入し、<code>mart_url_performance</code> を v1、<code>_v2</code> を v2 として <code>exposures.yml</code> の参照を <code>ref('mart_url_performance', v=2)</code> に寄せる。物理名が変わるので <code>alias</code> の挙動も同時に確かめられる。</li>
+</ul>
+</div>
+
+<h2>参照文献</h2>
+
+<ul class="ref">
+<li>Ralph Kimball, Margy Ross, <em>The Data Warehouse Toolkit, 3rd ed.</em>（2013）ch.19 — <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/data-warehouse-dw-toolkit/">kimballgroup.com</a></li>
+<li>Ralph Kimball, <em>Subsystems of ETL Revisited</em>（2007） — <a href="https://www.kimballgroup.com/2007/10/subsystems-of-etl-revisited/">kimballgroup.com</a></li>
+<li>Ralph Kimball, <em>An Architecture for Data Quality</em>（Kimball Group White Paper, 2007） — <a href="https://www.kimballgroup.com/wp-content/uploads/2007/10/An-Architecture-for-Data-Quality1.pdf">PDF</a></li>
+<li>Bob Becker, <em>Design Tip #108: When is the Dimensional Model Design Done?</em>（2008） — <a href="https://www.kimballgroup.com/wp-content/uploads/2012/05/DT108_WhenDimensionalModelDone.pdf">PDF</a></li>
+<li>Ralph Kimball, <em>Design Tip #164: Have You Built Your Audit Dimension Yet?</em>（2014） — <a href="https://www.kimballgroup.com/2014/03/design-tip-164-built-your-audit-dimension/">kimballgroup.com</a></li>
+<li>Ralph Kimball, <em>The Data Warehouse ETL Toolkit</em>（34 サブシステムの原典） — <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/data-warehouse-dw-etl-toolkit/">kimballgroup.com</a></li>
+<li>dbt, <em>How we structure our dbt projects</em> — <a href="https://docs.getdbt.com/best-practices/how-we-structure/1-guide-overview">docs.getdbt.com</a></li>
+<li>dbt, <em>Model contracts</em> — <a href="https://docs.getdbt.com/docs/collaborate/govern/model-contracts">docs.getdbt.com</a></li>
+<li>Jonathan Neo, <em>Building a Kimball dimensional model with dbt</em>（dbt Developer Blog, 2023） — <a href="https://docs.getdbt.com/blog/kimball-dimensional-model">docs.getdbt.com</a></li>
+</ul>
+
+</body>
+</html>

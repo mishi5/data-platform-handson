@@ -528,18 +528,18 @@ models:
       - dbt_utils.unique_combination_of_columns:
           combination_of_columns: [snapshot_date, member_id]
           config:
-            where: "snapshot_date >= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 3 DAY)"
+            where: "snapshot_date &gt;= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 3 DAY)"
     columns:
       - name: member_profile_mini_key
         tests:
           - not_null:
               config:
-                where: "snapshot_date >= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 3 DAY)"
+                where: "snapshot_date &gt;= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 3 DAY)"
           - relationships:
               to: ref('dim_member_profile_mini')
               field: member_profile_mini_key
               config:
-                where: "snapshot_date >= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 3 DAY)"</code></pre>
+                where: "snapshot_date &gt;= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 3 DAY)"</code></pre>
 
 <pre><code>-- tests/assert_mini_dimension_row_count.sql
 -- ミニ・ジャンクの「行数＝組合せ数」は設計上の不変条件。壊れたら落とす
