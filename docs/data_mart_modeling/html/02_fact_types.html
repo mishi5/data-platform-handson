@@ -357,9 +357,9 @@ SELECT
     -- 未達だけでなく「ディメンション側に該当行が無い」場合も -1 に落とす（DT#43）
     COALESCE(mem.member_key,       -1) AS member_key,
     COALESCE(co.company_key,       -1) AS company_key,
-    COALESCE(jp.job_posting_key,   -1) AS job_posting_key,
-    COALESCE(jc.job_category_key,  -1) AS job_category_key,
-    COALESCE(ch.channel_key,       -1) AS channel_key,
+    COALESCE(jp.job_posting_key,   '-1') AS job_posting_key,
+    COALESCE(jc.job_category_key,  '-1') AS job_category_key,
+    COALESCE(ch.channel_key,       '-1') AS channel_key,
     COALESCE(agc.agency_key,       -1) AS agency_key,   -- 求人がエージェント経由でなければ -1
     COALESCE(ag.agent_key,         -1) AS agent_key,    -- スカウト経由でなければ -1
     -- member_profile_mini_key（応募時点）はここに同じ形で足す（03回 / 05回）
@@ -420,7 +420,7 @@ LEFT JOIN {{ ref('dim_agent') }}        AS ag
 
 <p>ディメンションキーを全部 <code>COALESCE(..., -1)</code> で包んでいるのは、<strong>未達だけでなく「ディメンション側に該当行が無い」場合も未知として <code>-1</code> に落とす</strong>ためである。SCD2 の区間が応募時刻をカバーしない（遅延到着・区間の穴）と <code>member_key</code> は NULL になるが、<code>relationships</code> テストは NULL 行を黙って無視するので気づけない。<code>-1</code> に落としておけば <code>not_null</code> で検出できる。</p>
 
-<p>担当エージェント（<code>agent_key</code>）は求人ではなくスカウト（<code>applications.scout_id</code> → <code>scouts.sender_agent_id</code>）から解決する。求人が知っているのは <code>agency_id</code> までなので、そちらは縮約ディメンション <code>dim_agency</code> に結んで <code>agency_key</code> にする。<code>-1</code> は INT64 キーを前提にした表記で、STRING キーなら <code>'-1'</code> になる（キー型の判断は 03回）。</p>
+<p>担当エージェント（<code>agent_key</code>）は求人ではなくスカウト（<code>applications.scout_id</code> → <code>scouts.sender_agent_id</code>）から解決する。求人が知っているのは <code>agency_id</code> までなので、そちらは縮約ディメンション <code>dim_agency</code> に結んで <code>agency_key</code> にする。上の SQL で <code>job_posting_key</code> / <code>job_category_key</code> / <code>channel_key</code> だけ <code>'-1'</code> になっているのは、これらが自然キーをそのまま使う STRING キーだからである（<code>COALESCE(STRING, INT64)</code> は BigQuery では型エラーになる）。キー型の判断は 03回。</p>
 
 <h3>テストは「累積スナップショットであること」を検査する</h3>
 
@@ -431,31 +431,31 @@ models:
     columns:
       - name: application_id
         description: 退化ディメンション（DT#95）。粒度そのもの
-        tests: [unique, not_null]      # ← 粒度宣言のテスト
+        data_tests: [unique, not_null]      # ← 粒度宣言のテスト
       - name: applied_date_key
-        tests:
+        data_tests:
           - not_null
           - relationships:
               to: ref('dim_date')
               field: date_key
       - name: offer_date_key
         description: 未達は -1
-        tests:
+        data_tests:
           - not_null
           - relationships:             # -1 行が dim_date に無いとここで落ちる
               to: ref('dim_date')
               field: date_key
       - name: member_key
         description: ディメンション側に該当行が無い場合も -1（NULL にしない）
-        tests: [not_null]
+        data_tests: [not_null]
       - name: current_stage
-        tests:
+        data_tests:
           - accepted_values:
               values: ['applied', 'document', 'first_interview', 'final_interview',
                        'offer', 'accepted', 'hired', 'rejected', 'withdrawn']
       - name: days_applied_to_offer
         description: 未達は NULL（0 ではない）
-        tests:
+        data_tests:
           - dbt_utils.accepted_range:
               min_value: 0
               inclusive: true
@@ -734,9 +734,9 @@ scout_cum AS (
 SELECT
     pd.snapshot_date_key,
     pd.full_date AS snapshot_date,               -- パーティション用の DATE 列
-    COALESCE(jp.job_posting_key,  -1) AS job_posting_key,
+    COALESCE(jp.job_posting_key,  '-1') AS job_posting_key,
     COALESCE(co.company_key,      -1) AS company_key,
-    COALESCE(jc.job_category_key, -1) AS job_category_key,
+    COALESCE(jc.job_category_key, '-1') AS job_category_key,
     -- 担当者（agent_id）は求人だけでは決まらないので、縮約ディメンションに結ぶ。
     -- 直接掲載（agency_id が NULL）は -1（DT#43）
     COALESCE(agc.agency_key,      -1) AS agency_key,

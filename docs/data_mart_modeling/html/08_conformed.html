@@ -41,7 +41,7 @@
 <body>
 
 <h1>コンフォームドとドリルアクロス</h1>
-<p class="meta">データマート設計 08 ／ 参照: DWT ch.4, The Soul of the Data Warehouse Part 1–2, Design Tip #135 ／ 再解釈: ECM, Hightouch 2</p>
+<p class="meta">データマート設計 08 ／ 参照: DWT ch.4, The Soul of the Data Warehouse Part 1–2, Design Tip #135 ／ 再解釈: ECM, Hightouch Modelling Part 2</p>
 
 <h2>1. この回が決めること</h2>
 
@@ -486,14 +486,14 @@ models:
     columns:
       - name: company_key
         description: dim_company の is_current 版のキー
-        tests: [unique, not_null]
+        data_tests: [unique, not_null]
       - name: company_id
-        tests: [not_null]
+        data_tests: [not_null]
       - name: review_count_total
         description: |
           全期間の投稿クチコミ件数。fct_review の粒度どおり submitted 全件で、
           審査中・却下も含む（published のみではない）。加法
-        tests: [not_null]
+        data_tests: [not_null]
       - name: avg_overall_score_90d
         description: |
           直近 90 日に投稿された overall_score の平均。sum_overall_score_90d / review_count_90d。
@@ -504,7 +504,7 @@ models:
       - name: mrr
         description: 当月の有効契約の monthly_fee 合計。企業をまたいでは加法、月をまたいでは非加法
 
-    tests:
+    data_tests:
       - dbt_utils.expression_is_true:
           expression: "avg_overall_score_90d is null or avg_overall_score_90d between 1.0 and 5.0"
       - dbt_utils.expression_is_true:

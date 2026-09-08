@@ -126,13 +126,13 @@ GROUP BY member_id</code></pre>
 
 <h3>(c) <code>not_null</code> だけでは粒度が守られない</h3>
 
-<p><code>stg_careervoice__reviews</code> を作るとき、審査結果を一緒に持たせようとして <code>review_moderation_events</code> を結合したとする。<code>R001</code> は <code>submitted</code> → <code>screening</code> → <code>published</code> で審査イベントが 2 行あるので、クチコミが 2 行に増える。列は全て埋まっているので、既存の <code>not_null</code> テストは全て通る。</p>
+<p><code>stg_careervoice__reviews</code> を作るとき、審査結果を一緒に持たせようとして <code>review_moderation_events</code> を結合したとする。<code>R001</code> は <code>submitted</code> → <code>screening</code> → <code>submitted</code>（03-11 の差し戻し <code>low_quality</code>）→ <code>published</code> で審査イベントが 3 行あるので、クチコミが 3 行に増える。列は全て埋まっているので、既存の <code>not_null</code> テストは全て通る。</p>
 
-<pre><code>-- fct_review に R001 が 2 行入った状態で、C002 のクチコミを数える
+<pre><code>-- fct_review に R001 が 3 行入った状態で、C002 のクチコミを数える
 SELECT
     c.name,
-    SUM(f.review_count)                     AS review_count,      -- 2（正しくは 1）
-    SAFE_DIVIDE(SUM(f.overall_score), SUM(f.review_count)) AS avg_overall_score  -- 3.5（分子も分母も 2 倍になるので変わらない）
+    SUM(f.review_count)                     AS review_count,      -- 3（正しくは 1）
+    SAFE_DIVIDE(SUM(f.overall_score), SUM(f.review_count)) AS avg_overall_score  -- 3.5（分子も分母も 3 倍になるので変わらない）
 FROM {{ ref('fct_review') }} AS f
 JOIN {{ ref('dim_company') }} AS c
     ON f.company_key = c.company_key
@@ -140,7 +140,7 @@ WHERE f.submitted_date &gt;= DATE '2026-03-01'
   AND c.company_id = 'C002'
 GROUP BY c.name</code></pre>
 
-<p>件数だけが 2 倍になり、平均は同じ値を返す。<strong>平均が正しく見えるので気づかない</strong>のがこの壊れ方の質の悪さで、企業別の投稿数ランキングと評価スコアが静かに矛盾する。粒度宣言をテストに翻訳していれば、<code>fct_review</code> のビルド直後に落ちる。</p>
+<p>件数だけが 3 倍になり、平均は同じ値を返す。<strong>平均が正しく見えるので気づかない</strong>のがこの壊れ方の質の悪さで、企業別の投稿数ランキングと評価スコアが静かに矛盾する。粒度宣言をテストに翻訳していれば、<code>fct_review</code> のビルド直後に落ちる。</p>
 
 <h3>(d) <code>dim_audit</code> が無く、どの実行が壊れた行を入れたか追えない</h3>
 
@@ -258,7 +258,7 @@ ORDER BY a.loaded_at DESC</code></pre>
 <tr><td>5 Error Event Tracking</td><td><code>dbt test</code> の結果と <code>run_results.json</code></td><td>結果を永続化してエラー事象ファクトにする部分</td></tr>
 <tr><td>6 Audit Dimension Creation</td><td><code>invocation_id</code> / <code>run_started_at</code> ＋ <code>dim_audit</code> モデル</td><td>品質フラグの判定条件を書くこと（§5(b)）</td></tr>
 <tr><td>9 SCD Manager</td><td><code>dbt snapshot</code>（<code>dbt_valid_from</code> / <code>dbt_valid_to</code>）</td><td>Type 6 の混在（<code>dim_company.name</code> だけ Type1）はモデル側で書く</td></tr>
-<tr><td>10 Surrogate Key Generator</td><td><code>dbt_utils.generate_surrogate_key</code> / <code>FARM_FINGERPRINT</code></td><td>何をキーの入力にするかの判断（03回）</td></tr>
+<tr><td>10 Surrogate Key Generator</td><td><code>FARM_FINGERPRINT</code>（03回で <code>dbt_utils.generate_surrogate_key</code> は不採用）</td><td>何をキーの入力にするかの判断（03回）</td></tr>
 <tr><td>19 Aggregate Builder</td><td><code>agg_*</code> モデル ＋ 増分</td><td>集約ナビゲーションは無い。どの集約を使うかは BI 側で明示</td></tr>
 <tr><td>22 Job Scheduler</td><td>DAG は dbt、起動は外部（Cloud Scheduler 等）</td><td>—</td></tr>
 <tr><td>29 Lineage and Dependency</td><td><code>dbt docs</code> ＋ <code>exposures</code></td><td>dbt の外の依存（BI・逆 ETL）を <code>exposures</code> に登録すること</td></tr>
@@ -293,7 +293,7 @@ ORDER BY a.loaded_at DESC</code></pre>
 
 <h3>(a) <code>fct_scout</code> の契約とテスト</h3>
 
-<p>契約は列の型を書かざるを得ないので、03回の割当に従う（SCD2 のキーは <code>FARM_FINGERPRINT</code> 由来の INT64、Type0/1 のキーは自然キーの型そのまま、<code>date_key</code> は INT64）。<code>require_partition_filter = true</code> を張ると、テストの生成 SQL がパーティションフィルタ無しでテーブルを読むため全て落ちる。<code>config: where:</code> でフィルタを注入するのが回避策で、これはテスト対象のリレーションを <code>(SELECT * FROM ... WHERE ...) dbt_subquery</code> に差し替える機能である。</p>
+<p>契約は列の型を書かざるを得ないので、03回の割当に従う（SCD2 のキーは <code>FARM_FINGERPRINT</code> 由来の INT64、Type0/1 のキーは自然キーの型そのまま、<code>date_key</code> は INT64）。<strong>star 側の <code>fct_scout</code> には <code>require_partition_filter</code> を付けない</strong>（正本は全期間の再集計・バックフィル・整合テストの対象になるため。07回）。付けるのは配布物 <code>obt_*</code> と <code>dim_member_daily</code> の側で、そこでは事情が変わる — <code>require_partition_filter = true</code> のテーブルはテストの生成 SQL がパーティションフィルタ無しで読むため全て落ちる。<code>config: where:</code> でフィルタを注入するのが回避策で、これはテスト対象のリレーションを <code>(SELECT * FROM ... WHERE ...) dbt_subquery</code> に差し替える機能である。下の <code>fct_scout</code> の例では窓はスキャン量を抑える運用上の選択にすぎないが、<strong>形はフィルタ必須テーブルで必要になるものと同じ</strong>なので、この形で示す。</p>
 
 <pre><code># models/marts/schema.yml
 version: 2
@@ -311,7 +311,7 @@ models:
         data_type: date
         granularity: day
       cluster_by: [scout_sender_key, member_key]
-      require_partition_filter: true
+      # require_partition_filter は付けない（star = 正本。07回）
       contract:
         enforced: true
 
@@ -449,14 +449,14 @@ FROM (SELECT 1)
 WHERE NOT EXISTS (SELECT 1 FROM {{ ref('dim_job_posting') }} WHERE job_posting_key = '-1')</code></pre>
 
 <div class="aside modern">
-<p><code>where</code> による窓（ここでは 90 日）は、パーティションフィルタ必須テーブルでテストを走らせるための代償である。全期間の粒度を保証したいなら、<code>where</code> を外した同じテストを別ジョブ（月次など）で回す。<code>+where</code> は <code>dbt_project.yml</code> の <code>data_tests:</code> 配下にパス単位で既定値を書けるが（<code>models:</code> 配下に書いても効かない）、ファクトごとにパーティション列名が違う（<code>sent_date</code> / <code>applied_date</code> / <code>view_date</code>）ので、正典では各テストの <code>config:</code> に書く。</p>
+<p><code>where</code> による窓（ここでは 90 日）は、<code>require_partition_filter</code> を張る配布物（<code>obt_*</code>）や <code>dim_member_daily</code> でテストを走らせるために<strong>必要になる</strong>形である。<code>fct_scout</code> のような star 側の正本ではフィルタ強制が無いので窓は必須ではなく、スキャン量を抑えるための運用上の選択になる。どちらであれ全期間の粒度を保証したいなら、<code>where</code> を外した同じテストを別ジョブ（月次など）で回す。<code>+where</code> は <code>dbt_project.yml</code> の <code>data_tests:</code> 配下にパス単位で既定値を書けるが（<code>models:</code> 配下に書いても効かない）、ファクトごとにパーティション列名が違う（<code>sent_date</code> / <code>applied_date</code> / <code>view_date</code>）ので、正典では各テストの <code>config:</code> に書く。</p>
 </div>
 
 <h3>(b) <code>audit_key()</code> マクロと <code>dim_audit</code></h3>
 
 <p><code>dim_audit</code> は 1 実行 × 品質フラグごとに 1 行を作る増分モデルにする。<code>invocation_id</code> は dbt コマンド 1 回ごとに生成される UUID で、<code>run_started_at</code> は実行開始時刻の Python <code>datetime</code>（既定 UTC）である。両方ともコンパイル時に確定するので、同じ実行で作られた全ファクト行が同じ <code>audit_key</code> を指す。</p>
 
-<p>03回 §5(e) はこのマクロの下書きを載せている。<strong>正本はこちらで</strong>、変更点は 3 つ。引数を SQL 式から値に変える（<code>{{ audit_key('suspect') }}</code>）、<code>quality_flag</code> を <code>ok</code> / <code>estimated</code> / <code>suspect</code> の 3 値に固定する（Data Quality 白書の「タグを付けて通す」に対応）、<code>loaded_at</code> を <code>CURRENT_TIMESTAMP()</code> から <code>run_started_at</code> に変える（同一実行の全ファクト行が同じ時刻を指すため）。</p>
+<p>03回 §5(e) は呼び出し側の形（ディメンションとファクトが同じ実行を指すこと）だけを示している。<strong>正本はこちらで</strong>、ここで初めて足すものが 2 つある。<code>{%- do ref('dim_audit') -%}</code> によるビルド順の依存と、<code>incremental_strategy = 'merge'</code> による実行ごとの積み増しである。引数は値で渡し（<code>{{ audit_key('suspect') }}</code>）、<code>quality_flag</code> は <code>ok</code> / <code>estimated</code> / <code>suspect</code> の 3 値に固定する（Data Quality 白書の「タグを付けて通す」に対応）。<code>loaded_at</code> は <code>run_started_at</code>（同一実行の全ファクト行が同じ時刻を指すため）。</p>
 
 <pre><code>-- models/marts/dim_audit.sql
 {{ config(

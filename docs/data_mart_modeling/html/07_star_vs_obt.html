@@ -312,7 +312,11 @@ GROUP BY b.job_category_key;
 
 <h3>(a) star 側: <code>fct_scout</code> のパーティションとクラスタ</h3>
 
+<p>下の <code>int_scout_keyed</code> は <code>stg_careervoice__scouts</code> にキー解決（as-of join によるディメンション版の割り当て）を済ませた intermediate モデルである（正典 §4 の命名規則 <code>int_&lt;entity&gt;_&lt;verb&gt;</code>。正典にモデル登録は無い）。この回の主題は物理設計なので、キー解決の中身は 05回を見る。</p>
+
 <pre><code>-- models/marts/fct_scout.sql
+-- 増分化（materialized='incremental' + insert_overwrite）は 09回・10回で扱う。
+-- この回の論点は物理設計（パーティションとクラスタ）だけなので table のまま示す。
 {{ config(
     materialized='table',
     partition_by={
@@ -425,11 +429,11 @@ models:
       sent_date による絞り込みが必須（require_partition_filter=true）。
     columns:
       - name: scout_id
-        tests: [unique, not_null]
+        data_tests: [unique, not_null]
       - name: sent_date
-        tests: [not_null]
+        data_tests: [not_null]
       - name: scout_sender_key
-        tests:
+        data_tests:
           - relationships:
               to: ref('dim_scout_sender')
               field: scout_sender_key
@@ -455,12 +459,12 @@ SELECT sender_type, COUNT(*) FROM marts.obt_scout_funnel GROUP BY sender_type;
 
 <pre><code>    columns:
       - name: scout_id
-        tests:
+        data_tests:
           - unique:
               config:
                 where: "sent_date &gt;= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 7 DAY)"
       - name: scout_sender_key
-        tests:
+        data_tests:
           - relationships:
               to: ref('dim_scout_sender')
               field: scout_sender_key

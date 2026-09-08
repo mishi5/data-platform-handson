@@ -356,7 +356,7 @@ snapshots:
 
 <p>ここで §4 の主張の範囲を確認しておく。日次スナップショット方式が有利なのは<strong>捕捉済みの期間を作り直せる</strong>点で、各日のパーティションを独立に・並列に再計算できる。SCD2 のテーブルは MERGE の結果として状態を持つため、同じ日を流し直しても元に戻らない。</p>
 
-<p>一方、<strong>捕捉していない履歴はどちらの方式でも復元できない。</strong> <code>dim_member_daily</code> も <code>snap_members</code> の上に載っているので、<code>snap_members</code> が持っていない 1〜6 月のパーティションは作れない。遡って作れるのは、ソース側に <code>updated_at</code> 付きの履歴（Datastream の CDC ログ）が残っている場合だけである（09 回の演習(c)）。</p>
+<p>一方、<strong>捕捉していない履歴はどちらの方式でも復元できない。</strong> <code>dim_member_daily</code> も <code>snap_members</code> の上に載っているので、<code>snap_members</code> が持っていない 1〜6 月のパーティションは作れない。遡って作れるのは、ソース側に <code>updated_at</code> 付きの履歴（Datastream の CDC ログ）が残っている場合だけである（1 パーティションを作り直す手順は 09 回の演習(c)。1〜6 月をまとめて作る話はそこには無い）。</p>
 
 <pre><code>-- models/marts/dim_company.sql
 {{ config(materialized='table', cluster_by=['company_id']) }}
@@ -415,7 +415,7 @@ left join {{ ref('stg_careervoice__prefectures') }}  as p on p.prefecture_code =
 <pre><code># models/marts/schema.yml（抜粋）
 models:
   - name: dim_company
-    tests:
+    data_tests:
       - dbt_utils.unique_combination_of_columns:
           combination_of_columns: [company_id, valid_from]
       # 各版の区間が空でないことだけを見る（重なり・隙間は下の singular test）
@@ -423,11 +423,11 @@ models:
           expression: "valid_from &lt; valid_to"
     columns:
       - name: company_key
-        tests: [unique, not_null]
+        data_tests: [unique, not_null]
       - name: valid_to
-        tests: [not_null]
+        data_tests: [not_null]
       - name: is_current
-        tests:
+        data_tests:
           - not_null
 </code></pre>
 
@@ -570,10 +570,12 @@ group by v.member_id, v.version_no
 <p>この 2 本を <code>sent_at</code> で解決する。</p>
 
 <pre><code>-- models/marts/fct_scout.sql
+-- 増分化（materialized='incremental' + insert_overwrite）は 09回・10回で扱う。
+-- この回の論点は as-of join の書き方だけなので table のまま示す。
 {{ config(
     materialized = 'table',
     partition_by = {'field': 'sent_date', 'data_type': 'date'},
-    cluster_by   = ['member_key', 'scout_sender_key']
+    cluster_by   = ['scout_sender_key', 'member_key']
 ) }}
 
 with scouts as (

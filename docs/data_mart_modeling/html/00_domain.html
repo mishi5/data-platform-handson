@@ -42,7 +42,7 @@
 <body>
 
 <h1>題材と簡易データモデル</h1>
-<p class="meta">データマート設計 00 ／ 参照: DWT ch.1（4ステップ設計）, ch.18（設計プロセス）, 10 Rules, Manifesto, Design Tip #3 ／ 再解釈: Reis（概念/論理/物理）, Hightouch Part 1</p>
+<p class="meta">データマート設計 00 ／ 参照: DWT ch.1（4ステップ設計）, ch.18（設計プロセス）, 10 Rules, Manifesto, Design Tip #3 ／ 再解釈: Reis（概念/論理/物理）, Hightouch Modelling Part 1</p>
 
 <p>このシリーズは DMBOK シリーズ（総論）と扱う範囲を分ける。総論はガバナンス・品質・メタデータ・組織まで含む「データマネジメント全体」を扱うが、こちらは<strong>マートを1本作るときにその場で下す判断</strong>だけを扱う。粒度をどこに置くか、履歴をどう持つか、star にするか One Big Table にするか — 手を動かす直前に必ず迷う地点を、Kimball の原典と現代の再解釈の両方から詰める。</p>
 
@@ -435,14 +435,14 @@ Reis はこの順を飛ばすと、部門ごとに「顧客」の定義が食い
 <tr><td><code>screening</code> → <code>published</code></td><td>ファクト（日付キー + メジャー）</td><td><code>published_date_key</code>, <code>is_published</code>(0/1)</td><td>同上。到達したか否かは 0/1 の加法メジャー</td></tr>
 <tr><td><code>screening</code> → <code>rejected</code></td><td>ファクト（日付キー + メジャー）</td><td><code>rejected_date_key</code>, <code>is_rejected</code></td><td>同上</td></tr>
 <tr><td>遷移の所要時間</td><td>ファクト（メジャー）</td><td><code>hours_to_screening</code>, <code>hours_to_decision</code></td><td>数値の測定値。粒度（1クチコミの審査ライフサイクル）と整合する</td></tr>
-<tr><td>審査ラウンド数</td><td>ファクト（メジャー）</td><td><code>moderation_rounds</code></td><td><code>review_moderation_events</code> の行数を数えた加法メジャー。差し戻し（<code>screening</code> → <code>submitted</code>）を表現するなら正典の <code>status</code> 遷移に足す必要がある（01回で検討）</td></tr>
+<tr><td>審査ラウンド数</td><td>ファクト（メジャー）</td><td><code>moderation_rounds</code></td><td><code>review_moderation_events</code> のうち<strong>審査担当者が判定を下した遷移の数</strong>を数えた加法メジャー（イベント行数そのものではない）。差し戻し（<code>screening</code> → <code>submitted</code>）も判定なので数える — 正典 §5 の <code>R001</code> に差し戻し1回を固定した（01回）</td></tr>
 <tr><td>却下理由 <code>reason_code</code></td><td><strong>ディメンション</strong></td><td><code>dim_moderation_reason</code>（<code>reason_name</code>, <code>severity</code>）</td><td>フィルタ・グループ化に使う記述的な文脈。コードのままファクトに置かない（10 Rules #7）</td></tr>
 <tr><td>投稿時の会員属性<br>(<code>employment_status</code> ほか)</td><td><strong>ディメンション</strong></td><td><code>dim_review_attributes</code>（2×3×5 = 30行）</td><td>低カーディナリティの組合せ。ジャンクディメンションにまとめる</td></tr>
 <tr><td>現在の <code>status</code> そのもの</td><td>どちらでもない</td><td>—</td><td>4つの日付キーと <code>is_published</code> / <code>is_rejected</code> で完全に表現できる。状態列を別に持つと二重管理になる</td></tr>
 </tbody>
 </table>
 </div>
-<p><code>R001</code> は <code>submitted_date_key</code>=20260310, <code>published_date_key</code>=20260312, <code>rejected_date_key</code>=<code>-1</code>, <code>moderation_reason_key</code>=<code>-1</code>, <code>is_published</code>=1。<code>R002</code> は <code>rejected_date_key</code> に却下日、<code>published_date_key</code>=<code>-1</code>, <code>moderation_reason_key</code>=<code>defamation</code> の代理キー、<code>is_rejected</code>=1。<strong>未達マイルストーンを NULL ではなく <code>-1</code> にする</strong>のは §6 の固定判断（DT#43）で、<code>dim_date</code> 側に <code>full_date</code> = NULL・表示名「未到達」の行を1本置く。</p>
+<p><code>R001</code> は <code>submitted_date_key</code>=20260310, <code>published_date_key</code>=20260312, <code>rejected_date_key</code>=<code>-1</code>, <code>moderation_reason_key</code>=<code>'-1'</code>（<code>dim_moderation_reason</code> の自然キー <code>reason_code</code> は STRING なのでセンチネルも STRING）, <code>is_published</code>=1。<code>R002</code> は <code>rejected_date_key</code> に却下日、<code>published_date_key</code>=<code>-1</code>, <code>moderation_reason_key</code>=<code>defamation</code> の代理キー、<code>is_rejected</code>=1。<strong>未達マイルストーンを NULL ではなく <code>-1</code> にする</strong>のは §6 の固定判断（DT#43）で、<code>dim_date</code> 側に <code>full_date</code> = NULL・表示名「未到達」の行を1本置く。</p>
 <p>判断の分かれ目は「時点か、記述か」の一点。時点を持つものはファクト、フィルタ軸になるものはディメンション。<code>status</code> のような<strong>状態そのものはどちらでもない</strong> — 累積スナップショットでは到達済みマイルストーンの集合が状態を含意する。</p>
 </details>
 

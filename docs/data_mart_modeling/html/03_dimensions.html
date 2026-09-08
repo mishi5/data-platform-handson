@@ -473,27 +473,27 @@ version: 2
 models:
   - name: dim_member_profile_mini
     description: 会員の速く変わる属性のミニディメンション（Type 4, DT#127）。組合せ 15 通り ＋ -1 の既定行 = 16 行
-    tests:
+    data_tests:
       - dbt_utils.unique_combination_of_columns:
           combination_of_columns: [annual_income_band, job_change_intent]
     columns:
       - name: member_profile_mini_key
-        tests: [not_null, unique]
+        data_tests: [not_null, unique]
       - name: annual_income_band
-        tests:
+        data_tests:
           - accepted_values:
               values: ['lt400', '400_600', '600_800', '800_1000', 'ge1000', '不明']
       - name: job_change_intent
-        tests:
+        data_tests:
           - accepted_values:
               values: ['active', 'passive', 'none', '不明']
 
   - name: dim_date
     columns:
       - name: date_key
-        tests: [not_null, unique]
+        data_tests: [not_null, unique]
       - name: full_date
-        tests:
+        data_tests:
           - not_null:
               config:
                 where: "date_key &lt;&gt; -1"   # -1 行だけ NULL を許す
@@ -501,13 +501,13 @@ models:
   - name: fct_page_view
     columns:
       - name: member_profile_mini_key
-        tests:
+        data_tests:
           - not_null
           - relationships:
               to: ref('dim_member_profile_mini')
               field: member_profile_mini_key
       - name: view_date_key
-        tests:
+        data_tests:
           - not_null
           - relationships:
               to: ref('dim_date')
@@ -525,14 +525,14 @@ models:
   # 書いても generic test には伝播しないので、必ず各テストに書く。
   # 直近3日だけを検査するこの形を 10 回で規約化する
   - name: dim_member_daily
-    tests:
+    data_tests:
       - dbt_utils.unique_combination_of_columns:
           combination_of_columns: [snapshot_date, member_id]
           config:
             where: "snapshot_date &gt;= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 3 DAY)"
     columns:
       - name: member_profile_mini_key
-        tests:
+        data_tests:
           - not_null:
               config:
                 where: "snapshot_date &gt;= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 3 DAY)"
@@ -554,9 +554,11 @@ HAVING COUNT(*) &lt;&gt; 16   -- 組合せ 15 通り ＋ -1 の既定行</code><
 
 <h3>(e) <code>dim_audit</code> と dbt の <code>invocation_id</code></h3>
 
-<pre><code>-- macros/audit_key.sql
-{% macro audit_key(quality_flag_expr) -%}
-    FARM_FINGERPRINT(CONCAT('{{ invocation_id }}', '|', {{ quality_flag_expr }}))
+<p>正本は 10回（マクロ定義・<code>dim_audit</code> モデル・運用まで扱う）。ここでは<strong>呼び出し側の形</strong>、つまりディメンションとファクトが同じ実行をどう指すかだけを示す。</p>
+
+<pre><code>-- macros/audit_key.sql（正本は 10回）
+{% macro audit_key(quality_flag='ok') -%}
+    FARM_FINGERPRINT(CONCAT('{{ invocation_id }}', '|', '{{ quality_flag }}'))
 {%- endmacro %}</code></pre>
 
 <pre><code>-- models/marts/dim_audit.sql
@@ -564,13 +566,13 @@ HAVING COUNT(*) &lt;&gt; 16   -- 組合せ 15 通り ＋ -1 の既定行</code><
 {{ config(materialized='incremental', unique_key='audit_key') }}
 
 SELECT
-    {{ audit_key('quality_flag') }}                            AS audit_key,
+    FARM_FINGERPRINT(CONCAT('{{ invocation_id }}', '|', flag)) AS audit_key,
     '{{ run_started_at.strftime("%Y%m%d%H%M%S") }}'            AS batch_id,
     'src_careervoice'                                          AS source_system,
-    CURRENT_TIMESTAMP()                                        AS loaded_at,
+    TIMESTAMP '{{ run_started_at.strftime("%Y-%m-%d %H:%M:%S") }}' AS loaded_at,
     '{{ invocation_id }}'                                      AS dbt_invocation_id,
-    quality_flag
-FROM UNNEST(['ok', 'late_arriving_dimension', 'missing_natural_key']) AS quality_flag</code></pre>
+    flag                                                       AS quality_flag
+FROM UNNEST(['ok', 'estimated', 'suspect']) AS flag</code></pre>
 
 <pre><code>-- models/marts/fct_scout.sql（抜粋）
 SELECT
@@ -583,11 +585,11 @@ SELECT
     s.scout_id,        -- 退化ディメンション
     s.template_id,     -- 退化ディメンション
     1                  AS scout_count,
-    {{ audit_key("'ok'") }}                                             AS audit_key
+    {{ audit_key() }}                                                   AS audit_key
 FROM {{ ref('stg_careervoice__scouts') }} AS s
 ...</code></pre>
 
-<p><code>invocation_id</code> は dbt が実行ごとに発行する UUID で、Jinja コンテキストからそのまま参照できる。同じ実行の中で <code>dim_audit</code> とファクトが同じ式でキーを作るので、追加の結合なしに整合する。<code>run_started_at</code> は Python の datetime なので <code>strftime</code> で整形する。</p>
+<p><code>invocation_id</code> は dbt が実行ごとに発行する UUID で、Jinja コンテキストからそのまま参照できる。同じ実行の中で <code>dim_audit</code> とファクトが同じ式でキーを作るので、追加の結合なしに整合する。<code>run_started_at</code> は Python の datetime なので <code>strftime</code> で整形する。<code>loaded_at</code> に <code>CURRENT_TIMESTAMP()</code> ではなく <code>run_started_at</code> を使うのは、同一実行の全ファクト行が同じ時刻を指すようにするためである。<code>quality_flag</code> の値域 <code>ok</code> / <code>estimated</code> / <code>suspect</code> と、引数を SQL 式ではなく値で渡す形も 10回の正本に合わせている。</p>
 
 <p>これが効く場面は具体的だ。「7月の入社数が前月比で 3 割落ちた」ときに、<code>fct_placement</code> を <code>dim_audit</code> と結んで <code>batch_id</code> 別に件数を見れば、<strong>業務の変化なのか特定バッチのロード漏れなのかが1クエリで分かる</strong>。Techniques が「環境変数はコンプライアンスと監査の目的で特に有用で、BI ツールがどの版の ETL でどの行が作られたかをドリルダウンできるようになる」と言うのはこのことだ。</p>
 

@@ -416,9 +416,9 @@ SELECT
     -- 外部キー。未知は NULL ではなく -1（DT#43）
     COALESCE(dm.member_key, -1) AS member_key,
     COALESCE(dc.company_key, -1) AS company_key,
-    COALESCE(dj.job_posting_key, -1) AS job_posting_key,
-    COALESCE(dcat.job_category_key, -1) AS job_category_key,
-    COALESCE(dch.channel_key, -1) AS channel_key,
+    COALESCE(dj.job_posting_key, '-1') AS job_posting_key,
+    COALESCE(dcat.job_category_key, '-1') AS job_category_key,
+    COALESCE(dch.channel_key, '-1') AS channel_key,
 
     -- エージェンシー。-1 = エージェンシーを特定できない
     --   （直接応募、企業スカウト、および直接掲載求人へのエージェント紹介）

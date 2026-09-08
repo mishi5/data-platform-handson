@@ -41,7 +41,7 @@
 <body>
 
 <h1>多対多・不揃い階層・異種ディメンション</h1>
-<p class="meta">データマート設計 06 ／ 参照: DWT ch.7 ch.8 ch.10, Design Tip #142, Kimball Dimensional Modeling Techniques ／ 再解釈: BigQuery ネスト・繰り返し列</p>
+<p class="meta">データマート設計 06 ／ 参照: DWT ch.7, ch.8, ch.10, Design Tip #142, Kimball Dimensional Modeling Techniques ／ 再解釈: BigQuery ネスト・繰り返し列</p>
 
 <h2>1. この回が決めること</h2>
 
@@ -317,24 +317,24 @@ models:
       weighting_factor は member_key 内で合計 1。重みなしで結合すると二重計上になる。
     columns:
       - name: member_key
-        tests:
+        data_tests:
           - not_null
           - relationships:
               to: ref('dim_member')
               field: member_key
       - name: job_category_key
-        tests:
+        data_tests:
           - not_null
           - relationships:
               to: ref('dim_job_category')
               field: job_category_key
       - name: weighting_factor
-        tests:
+        data_tests:
           - not_null
           - dbt_utils.accepted_range:
               min_value: 0
               max_value: 1
-    tests:
+    data_tests:
       - dbt_utils.unique_combination_of_columns:
           combination_of_columns: [member_key, job_category_key]
 </code></pre>
@@ -484,7 +484,7 @@ unioned AS (
 
 SELECT
     -- SCD2 なので、ハッシュの入力に版を識別する valid_from を必ず入れる（03回の結論）。
-    -- 生成方式（FARM_FINGERPRINT / generate_surrogate_key）は 03回の判断に従う
+    -- 生成方式は 03回の判断（FARM_FINGERPRINT の INT64）に従う
     FARM_FINGERPRINT(
         CONCAT(sender_type, '|', sender_id, '|', CAST(valid_from AS STRING))
     ) AS scout_sender_key,

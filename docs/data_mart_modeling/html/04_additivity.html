@@ -412,7 +412,7 @@ metrics:
 <p><strong>何が変わり、何が残るか</strong></p>
 <ul>
 <li><strong>残る:</strong> 「率と平均をテーブルに焼かない」という判断そのもの。MetricFlow は分子分母が列として存在することを前提にしており、<code>fct_scout_funnel</code> に <code>is_replied</code> が無ければ ratio metric は定義できない。物理設計の要求は変わらない</li>
-<li><strong>変わる:</strong> 割り算のロジックの置き場所。かつては BI ツール／ダッシュボードごとに散っていた「SUM してから割る」が、リポジトリ内の1定義に集まる。「返信率」の定義が2つに割れる事故（03回の conformed の話と同じ構図）が減る</li>
+<li><strong>変わる:</strong> 割り算のロジックの置き場所。かつては BI ツール／ダッシュボードごとに散っていた「SUM してから割る」が、リポジトリ内の1定義に集まる。「返信率」の定義が2つに割れる事故（08回のコンフォームドの話と同じ構図）が減る</li>
 <li><strong>変わる:</strong> 半加法の宣言が実行可能になった。テーブルのコメントや Wiki に書いてあった「時間で足すな」が、集計エンジンが従う指定になる</li>
 <li><strong>変わらない危険:</strong> Semantic Layer を通らない経路（アドホック SQL、直接 BigQuery を叩く BI、Reverse ETL）が1本でもあるなら、メトリクス定義は守ってくれない。<strong>テーブル側で和と件数を持つ規律は依然として必要</strong>で、Semantic Layer はその上の層</li>
 </ul>
