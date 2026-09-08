@@ -129,8 +129,8 @@
 <table>
 <thead><tr><th>ずれる場所</th><th>具体例</th><th>結果</th></tr></thead>
 <tbody>
-<tr><td>母集団</td><td>片方は <code>status = 'published'</code> のクチコミだけ、片方は <code>submitted</code> 全件</td><td><code>C002</code> の 3 月クチコミ数が 1 と 2 に分かれる</td></tr>
-<tr><td>日付の役割</td><td>片方は <code>submitted_date</code>、片方は <code>published_date</code> で集計</td><td><code>R001</code>（3/10 投稿・3/12 公開）が別の月に落ちうる</td></tr>
+<tr><td>母集団</td><td>片方は <code>published</code> のクチコミだけ、片方は <code>submitted</code> 全件</td><td><code>C001</code> の 4 月クチコミ数が 0 と 1 に分かれる（<code>R002</code> は却下）</td></tr>
+<tr><td>日付の役割</td><td>片方は <code>submitted_date</code>、片方は <code>published_date</code> で集計</td><td>月末投稿・翌月公開のクチコミが別の月に落ちる（<code>R001</code> は 3/10 投稿・3/12 公開で同月だが、境界では割れる）</td></tr>
 <tr><td>企業の版</td><td>片方は投稿時点 <code>company_key</code>、片方は現在値</td><td>(a) と同じ割れ方</td></tr>
 <tr><td>平均の持ち方</td><td>片方が <code>avg_overall_score</code> を持ってしまう</td><td>企業をまたぐ再集約が不能。04 回の原則違反</td></tr>
 </tbody>
@@ -175,7 +175,8 @@
 <h2>4. 現代の再解釈</h2>
 
 <div class="aside modern">
-<p>ECM（Beauchemin, 2023）の出発点は、Kimball 自身の禁止事項である "A BI application must never issue SQL that joins two fact tables together across the fact table's foreign keys"。1 つのエンティティについて複数ファクトの指標を見るたびに回避策を書くのは摩擦が大きい、という主張である。解は、エンティティ表に窓付き指標（<code>visits_7d</code>, <code>visits_28d</code>, <code>visits_90d</code>）を直接持たせ、"simple queries (without having to use JOIN, UNION ALL, or subqueries)" を可能にすること。保証されるのは「every row is an instance of an entity」であり、<code>COUNT(*)</code> がエンティティ数になる。</p>
+<p>ECM（Beauchemin, 2023）の出発点は、Kimball 自身の禁止事項である "A BI application must never issue SQL that joins two fact tables together across the fact table's foreign keys"。1 つのエンティティについて複数ファクトの指標を見るたびに回避策を書くのは摩擦が大きい、という主張である。</p>
+<p>解は、エンティティ表に窓付き指標（<code>visits_7d</code>, <code>visits_28d</code>, <code>visits_90d</code>）を直接持たせ、"simple queries (without having to use JOIN, UNION ALL, or subqueries)" を可能にすること。保証されるのは "every row is an instance of an entity" であり、<code>COUNT(*)</code> がエンティティ数になる。</p>
 </div>
 
 <p>ECM は Kimball の否定ではなく、ドリルアクロスの結果を事前に計算して物理化したものである。行ヘッダをエンティティ 1 列（<code>company_key</code>）に固定し、時間窓を <code>_30d</code> / <code>_90d</code> に固定した特殊形と読める。ECM 自身も欠点として保存の冗長、幅の広い表の性能劣化、"column overload" を挙げ、"restraint and limit the number of metrics" を勧めている。</p>
@@ -201,7 +202,8 @@
 
 <h3>5-1. ドリルアクロス（企業 × 月）</h3>
 
-<p>3 つのファクトをそれぞれ同じ行ヘッダ <code>(company_key, month_key)</code> に集約し、<code>FULL OUTER JOIN ... USING</code> で並べる。BigQuery の <code>USING</code> は結合キーを 1 列に併合し、<code>FULL OUTER JOIN</code> では両側の値を合成するので、3 段のチェーンでもキー列は 1 つのまま残る。フィルタは DATE 型のパーティション列（<code>submitted_date</code> / <code>sent_date</code> / <code>applied_date</code>）に掛ける。<code>_date_key</code>（INT64）で絞るとプルーニングが効かない。</p>
+<p>3 つのファクトをそれぞれ同じ行ヘッダ <code>(company_key, month_key)</code> に集約し、<code>FULL OUTER JOIN ... USING</code> で並べる。BigQuery の <code>USING</code> は結合キーを 1 列に併合し、<code>FULL OUTER JOIN</code> では両側の値を合成するので、3 段のチェーンでもキー列は 1 つのまま残る。</p>
+<p>フィルタは DATE 型のパーティション列（<code>submitted_date</code> / <code>sent_date</code> / <code>applied_date</code>）に掛ける。<code>_date_key</code>（INT64）で絞るとプルーニングが効かない。</p>
 
 <pre><code>-- analyses/drill_across_company_month.sql
 -- 企業 × 月で クチコミ / スカウト / 応募 を横に並べる
@@ -655,6 +657,7 @@ WINDOW w AS (PARTITION BY company_key ORDER BY month_key)
 <li>Margy Ross, Design Tip #135: Conformed Dimensions as the Foundation for Agile Data Warehousing（2011） — <a href="https://www.kimballgroup.com/2011/06/design-tip-135-conformed-dimensions-as-the-foundation-for-agile-data-warehousing/">kimballgroup.com</a></li>
 <li>Maxime Beauchemin, Entity-Centric Data Modeling for Analytics（Preset, 2023） — <a href="https://preset.io/blog/introducing-entity-centric-data-modeling-for-analytics/">preset.io</a></li>
 <li>Hightouch, A Guide to Modern Data Warehouse Modelling — Part 2 — <a href="https://hightouch.com/blog/data-warehouse-modelling-part-2">hightouch.com</a></li>
+<li>dbt, BigQuery configurations（<code>materialized_view</code> の設定キー、<code>partition_by</code> / <code>cluster_by</code>） — <a href="https://docs.getdbt.com/reference/resource-configs/bigquery-configs">docs.getdbt.com</a></li>
 </ul>
 
 </body>

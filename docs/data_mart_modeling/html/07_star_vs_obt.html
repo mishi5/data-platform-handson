@@ -106,7 +106,9 @@ WHERE company_id = 'C002';   -- 全期間のパーティションが対象
 
 <p><code>M001</code> は 2026-06-15 に <code>job_change_intent</code> が <code>passive</code> → <code>active</code>、<code>annual_income_band</code> が <code>400_600</code> → <code>600_800</code> に変わり、2026-08-01 に <code>C001</code> へ入社した。<code>S001</code>（2026-06-20 送信）の <code>member_key</code> は送信時点の SCD2 行を指す。OBT に <code>dim_member</code> の属性を焼き込むと、そこに固定されるのは<strong>送信時点の値</strong>である。</p>
 
-<p>ここに「転職意欲が今 <code>active</code> の会員に、過去半年で何通スカウトが届いたか」という問いが来る。star なら <code>member_id</code> で <code>is_current</code> 行へ再結合すれば答えられる（正典の固定判断）。OBT だけを持っていると、現在値の列を足して<strong>全期間を再生成</strong>するしかない。しかも再生成した瞬間、過去の分析結果と数字が合わなくなる。</p>
+<p>ここに「転職意欲が今 <code>active</code> の会員に、過去半年で何通スカウトが届いたか」という問いが来る。star なら <code>member_id</code> で <code>is_current</code> 行へ再結合すれば答えられる（正典の固定判断）。</p>
+
+<p>OBT だけを持っていると、現在値の列を足して<strong>全期間を再生成</strong>するしかない。しかも再生成した瞬間、過去の分析結果と数字が合わなくなる。</p>
 
 <h3>(c) star を BI に直接渡して fan-out する</h3>
 
@@ -131,7 +133,9 @@ JOIN marts.br_member_desired_job_category AS b
 GROUP BY b.job_category_key;
 </code></pre>
 
-<p>この誤りは SQL を書ける人でも踏む。BI ツールに star を露出させるということは、<strong>結合の正しさをアナリスト全員に委ねる</strong>ということである。OBT を配布物として置く動機の本体はここにある。性能ではない。</p>
+<p>この誤りは SQL を書ける人でも踏む。BI ツールに star を露出させるということは、<strong>結合の正しさをアナリスト全員に委ねる</strong>ということである。</p>
+
+<p>OBT を配布物として置く動機の本体はここにある。性能ではない。</p>
 
 <h2>3. Kimball の原則</h2>
 
@@ -161,7 +165,8 @@ GROUP BY b.job_category_key;
 
 <div class="aside modern">
 <p>Dave Fowler（Chartio）の Coalesce 2020 講演「Kimball in the context of the modern data warehouse: what's worth keeping, and what's not」は、star schema を捨てて<strong>結合可能な列を全て結合した大きな非正規化テーブルを 1 本作り、その上にビューでマートを切って利用者へ出す</strong>ことを提案した。根拠は、Kimball が star schema を採った動機の 1 つがストレージコストであり、クラウド DWH ではそのコストがもう当時ほど高くない、という点にある。</p>
-<p>この提案が有効なのは、star schema の技法のうち<strong>性能とコストを根拠に導入されたもの</strong>に限られる。粒度の宣言・コンフォームドディメンション・SCD のような<strong>意味を根拠に導入された技法</strong>は、ストレージが安くなっても何も変わらない。この回はこの区別を 1 本の軸として使う。<strong>性能を根拠に導入された技法は捨てる。意味を根拠に導入された技法は残す。</strong></p>
+<p>この提案が有効なのは、star schema の技法のうち<strong>性能とコストを根拠に導入されたもの</strong>に限られる。粒度の宣言・コンフォームドディメンション・SCD のような<strong>意味を根拠に導入された技法</strong>は、ストレージが安くなっても何も変わらない。</p>
+<p>この回はこの区別を 1 本の軸として使う。<strong>性能を根拠に導入された技法は捨てる。意味を根拠に導入された技法は残す。</strong></p>
 </div>
 
 <p>Fowler の提案のうち「ビューでマートを切る」は BigQuery ではそのまま採れない。<strong>ビューは実行のたびに下のテーブルをスキャンする</strong>ので、ワイドテーブルの上にビューを重ねてもスキャン量は減らない。この回が OBT を <code>materialized='table'</code> で置くのは、そのためである（マテリアライズド・ビューという選択肢もあるが、外部結合や一部の集計に制約がある）。</p>
@@ -495,24 +500,29 @@ bq query --use_legacy_sql=false --dry_run \
    GROUP BY sender_type"
 </code></pre>
 
-<p>dry-run は <code>Query successfully validated. ... this query will process N bytes of data.</code> を返す。<strong>この N を 2 本で比べるのが、OBT を作る前に必ずやる作業</strong>である。N が star より増えるなら、OBT の正当化は「速い」ではなく「BI が結合を間違えない」でなければならない。日付条件を <code>WHERE EXTRACT(MONTH FROM f.sent_date) = 6</code> のような形に書き換えて N を見ると、プルーニングが外れたときのバイト数が分かる。</p>
+<p>dry-run は <code>Query successfully validated. ... this query will process N bytes of data.</code> を返す。<strong>この N を 2 本で比べるのが、OBT を作る前に必ずやる作業</strong>である。N が star より増えるなら、OBT の正当化は「速い」ではなく「BI が結合を間違えない」でなければならない。</p>
+
+<p>日付条件を <code>WHERE EXTRACT(MONTH FROM f.sent_date) = 6</code> のような形に書き換えて N を見ると、プルーニングが外れたときのバイト数が分かる。</p>
 
 <h2>6. 判断基準</h2>
 
 <div class="table-wrap">
 <table>
-<tr><th>利用者</th><th>ディメンション属性の更新頻度</th><th>ファクト行数</th><th>選択</th><th>理由</th></tr>
-<tr><td>自分（SQL を書く）</td><td>問わない</td><td>問わない</td><td><strong>star のまま</strong></td><td>結合を間違えない利用者に OBT を配る意味がない。維持コストだけが増える</td></tr>
-<tr><td>アナリスト（SQL を書く・少人数）</td><td>Type1 が月数回</td><td>1 億未満</td><td><strong>star + OBT を配布</strong></td><td>OBT はビューではなくテーブル。再生成は日次で足りる</td></tr>
-<tr><td>BI ツール（Looker Studio 等・結合を書かせない）</td><td>Type1 が月数回</td><td>1 億未満</td><td><strong>OBT を配布</strong></td><td>fan-out 事故（§2c）を構造で防ぐ。<code>require_partition_filter=true</code> を必ず付ける</td></tr>
-<tr><td>BI ツール</td><td>Type1 が日次以上</td><td>1 億以上</td><td><strong>star のまま + 集約を配布</strong></td><td>全行の再生成が毎日走る。ファクト粒度の OBT ではなく集約テーブルを配る（08 回）</td></tr>
-<tr><td>逆 ETL / SaaS 連携</td><td>問わない</td><td>問わない</td><td><strong>OBT を配布</strong></td><td>連携先のスキーマが 1 表を要求する。活用側から逆算する（Hightouch 2）</td></tr>
-<tr><td>単発の分析・PoC（利用者 1〜2 名）</td><td>問わない</td><td>1000 万未満</td><td><strong>OBT のみ</strong></td><td>"OBT is good for small teams and small projects"。star を先に作ると時間だけ溶ける</td></tr>
-<tr><td>複数ファクトの横断（返信率 × 入社率）</td><td>問わない</td><td>問わない</td><td><strong>star のまま</strong></td><td>OBT ではコンフォームドディメンションが失われ、横断（drill across）ができない</td></tr>
+<tr><th>#</th><th>利用者</th><th>Type1 属性の更新頻度</th><th>ファクト行数</th><th>選択</th><th>理由</th></tr>
+<tr><td>1</td><td>単発の分析・PoC（利用者 1〜2 名・star をまだ持っていない）</td><td>問わない</td><td>1000 万未満</td><td><strong>OBT のみ</strong></td><td>"OBT is good for small teams and small projects"。star を先に作ると時間だけ溶ける</td></tr>
+<tr><td>2</td><td>逆 ETL / SaaS 連携</td><td>問わない</td><td>問わない</td><td><strong>OBT を配布</strong></td><td>連携先のスキーマが 1 表を要求する。活用側から逆算する（Hightouch 2）</td></tr>
+<tr><td>3</td><td>BI ツール（Looker Studio 等・結合を書かせない）</td><td>月数回以下</td><td>1 億未満</td><td><strong>OBT を配布</strong></td><td>fan-out 事故（§2c）を構造で防ぐ。<code>require_partition_filter=true</code> を必ず付ける</td></tr>
+<tr><td>4</td><td>BI ツール</td><td>問わない</td><td>1 億以上</td><td><strong>star のまま + 集約を配布</strong></td><td>Type1 の 1 回の上書きが全行の書き換えになる。ファクト粒度の OBT ではなく集約テーブルを配る（08 回）</td></tr>
+<tr><td>5</td><td>BI ツール</td><td>日次以上</td><td>問わない</td><td><strong>star のまま + 集約を配布</strong></td><td>全行の再生成が毎日走る</td></tr>
+<tr><td>6</td><td>アナリスト（SQL を書く・少人数）</td><td>月数回以下</td><td>1 億未満</td><td><strong>star + OBT を配布</strong></td><td>OBT はビューではなくテーブル。再生成は日次で足りる</td></tr>
+<tr><td>7</td><td>複数ファクトの横断（返信率 × 入社率）</td><td>問わない</td><td>問わない</td><td><strong>star のまま</strong></td><td>OBT ではコンフォームドディメンションが失われ、横断（drill across）ができない</td></tr>
+<tr><td>8</td><td>自分（SQL を書く・star が既にある）</td><td>問わない</td><td>問わない</td><td><strong>star のまま</strong></td><td>結合を間違えない利用者に OBT を配る意味がない。維持コストだけが増える</td></tr>
 </table>
 </div>
 
-<p>読み方: 上から順に当てはめ、最初に一致した行を採る。「OBT のみ」に落ちるのは最後から 2 行目だけで、それ以外は star が必ず存在する。</p>
+<p>読み方: 上から順に当てはめ、最初に一致した行を採る。行は<strong>具体的なものから一般的なものへ</strong>並べてあり、1 行目は「star をまだ持っていないとき何を作るか」、8 行目は「star が既にあるとき OBT を足すか」で問いが違う。</p>
+
+<p>「OBT のみ」に落ちるのは 1 行目だけで、それ以外は star が必ず存在する。</p>
 
 <h2>7. 演習</h2>
 
@@ -520,14 +530,18 @@ bq query --use_legacy_sql=false --dry_run \
 
 <details>
 <summary>解答例</summary>
-<p><strong>OBT 化しない。</strong>§6 の表の 4 行目（BI ツール × Type1 が日次以上 × 1 億以上）に当たる。<code>dim_company.name</code> は Type1 なので、企業名を焼き込むと社名変更のたびに全期間の書き換えが要る（§2a）。配布するなら <code>agg_company_rating_daily</code> のような集約か、直近 90 日だけの期間限定 OBT にする。</p>
+<p><strong>OBT 化しない。</strong>§6 の表の 4 行目（BI ツール × 更新頻度を問わず × 1 億以上）に当たる。</p>
+<p><code>dim_company.name</code> は Type1 なので、企業名を焼き込むと社名変更のたびに全期間の書き換えが要る（§2a）。月に 1 度の社名変更でも数億行が動く。</p>
+<p>配布するなら、<code>agg_company_rating_daily</code> と同じ形の「企業 × 日粒度の閲覧集約」か、直近 90 日だけの期間限定 OBT にする（どちらも正典には無いので、作るなら正典への追加が要る）。</p>
 <p>クラスタ列は正典どおり <code>company_key</code> を先頭に置く。パーティションは <code>view_date</code>。</p>
-<pre><code>{{ config(
+<pre><code>-- models/marts/fct_page_view.sql（OBT ではなくファクト本体の config）
+{{ config(
     materialized='incremental',
     partition_by={'field': 'view_date', 'data_type': 'date', 'granularity': 'day'},
     cluster_by=['company_key', 'page_context_key']
 ) }}</code></pre>
-<p>2 列目は用途で決まる。「企業ページの中で求人詳細だけ見たい」が主なら <code>page_context_key</code>（72 行のジャンク＝カーディナリティは低いが、企業内での絞り込みには効く）。「会員単位の行動を追う」が主なら <code>member_key</code>。<code>member_key</code> は匿名 <code>-1</code> に大きく偏るので、先頭には置かない。</p>
+<p>2 列目は用途で決まる。「企業ページの中で求人詳細だけ見たい」が主なら <code>page_context_key</code>（72 行のジャンク＝カーディナリティは低いが、企業内での絞り込みには効く）。「会員単位の行動を追う」が主なら <code>member_key</code>。</p>
+<p>ただし <code>member_key</code> は匿名 <code>-1</code> に大きく偏るので、先頭には置かない。</p>
 </details>
 
 <h3>(b) <code>agg_company_entity</code> は OBT か集約か</h3>
@@ -569,9 +583,10 @@ GROUP BY m_now.region;</code></pre>
 <h2>8. 参考: 手元の基盤ではどうか</h2>
 
 <div class="aside">
-<p><code>dbt_logs_analysis</code> の <code>mart_url_performance</code> は、上流に star を持たない OBT である（<code>url_path</code> × <code>date</code> のワイド表を staging view から直接作る）。§6 の表では最後から 2 行目「単発の分析・利用者 1〜2 名・1000 万行未満」に当たるので、この判断は正しい。</p>
-<p>ただし <code>partition_by</code> も <code>cluster_by</code> も無いため、<code>mart_url_performance_incremental</code> の増分境界 <code>&gt; MAX(date)</code> を評価するたびに全表がスキャンされる。§5(d) の dry-run を <code>date</code> フィルタ有無の 2 本で回せば差が数字で出る。<code>date</code> に <code>partition_by</code> を張って同じ dry-run を取り直すのが、この回の内容をそのまま試せる最小のチュートリアルになる。</p>
-<p><code>news_pipeline</code> の <code>summaries</code> は <code>importance_score</code> / <code>relevance_score</code> を再採点で上書きする（Type1）。もし記事本文と要約を 1 表に非正規化していたら、<code>/recalculate</code> が走るたびに §2(a) と同じ全行書き換えが起きていた。<code>raw_articles</code> と <code>summaries</code> が分かれていること自体が、意味のための正規化として機能している。</p>
+<p><code>mart_url_performance</code> は上流に star を持たない OBT で、§6 の表の 1 行目（単発の分析・star をまだ持っていない・1000 万行未満）に当たる。この判断は正しい。</p>
+<p><code>mart_url_performance_incremental</code> は <code>date</code> に <code>partition_by</code> を持つ（<code>cluster_by</code> は無い）。それでも増分実行のたびに上流 <code>stg_access_logs</code>（<code>logs_database.access</code> の view・パーティション無し）が全スキャンされる。増分境界 <code>DATE(request_timestamp) &gt; (SELECT MAX(date) FROM {{ this }})</code> は §4 で挙げた「サブクエリによる動的式」そのもので、上流をパーティション化してもこの形のままではプルーニングが効かない。</p>
+<p>生テーブルを日付でパーティション化し、境界を一度変数に取って定数リテラルとして渡す形に書き換え、§5(d) の dry-run を書き換え前後で 2 本比べるのが、この回をそのまま試せる最小のチュートリアルになる。</p>
+<p><code>news_pipeline</code> の <code>summaries</code> はスコアを再採点で上書きする（Type1）。記事本文と要約を 1 表に非正規化していたら、<code>/recalculate</code> のたびに §2(a) と同じ全行書き換えが起きていた。</p>
 </div>
 
 <h2>参照文献</h2>
@@ -579,7 +594,8 @@ GROUP BY m_now.region;</code></pre>
 <ul class="ref">
 <li>Kimball &amp; Ross, <em>The Data Warehouse Toolkit</em>, 3rd ed., ch.1 — <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/data-warehouse-dw-toolkit/">kimballgroup.com</a></li>
 <li>Ralph Kimball, <em>A Dimensional Modeling Manifesto</em> (1997) — <a href="https://www.kimballgroup.com/1997/08/a-dimensional-modeling-manifesto/">kimballgroup.com</a></li>
-<li>dbt Discourse, <em>Is Kimball dimensional modeling still relevant in a modern data warehouse?</em> — <a href="https://discourse.getdbt.com/t/is-kimball-dimensional-modeling-still-relevant-in-a-modern-data-warehouse/225">discourse.getdbt.com</a></li>
+<li>Dave Fowler (Chartio), <em>Kimball in the context of the modern data warehouse: what's worth keeping, and what's not</em> — Coalesce 2020 講演 — <a href="https://www.youtube.com/watch?v=3OcS2TMXELU">youtube.com</a></li>
+<li>関連議論: dbt Discourse, <em>Is Kimball dimensional modeling still relevant in a modern data warehouse?</em> — <a href="https://discourse.getdbt.com/t/is-kimball-dimensional-modeling-still-relevant-in-a-modern-data-warehouse/225">discourse.getdbt.com</a></li>
 <li>Fivetran, <em>Star Schema vs. OBT for Data Warehouse Performance</em> (2022) — <a href="https://www.fivetran.com/blog/star-schema-vs-obt">fivetran.com</a></li>
 <li>Hightouch, <em>A Guide to Modern Data Warehouse Modelling — Part 2</em> — <a href="https://hightouch.com/blog/data-warehouse-modelling-part-2">hightouch.com</a></li>
 <li>Google Cloud, <em>パーティション分割テーブルの概要</em> — <a href="https://cloud.google.com/bigquery/docs/partitioned-tables">cloud.google.com</a></li>

@@ -40,3 +40,5 @@
 - 07 レビュー REVISE（critical=3 important=7 minor=7。Fowler を戻す / Type1 全版更新 / ビュー課金の誤り / 手元基盤の記述の事実誤認）→ 修正ラウンド 1/3 送付。10 執筆起動（audit_key マクロの正本）
 - 03 修正ラウンド1 完了（17件 FIXED）。Ruling: 正典 §4 散文の SCD2 を 5 本に訂正、ミニは 15 + 未知行と明記、想定規模を §5 に追加 → 再レビュー起動
 - 06 修正ラウンド1 完了（13件 FIXED、4文段落は列挙型として parked）。Ruling: references に BQ 再帰 CTE ドキュメントを追加、`snap_companies`/`snap_agents` は命名規約の具体化として可、BI 側一次情報は追加しない（断定を弱める方針） → 再レビュー起動
+- 04 再レビュー: 14件 ADDRESSED、新規 Important 4（MetricFlow legacy 残件 / 半加法の但し書き / 週の定義 / semantic model の一意性）→ 修正ラウンド 2/3 送付
+- 05 再レビュー: 16件 ADDRESSED、新規 Important 3（corporate_number 復元 / 遡及生成の誤記述 / member_key の型不一致）→ 修正ラウンド 2/3 送付。Ruling: SCD2 SK の型は INT64（FARM_FINGERPRINT）で統一

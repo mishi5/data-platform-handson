@@ -66,3 +66,40 @@ $ python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py 07_star_vs_obt.html
 - BigQuery の「1 テーブルあたり最大パーティション数」を本文に入れようとしたが、公式ドキュメントの当該記述を確認できなかったため**書かなかった**（記憶で数値を出すのは避けた）。日次パーティションの上限が題材の規模で問題になる箇所は無いので、内容上の欠落は無い。
 - 図中の 13 MB / 21 MB、40 万行、68 列は**題材上の想定値**で、実測ではない。列指向で OBT の方がスキャンバイトが増えうるという定性的な事実は正しいが、比率は行の構成に依存する。本文の §5(d) で「dry-run で 2 本を比べるのが OBT を作る前に必ずやる作業」として、読者が自分の数字を取る手順に落としてある。
 - `ARRAY<STRUCT>` は §4 の表で 1 行触れるにとどめ、詳細を 06 回に送った（正典の割当でも BQ nested は 06 回）。参照文献に BQ nested の URL は載せていない。
+
+---
+
+## 修正ラウンド 1（レビュー `review/07_review.md` への対応）
+
+### Critical
+
+- **C1**: §2(a) の Type1 `UPDATE` から `AND is_current` を外し「`C002` の SCD2 版すべて（現時点で 2 行）」に修正。本文も「Type1 属性は `is_current` で絞らず全版を揃えて上書きする（Type 6, DT#15）」と `C002` が 2 行ある理由を書き足し、`-- star: 1 行` のコメントも実数に合わせた。
+- **C2**: `dbt_logs_analysis/models/marts/mart_url_performance_incremental.sql` を実際に読み、`partition_by={'field':'date','data_type':'date'}` が**ある**こと（`cluster_by` は無い）を確認。§8 を「上流 `stg_access_logs`（`logs_database.access` の view・パーティション無し）が全スキャンされる」「増分境界 `DATE(request_timestamp) > (SELECT MAX(date) FROM {{ this }})` は §4 の『サブクエリによる動的式』そのもの」に差し替えた。
+- **C3**: §5(d) の「このビュー自体のスキャンは課金されない」を削除し、「オンデマンド課金では 1 回あたり最低 10 MB が課金され、結果がキャッシュされないので回すたびに課金される」に置き換えた。
+
+### Important
+
+- **I1**: 裁定に従い Fowler を復帰。`p.meta` の「再解釈:」先頭に `Fowler (Coalesce 2020)` を追加、§4 の軸ボックスを Dave Fowler（Chartio）の Coalesce 2020 講演の主張（クラウド DWH ではストレージが安く、結合可能な列を全て結合した大きな非正規化テーブルを作り、その上にビューでマートを切る）として書き直し、dbt Discourse スレッドは「関連議論」の `aside` に降格。参照文献に YouTube URL 付きで Fowler を追加し、Discourse は「関連議論:」として残した。あわせて「BigQuery ではビューは実行のたびに下のテーブルをスキャンするので、OBT は `materialized='table'` で置く」の 1 段落を足し、C3 と整合させた。
+- **I2**: §3 の「主張は 3 点に尽きる」を「この回で使うのは 3 点」に変え、原典が挙げる対称性・標準技法（SCD・異種製品・ファクトレス）・集約ナビゲーションを 1 文で補い、「そのどれもが意味の側の主張」と続けた。
+- **I3**: §6 の表を (A)+(B) の両方で作り直した。`#` 列を追加、行を具体的→一般的に並べ替え（1 行目「単発の分析・PoC・star をまだ持っていない」、8 行目「自分・star が既にある」）、更新頻度を「月数回以下 / 日次以上 / 問わない」に整理、4 行目を「1 億以上（更新頻度を問わず）」にして穴を塞いだ。読み方の段落に「1 行目と 8 行目では問いが違う」を明記。§7(a) の引き当ては 4 行目のまま通り、§8 は 1 行目に修正した。
+- **I4**: snowflake の結合数を「4 以上」→「3」に修正。表の直後に「正典の `dim_agency` はファクト直結の縮約ディメンション（DWT ch.4）で、ここで言う雪片化とは別物」の注記を追加。
+- **I5**: `marts.obt_page_view` の SQL に「正典に無い。`fct_page_view` を企業属性込みで非正規化したと仮定した、この節だけの『やってはいけない設計』の例」というコメントを入れた。
+- **I6**: 図の注記に 3 行目「数値は題材上の想定値（実測ではない）。自分の表の実値は §5(d) の dry-run で取る。」を追加し、`viewBox` を 400 → 424、背景 `rect` も 424 に。`<desc>` からも断定的な数値を外し「数値は題材上の想定値」を追記。accent の位置は変更していない。
+- **I7**: 本文を「`unique` と `relationships` が落ちる」に限定。修正例をテスト単位からモデル単位の `config: +where:` に変え、「`not_null` はパーティション列自身への述語になるので挙動が違う可能性がある。実際に `dbt test` を回して確かめる」の 1 段落を追加した。
+
+### Minor
+
+- **M1**: 4 文以上の段落を 9 箇所分割（§2a・§2b・§2c・§3・§4×2・§5a・§5b・§5c・§5d・§7a×2）。残る 4 文の段落は §7(c) の `(1)…(2)…` 列挙 1 箇所のみで、これは列挙なのでそのままにした。
+- **M2**: §8 を 4 段落・要点 2 つ（`dbt_logs_analysis` の上流全スキャン / `news_pipeline` の Type1 上書き）に絞った。C2 の書き直しで内容が増えたため厳密な「3〜5 行」よりわずかに長いが、`mart_url_performance` v1 の記述を 1 行に圧縮して短縮した。
+- **M3**: 「2013 年以降に失効した」→「列指向 DWH が標準になった時点で失効した」に変更（年を出さない書き方）。
+- **M4**: §7(a) の `config` ブロック先頭に `-- models/marts/fct_page_view.sql（OBT ではなくファクト本体の config）` を追加。
+- **M5**: 「`agg_company_rating_daily` のような集約」→「`agg_company_rating_daily` と同じ形の『企業 × 日粒度の閲覧集約』」に変更し、正典に無いので追加が要る旨を明記（新設は提案していない）。
+- **M6**: `<caption style="...">` を `<h3>この回で固定する判断</h3>` に置き換え、インラインスタイルを消した。骨格 CSS への `caption` 追加提案は不要になった。
+- **M7**: 「ファクト <code>store_sales</code> 単体は 29,778 MB（4 つのディメンションを足した star 全体でも 29,905 MB）」に書き換え、「約 2 倍」の根拠を閉じた。
+
+### 検証
+
+- `python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py 07_star_vs_obt.html` → `0 errors, 0 warnings`
+- HTML タグの入れ子balance・`<h2>` 8 節 + 参照文献・URL 一覧（`canon/references.md` 内のみ、YouTube を追加）・テーブル名の正典照合を再実行。正典外は `obt_page_view`（I5 で仮定と明示）と `int_scout_keyed`（`int_<entity>_<verb>` 規約に沿う）の 2 件のみ。
+- 正典の執筆後更新（`dim_agency` / `dim_member_daily` / `obt_*` プレフィクス採用 / 全ファクト `audit_key` / `<role>_date`）との矛盾は解消済み。§5(a) の `fct_scout` config は `sent_date`（DATE）にパーティション・`audit_key` を SELECT に含む形で、更新後の正典と一致する。
+- 変更提案のうち「`obt_*` プレフィクス」「`obt_scout_funnel`」は正典に採用済みのため、上の「正典への変更提案」1・2 は解決済み。残るのは 3（`obt_page_view` の採否）・4（`_asof` サフィックス規約）・5（`int_scout_keyed`）・6（プロジェクト修飾）。

@@ -84,7 +84,7 @@
 <tr><td><code>score_*</code>（8軸）, <code>overall_score</code></td><td><code>fct_review</code></td><td>非加法（平均のみ意味がある）</td><td>原子は素の値。集約では <code>sum_score_*</code> + <code>review_count</code></td></tr>
 <tr><td><code>avg_overall_score</code></td><td>—</td><td>非加法</td><td><strong>持たない</strong>（§2a）</td></tr>
 <tr><td><code>scouts_remaining</code></td><td><code>fct_contract_monthly</code></td><td>半加法（企業 ○ / 時間 ✗）</td><td>月次の値のまま。時間方向は期末値（§5）</td></tr>
-<tr><td><code>scout_quota</code>, <code>monthly_fee</code></td><td><code>fct_contract_monthly</code></td><td>加法（時間で足すと期間付与枠・期間売上）</td><td>そのまま。<strong>残高（<code>scouts_remaining</code>）と同じ行に置かない</strong></td></tr>
+<tr><td><code>scout_quota</code>, <code>monthly_fee</code></td><td><code>fct_contract_monthly</code></td><td>加法（時間で足すと期間付与枠・期間売上）</td><td>そのまま。残高と同じ行に共存してよい（足す軸が違うので<strong>列ごとに扱いを変える</strong>）</td></tr>
 <tr><td><code>is_active</code></td><td><code>fct_contract_monthly</code></td><td>半加法</td><td>時間で足すと「延べ稼働月数」という<strong>別のメジャー</strong>になる</td></tr>
 <tr><td><code>is_open</code></td><td><code>fct_job_posting_daily</code></td><td>半加法（求人 ○ / 時間 ✗）</td><td>時間で足すと「延べ掲載日数」（§7b）</td></tr>
 <tr><td><code>application_count_cum</code>, <code>scout_count_cum</code></td><td><code>fct_job_posting_daily</code></td><td>半加法（累積値は時間で足せない）</td><td>同日内は求人をまたいで足せる</td></tr>
@@ -145,24 +145,23 @@
 
 <h3>(c) ユニーク数を足す — 日次の <code>COUNT(DISTINCT member_key)</code></h3>
 
-<p><code>fct_scout</code> から「日次のスカウト受信ユニーク会員数」を集約表に焼き、週次レポートがそれを <code>SUM</code> する。6月第4週の正典サンプルは <code>S003</code>（<code>AG02</code> → <code>M002</code>、6/18）、<code>S001</code>（<code>C001</code> → <code>M001</code>、6/20）、<code>S002</code>（<code>AG01</code> → <code>M003</code>、6/25）の3件。</p>
+<p><code>fct_scout</code> から「日次のスカウト受信ユニーク会員数」を集約表に焼き、週次レポートがそれを <code>SUM</code> する。週は <code>dim_date.iso_week</code>（月曜始まり）で切る。ここで見るのは <strong>2026-06-15 〜 06-21 の ISO 週</strong>。</p>
 
-<p>この3件だけなら日次ユニークは 1 / 1 / 1 で、足しても 3 で正しい値と一致する。<strong>会員が日をまたいで重複していないから</strong>にすぎない。<code>M001</code> が <code>S001</code>（6/20）に加えて 6/22 にもスカウトを受けた瞬間に壊れる。</p>
+<p>この週に入る正典サンプルは <code>S003</code>（<code>AG02</code> → <code>M002</code>、6/18）と <code>S001</code>（<code>C001</code> → <code>M001</code>、6/20）の2件。<code>S002</code>（<code>AG01</code> → <code>M003</code>、6/25）は翌 ISO 週なのでこの窓に入らない。<code>M001</code> が <code>S001</code> に加えて 6/16 にもスカウトを受けたとする（同じ会員が週内の複数日に受け取るのは普通に起きる）。</p>
 
 <div class="table-wrap">
 <table>
 <tr><th><code>sent_date</code></th><th>受信会員</th><th>日次のユニーク会員数</th></tr>
-<tr><td>2026-06-18</td><td><code>M002</code></td><td>1</td></tr>
-<tr><td>2026-06-20</td><td><code>M001</code></td><td>1</td></tr>
-<tr><td>2026-06-22</td><td><code>M001</code></td><td>1</td></tr>
-<tr><td>2026-06-25</td><td><code>M003</code></td><td>1</td></tr>
-<tr><td><strong><code>SUM</code></strong></td><td>—</td><td><strong>4</strong></td></tr>
+<tr><td>2026-06-16</td><td><code>M001</code></td><td>1</td></tr>
+<tr><td>2026-06-18</td><td><code>M002</code>（<code>S003</code>）</td><td>1</td></tr>
+<tr><td>2026-06-20</td><td><code>M001</code>（<code>S001</code>）</td><td>1</td></tr>
+<tr><td><strong><code>SUM</code></strong></td><td>—</td><td><strong>3</strong></td></tr>
 </table>
 </div>
 
 <ul>
-<li>日次ユニークの合計: <strong>4</strong></li>
-<li>週の実ユニーク数: <strong>3</strong>（<code>M001</code>, <code>M002</code>, <code>M003</code>）</li>
+<li>日次ユニークの合計: <strong>3</strong></li>
+<li>ISO 週 2026-06-15 の実ユニーク数: <strong>2</strong>（<code>M001</code>, <code>M002</code>）</li>
 </ul>
 
 <p>膨らみ方は会員1人あたりの受信日数に比例する。会員 N 人が平均 d 日受け取れば合計は <code>N × d</code>、つまり <strong>d 倍</strong>になる。日次を月次に上げれば d は 10 を超える。</p>
@@ -367,7 +366,11 @@ metrics:
 
 <p>メトリクス名はプロジェクト内で一意。<code>fct_scout_funnel</code> 由来の <code>scouts_sent</code>（送ったスカウトの本数）と <code>fct_contract_monthly</code> 由来の <code>contract_scouts_sent</code>（契約枠の消化数）は<strong>数え方も分母も違う指標</strong>なので、名前を分ける。§6 の「名前を分ける」がそのままメトリクス層の制約になっている。</p>
 
-<p>半加法も宣言できる。<code>non_additive_dimension</code> は「このメジャーはこの時間ディメンションでは集約するな」という指定で、<code>window_choice: max</code> が期末値、<code>min</code> が期首値にあたる。Kimball が運用ルールとして書いていた「残高は期末値で潰す」が、そのままメタデータになった。</p>
+<p>粒度宣言（01回）と <code>entity</code> の宣言は一致していなければならない。<code>fct_contract_monthly</code> の粒度は 1契約 × 1月なので、<code>contract_id</code> は月数ぶん重複する。<code>type: primary</code> と書くと「この列が行を一意に識別する」という嘘の宣言になり、<code>contract</code> エンティティ経由の join で行が増幅する。</p>
+
+<p>一意なのは <code>(contract_id, month_date)</code> の組。MetricFlow のエンティティは複合キーを取らないので、primary を宣言したいならモデル側に連結した代理列（<code>contract_month_id</code> のような1列）を足す。足さないなら <code>type: foreign</code> のままでよく、simple / ratio metric はそれで作れる。</p>
+
+<p>半加法も宣言できる。<code>non_additive_dimension</code> は「このメジャーはこの時間ディメンションでは集約するな」という指定で、<code>window_agg: max</code> が期末値、<code>min</code> が期首値にあたる（旧 spec ではこのキーが <code>window_choice</code>）。Kimball が運用ルールとして書いていた「残高は期末値で潰す」が、そのままメタデータになった。</p>
 
 <pre><code>models:
   - name: fct_contract_monthly
@@ -376,9 +379,10 @@ metrics:
       enabled: true
       agg_time_dimension: month_date
     columns:
+      # 粒度は 1契約 × 1月。contract_id 単独では行を一意にできないので primary にしない
       - name: contract_id
         entity:
-          type: primary
+          type: foreign
           name: contract
       - name: company_key
         entity:
@@ -396,7 +400,7 @@ metrics:
         expr: scouts_remaining
         non_additive_dimension:
           name: month_date
-          window_choice: max      # 期間内の最終月の値だけを採る
+          window_agg: max         # 期間内の最終月の値だけを採る（min なら期首値）
       - name: contract_scouts_sent
         label: 契約枠の消化数
         type: simple
@@ -481,19 +485,23 @@ models:
 <pre><code>SELECT
     d.year,
     d.month,
-    a.company_key,
+    c.company_id,                          -- SCD2 版ではなく自然キーで束ねる
     SUM(a.review_count)      AS review_count,
     SUM(a.sum_overall_score) AS sum_overall_score,
     SAFE_DIVIDE(SUM(a.sum_overall_score), SUM(a.review_count)) AS avg_overall_score
 FROM {{ ref('agg_company_rating_daily') }} AS a
+JOIN {{ ref('dim_company') }} AS c
+    ON a.company_key = c.company_key       -- 投稿時点の版から自然キーを引く
 JOIN {{ ref('dim_date') }} AS d
     ON a.date_key = d.date_key
 -- 絞り込みはパーティション列（rating_date）で。date_key で書くと全パーティションを読む
 WHERE a.rating_date BETWEEN DATE '2026-03-01' AND DATE '2026-03-31'
-GROUP BY d.year, d.month, a.company_key
+GROUP BY d.year, d.month, c.company_id
 </code></pre>
 
-<p><code>C002</code> の3日分に対して <code>33.5 / 12 = 2.79</code>。<code>SAFE_DIVIDE</code> は素の集計では発火しない（この表は 0 件の日に行を立てないので <code>review_count &gt;= 1</code> が保証される）。効くのは後段で <code>dim_date</code> 側から 0 件月を <code>LEFT JOIN</code> で埋めたときで、分母 0 をエラーではなく <code>NULL</code> にして通す保険。</p>
+<p><code>C002</code> の3日分に対して <code>33.5 / 12 = 2.79</code>。<code>a.company_key</code> でグループ化しないのは、<code>C002</code> が 2026-05-01 に <code>employee_size_band</code> を変えて2版になるため。SCD2 版で束ねると年内の集計がその境で2行に割れる（<strong>足し上げの単位は企業という実体</strong>）。</p>
+
+<p><code>SAFE_DIVIDE</code> は素の集計では発火しない（この表は 0 件の日に行を立てないので <code>review_count &gt;= 1</code> が保証される）。効くのは後段で <code>dim_date</code> 側から 0 件月を <code>LEFT JOIN</code> で埋めたときで、分母 0 をエラーではなく <code>NULL</code> にして通す保険。</p>
 
 <h3>企業グループへ再集約する（<code>br_company_hierarchy</code> 経由）</h3>
 
@@ -572,17 +580,21 @@ GROUP BY r.company_key, d.year
 <pre><code>-- HLL スケッチなら「日次で作って週次でマージ」ができる
 WITH daily AS (
     SELECT
-        sent_date_key,
+        sent_date,
         HLL_COUNT.INIT(member_key) AS member_sketch
     FROM {{ ref('fct_scout') }}
-    WHERE sent_date BETWEEN DATE '2026-06-20' AND DATE '2026-06-26'
-    GROUP BY sent_date_key
+    WHERE sent_date BETWEEN DATE '2026-06-15' AND DATE '2026-06-21'
+    GROUP BY sent_date
 )
 
 SELECT
+    DATE_TRUNC(sent_date, ISOWEEK) AS iso_week_start,
     HLL_COUNT.MERGE(member_sketch) AS weekly_unique_members
 FROM daily
+GROUP BY iso_week_start
 </code></pre>
+
+<p>§2(c) と同じ ISO 週（6/15〜6/21）を読むので、返るのは <code>weekly_unique_members = 2</code>。日次ユニークを足した 3 ではない。</p>
 
 <p><code>HLL_COUNT.INIT</code> が返す <code>BYTES</code> のスケッチは<strong>マージ可能</strong>で、これが「ユニーク数の加法な構成要素」にあたる。誤差は数 % 入るので、正確な値が要る監査系の数字には使わない。厳密さが要るなら原子ファクトから <code>COUNT(DISTINCT ...)</code> を都度回す。</p>
 
@@ -698,7 +710,7 @@ WITH month_end AS (
     JOIN {{ ref('dim_date') }} AS d
         ON f.snapshot_date_key = d.date_key
     -- パーティション列（snapshot_date）で絞る。dim_date は年月のラベル取得だけに使う
-    WHERE f.snapshot_date BETWEEN DATE '2026-04-01' AND DATE '2026-04-30' 
+    WHERE f.snapshot_date BETWEEN DATE '2026-04-01' AND DATE '2026-04-30'
     -- QUALIFY は GROUP BY / HAVING の後に評価される。同じ SELECT に GROUP BY を置くと
     -- snapshot_date_key（非グループ列）を QUALIFY で参照できないので、絞り込みを CTE に分ける
     QUALIFY f.snapshot_date_key = MAX(f.snapshot_date_key) OVER (PARTITION BY d.year, d.month)
@@ -754,7 +766,7 @@ GROUP BY s.sender_type
 <h2>参照文献</h2>
 
 <ul class="ref">
-<li>Ralph Kimball, Margy Ross, <em>The Data Warehouse Toolkit</em>, 3rd ed.（2013）ch.1, ch.4 — <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/data-warehouse-dw-toolkit/">kimballgroup.com</a></li>
+<li>Ralph Kimball, Margy Ross, <em>The Data Warehouse Toolkit</em>, 3rd ed.（2013）ch.1–2（加法性）, ch.4（定期スナップショットと半加法残高） — <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/data-warehouse-dw-toolkit/">kimballgroup.com</a></li>
 <li>Kimball Group, <em>Kimball Dimensional Modeling Techniques</em>（2013）— Additive, Semi-Additive, and Non-Additive Facts / Periodic Snapshot Fact Tables / Aggregate Fact Tables or Cubes — <a href="https://www.kimballgroup.com/wp-content/uploads/2013/08/2013.09-Kimball-Dimensional-Modeling-Techniques11.pdf">PDF</a></li>
 <li>Margy Ross, <em>Design Tip #77: Warning: Summary Data Alone Is Hazardous To Your Health</em>（2006）— <a href="https://decisionworks.com/2006/03/design-tip-77-warning-summary-data-alone-is-hazardous-to-your-health/">decisionworks.com</a></li>
 <li>dbt Labs, <em>About MetricFlow</em>（dbt Semantic Layer）— <a href="https://docs.getdbt.com/docs/build/about-metricflow">docs.getdbt.com</a></li>
