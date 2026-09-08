@@ -110,7 +110,7 @@ SCD2 のディメンション（`dim_member` / `dim_company` / `dim_agent` / `di
 | `dim_channel` | `source_channel` | 0 | `channel_name`, `channel_group`(`inbound`/`scout`/`agent`) | |
 | `dim_page_context` | 組合せ | — | `page_type` × `device` × `referrer_type` × `is_unlocked` = 3×3×4×2 = 72行 | ジャンク |
 | `dim_contract_plan` | `plan_code` | 0 | `plan_name`, `scout_quota_monthly`, `monthly_fee` | |
-| `dim_audit` | `audit_key` | — | `batch_id`, `source_system`, `loaded_at`, `dbt_invocation_id`, `quality_flag` | **監査ディメンション**（DT#164）。全ファクトに `audit_key` |
+| `dim_audit` | `audit_key` | — | `batch_id`, `source_system`(=`'src_careervoice'`), `loaded_at`(=`run_started_at`), `dbt_invocation_id`, `quality_flag`(`ok`/`estimated`/`suspect`) | **監査ディメンション**（DT#164）。全ファクトに `audit_key` |
 | `br_member_desired_job_category` | (`member_key`,`job_category_key`) | — | `priority`, `weighting_factor`(=1/希望数) | **多値ブリッジ**（DT#142）。`member_key` は `dim_member` の**全 SCD2 版に展開**する（ファクトの `member_key` と直結するため） |
 
 ### ファクト（メジャーと退化ディメンション）

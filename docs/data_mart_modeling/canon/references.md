@@ -71,8 +71,10 @@
 | dbt incremental strategy | dbt, Incremental strategies（アダプタ別、`incremental_predicates`） | https://docs.getdbt.com/docs/build/incremental-strategy | 戦略の一覧 |
 | dbt microbatch | dbt, Incremental microbatch（`event_time` / `batch_size` / `lookback`） | https://docs.getdbt.com/docs/build/incremental-microbatch | 遅延到着の窓 |
 | dbt snapshots | dbt, Snapshots | https://docs.getdbt.com/docs/build/snapshots | `timestamp` / `check` 戦略、`dbt_valid_from/to` |
+| dbt versions | dbt, Model versions（`versions:` / `latest_version` / `deprecation_date`） | https://docs.getdbt.com/docs/collaborate/govern/model-versions | 改版 |
+| dbt freshness | dbt, Source freshness（`loaded_at_field` / `filter`） | https://docs.getdbt.com/docs/build/sources#declaring-source-freshness | 鮮度 |
 | dbt contracts | dbt, Model contracts | https://docs.getdbt.com/docs/collaborate/govern/model-contracts | 列・型・制約の契約 |
-| dbt structure | dbt, How we structure our dbt projects | https://docs.getdbt.com/best-practices/how-we-structure/1-guide | staging / intermediate / marts |
+| dbt structure | dbt, How we structure our dbt projects | https://docs.getdbt.com/best-practices/how-we-structure/1-guide-overview | staging / intermediate / marts |
 | MetricFlow | dbt, About MetricFlow（Semantic Layer） | https://docs.getdbt.com/docs/build/about-metricflow | 分子分母を metric として定義 |
 
 ## 回ごとの割当
