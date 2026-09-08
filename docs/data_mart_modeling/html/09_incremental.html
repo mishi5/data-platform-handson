@@ -189,11 +189,11 @@ where s.sent_at &gt; (select max(sent_at) from {{ this }})
   <!-- ノード -->
   <rect class="box-focal" x="248" y="84" width="120" height="56" rx="6"/>
   <text class="name" x="308" y="110" text-anchor="middle">S003</text>
-  <text class="sub" x="308" y="128" text-anchor="middle">AG02 - M002</text>
+  <text class="sub" x="308" y="128" text-anchor="middle">AG02 → M002</text>
 
   <rect class="box" x="504" y="84" width="120" height="56" rx="6"/>
   <text class="name" x="564" y="110" text-anchor="middle">S001</text>
-  <text class="sub" x="564" y="128" text-anchor="middle">C001 - M001</text>
+  <text class="sub" x="564" y="128" text-anchor="middle">C001 → M001</text>
 
   <rect class="box-soft" x="504" y="192" width="120" height="56" rx="6"/>
   <text class="name" x="564" y="218" text-anchor="middle">6/20 到着</text>
@@ -248,7 +248,7 @@ where s.sent_at &gt; (select max(sent_at) from {{ this }})
 <tr>
   <td><strong>遅延到着ファクト</strong>: 過去日付のファクト行が今日届く</td>
   <td>今日の現行版ではなく、<strong>そのイベント時点で有効だったディメンション版</strong>のサロゲートキーを割り当てる。SCD2 の有効期間で解決する</td>
-  <td><code>S003</code>（6/18 送信）が 6/20 に届いたら、<code>member_key</code> は 6/18 時点の <code>M001</code>…ではなく <code>M002</code> の版。<code>sent_at &gt;= valid_from AND sent_at &lt; valid_to</code> の as-of join（05回）で解決する</td>
+  <td><code>S003</code>（<code>AG02</code> → <code>M002</code>、6/18 送信）が 6/20 に届いても、<code>member_key</code> は 6/18 時点の <code>M002</code> の版に結ぶ。<code>sent_at &gt;= valid_from AND sent_at &lt; valid_to</code> の as-of join（05回）で解決する</td>
 </tr>
 <tr>
   <td><strong>遅延到着ディメンション</strong>: ディメンションの新版が遅れて届く</td>
@@ -462,14 +462,15 @@ left join milestones as ms
 <pre><code>-- incremental_predicates の窓の下限を測る
 select
     approx_quantiles(open_days, 100)[offset(99)] as p99_open_days,
-    max(open_days) as max_open_days
+    max(open_days)                               as max_open_days
 from (
-    select date_diff(
-             date(max(e.occurred_at), 'Asia/Tokyo'),
-             date(min(a.applied_at),  'Asia/Tokyo'), day) as open_days
-    from `marts.fct_selection_event` as e
-    join `marts.fct_application_pipeline` as a using (application_id)
-    group by e.application_id
+    select
+        p.application_id,
+        date_diff(max(e.event_date), p.applied_date, day) as open_days
+    from `marts.fct_application_pipeline` as p
+    join `marts.fct_selection_event`      as e
+      on p.application_id = e.application_id
+    group by p.application_id, p.applied_date
 )</code></pre>
 
 <h3>(c) 遅延到着ディメンションの修復</h3>
@@ -520,9 +521,12 @@ dbt run --select fct_scout --vars '{"run_date": "2026-06-20"}'</code></pre>
 create or replace table `marts.fct_scout__fingerprint` as
 select
     t.sent_date,
-    count(*)                                   as row_count,
-    sum(t.scout_count)                         as scout_count,
-    bit_xor(farm_fingerprint(format('%T', t))) as row_fingerprint
+    count(*)            as row_count,
+    sum(t.scout_count)  as scout_count,
+    -- audit_key は実行ごとに変わるので指紋から外す
+    bit_xor(farm_fingerprint(to_json_string(
+        (select as struct t.* except (audit_key))
+    ))) as row_fingerprint
 from `marts.fct_scout` as t
 where t.sent_date between date '2026-06-17' and date '2026-06-20'
 group by t.sent_date;</code></pre>
@@ -534,9 +538,11 @@ dbt run --select fct_scout --vars '{"run_date": "2026-06-20"}'</code></pre>
 with after_run as (
     select
         t.sent_date,
-        count(*)                                   as row_count,
-        sum(t.scout_count)                         as scout_count,
-        bit_xor(farm_fingerprint(format('%T', t))) as row_fingerprint
+        count(*)            as row_count,
+        sum(t.scout_count)  as scout_count,
+        bit_xor(farm_fingerprint(to_json_string(
+            (select as struct t.* except (audit_key))
+        ))) as row_fingerprint
     from `marts.fct_scout` as t
     where t.sent_date between date '2026-06-17' and date '2026-06-20'
     group by t.sent_date
@@ -548,7 +554,7 @@ select 'before のみ' as side, * from (select * from before_run except distinct
 union all
 select 'after のみ',  * from (select * from after_run  except distinct select * from before_run);</code></pre>
 
-<p><code>EXCEPT DISTINCT</code> は片方向なので両向きを取る。<code>audit_key</code> は実行ごとに変わるため指紋の対象から外す（列を明示するか、検証用に <code>audit_key</code> を除いたビューを噛ませる）。「同じ入力なら同じ出力」を守る対象はメジャーとキーであって、実行の記録ではない。</p>
+<p><code>EXCEPT DISTINCT</code> は片方向なので両向きを取る。<code>audit_key</code> は実行ごとに変わるので <code>SELECT AS STRUCT t.* EXCEPT (audit_key)</code> で落としてから指紋を取る。「同じ入力なら同じ出力」を守る対象はメジャーとキーであって、実行の記録ではない。</p>
 
 <pre><code># models/marts/schema.yml（一部）
 version: 2

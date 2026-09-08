@@ -46,3 +46,5 @@
 - 08 執筆完了（DONE）。Ruling: agg_company_entity に dim_company 属性の平坦化と audit_key 不要を明記、dim_scout_sender の sender_id の意味を明記、references に BQ MV を追加。agg_member_entity は正典に入れない（演習内の候補のまま）→ レビュー起動
 - 04: complete（修正ラウンド2 N1〜N7 を grep で確認: window_agg 統一 / ISOWEEK / 但し書き削除 / ch.1–2。Ruling: 再々レビュー省略 — 局所修正のみ）
 - 05: complete（修正ラウンド2 N-1〜N-3 を grep で確認。Ruling: 再々レビュー省略 — 局所修正のみ）
+- 03 再レビュー: 17件 ADDRESSED、新規 Critical 1（dim_member_daily テストが require_partition_filter で落ちる）+ Important 1 → 修正ラウンド 2/3 送付
+- 06 再レビュー: 13件 ADDRESSED、新規 Important 1（ARRAY 対案が dim_member を作り直して畳み込みを落とす）→ 修正ラウンド 2/3 送付。Ruling: 対案は ref('dim_member') を参照し dim_member_with_desired と命名
