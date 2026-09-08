@@ -30,3 +30,5 @@
 - 01: complete（修正ラウンド3 N1〜N6 反映をオーケストレータが grep で確認: -1 文言 / 縮約ディメンション定義 / DT#164 参照 / moderation_rounds 定義 / audit_key コメント。Ruling: 再々レビューは省略 — 6件とも文言修正で SQL 不変のため — 誤りなら横断レビューで検出）
 - 02 再レビュー: 14件 ADDRESSED、新規 Important 2（S003 未反映 / パーティション列でないキーで絞るクエリ例）→ 修正ラウンド 2/3 送付
 - 05 レビュー REVISE（critical=1 important=7 minor=8。C-1 は dim_member の版数の前提ズレ＝正典裁定と整合させる）→ 修正ラウンド 1/3 送付
+- 04 レビュー REVISE（critical=2 important=5 minor=7）→ 修正ラウンド 1/3 送付。Ruling: 04 の DWT 章は ch.1–2（加法性は 3rd ed. の ch.1/2）に訂正可
+- 02: complete（修正ラウンド2: N-1/N-2 反映を grep で確認。n-3 は執筆者の理由（直積で水増し）を妥当として parked、n-5 は 05 回へ送付）

@@ -53,7 +53,7 @@
 <table>
 <thead><tr><th>決めること</th><th>この回の結論</th></tr></thead>
 <tbody>
-<tr><td>型の選び方</td><td>問いの時制で決める。「いつ何件」＝トランザクション／「その日いくつ」＝定期／「どこまで進んだ・何日かかった」＝累積</td></tr>
+<tr><td>型の選び方</td><td>問いの時制で決める。「いつ何件」＝トランザクション／「その日いくつ」＝定期／「どこまで進んだ・何日かかった」＝累積。ただし数えたい事象のトランザクションファクトが無い場合は例外（応募数は §6 の2行目）</td></tr>
 <tr><td>型は排他か</td><td>排他ではない。1プロセスに3型が同居してよい（選考は <code>fct_selection_event</code> と <code>fct_application_pipeline</code> の両方）</td></tr>
 <tr><td>累積スナップショットの裏</td><td>必ず原子トランザクションファクトを置く。サマリーだけ持たない（DT#77）</td></tr>
 <tr><td>未達マイルストーン</td><td>日付キーは <code>-1</code>（<code>dim_date</code> に <code>-1</code> 行）。NULL の外部キーを作らない（DT#43）</td></tr>
@@ -124,7 +124,7 @@ WHERE DATE(posted_at, 'Asia/Tokyo') &lt;= '2026-04-15'
 <li><strong>その日限りの派生値を持てない。</strong><code>days_since_posted</code>、<code>application_count_cum</code>、<code>scout_count_cum</code> は「その日の時点で何日経過・何件累積か」であって、ソースには存在しない。毎回 <code>dim_date</code> との範囲結合で作り直すことになり、日次の推移を出すたびに全求人 × 全日を展開する。</li>
 </ul>
 
-<p>定期スナップショットを持てば、答えは <code>WHERE snapshot_date_key = 20260415</code> の1パーティション読みになり、<strong>いつクエリを流しても同じ数字が返る</strong>。これは性能の話ではなく再現性の話である。</p>
+<p>定期スナップショットを持てば、答えは <code>WHERE snapshot_date = DATE '2026-04-15'</code> の1パーティション読みになり、<strong>いつクエリを流しても同じ数字が返る</strong>。これは性能の話ではなく再現性の話である。</p>
 
 <h3>(b) 累積スナップショットを UPDATE で運用する</h3>
 
@@ -215,7 +215,7 @@ WHERE DATE(posted_at, 'Asia/Tokyo') &lt;= '2026-04-15'
 
 <p>ヘッダ単位の金額（送料のような、明細に自然に割り当てられない額）の扱いは DT#95 の範囲外である。この題材では <code>applications</code> がヘッダ金額を持たないので問題にならない。</p>
 
-<p>この題材の決定: <code>fct_selection_event</code> は <code>member_key</code> / <code>company_key</code> / <code>job_posting_key</code> / <code>agency_key</code> / <code>agent_key</code> / <code>job_category_key</code> / <code>channel_key</code> を<strong>全部自分で持つ</strong>（すべて <code>applications</code> 側から降りてきた次元）。<code>application_id</code> はディメンションを作らず退化ディメンションとして置く。<code>fct_application_pipeline</code> も同じ次元を持つので、両者は同じディメンションで drill across できる。</p>
+<p>この題材の決定: <code>fct_selection_event</code> は <code>member_key</code> / <code>company_key</code> / <code>job_posting_key</code> / <code>agency_key</code> / <code>agent_key</code> / <code>job_category_key</code> / <code>channel_key</code> を<strong>全部自分で持つ</strong>（<code>applications</code> と、その求人・スカウトから降りてきた次元）。<code>application_id</code> はディメンションを作らず退化ディメンションとして置く。<code>fct_application_pipeline</code> も同じ次元を持つので、両者は同じディメンションで drill across できる。</p>
 
 <h3>サマリー単独は危険（DT#77）</h3>
 
@@ -270,6 +270,14 @@ WHERE DATE(posted_at, 'Asia/Tokyo') &lt;= '2026-04-15'
 <pre><code>-- macros/date_key.sql
 {% macro date_key(ts_expr) -%}
     COALESCE(CAST(FORMAT_DATE('%Y%m%d', DATE({{ ts_expr }}, 'Asia/Tokyo')) AS INT64), -1)
+{%- endmacro %}
+
+-- macros/audit_key.sql（この実行の監査行。本設計は 10回）
+{% macro audit_key() -%}
+    COALESCE((
+        SELECT MIN(audit_key) FROM {{ ref('dim_audit') }}
+        WHERE dbt_invocation_id = '{{ invocation_id }}'
+    ), -1)
 {%- endmacro %}
 </code></pre>
 
@@ -772,7 +780,7 @@ LEFT JOIN {{ ref('dim_agency') }} AS agc
 
 <p>掲載期間は <code>[posted_date, closed_date)</code> の半開区間として扱う。終了日当日は掲載中に数えない — §2(a) の「壊れている」クエリ（<code>closed_at &gt; '2026-04-15'</code>）と同じ規約に揃えてある。</p>
 
-<p><code>dim_date</code> の <code>-1</code> 行は <code>full_date</code> が NULL なので比較が NULL になり、勝手に混ざらない。<code>J001</code> の行はこうなる（<code>S001</code> は 6/20 送信、<code>P001</code> は 6/23 応募）。</p>
+<p><code>dim_date</code> の <code>-1</code> 行は <code>full_date</code> が NULL なので比較が NULL になり、勝手に混ざらない。<code>J001</code> の行はこうなる（<code>J001</code> 宛のスカウトは正典に2件ある。<code>S003</code> が 6/18 送信、<code>S001</code> が 6/20 送信、<code>P001</code> が 6/23 応募）。</p>
 
 <div class="table-wrap">
 <table>
@@ -780,13 +788,22 @@ LEFT JOIN {{ ref('dim_agency') }} AS agc
 <tbody>
 <tr><td>20260401</td><td>J001</td><td>1</td><td>0</td><td>0</td><td>0</td></tr>
 <tr><td>20260415</td><td>J001</td><td>1</td><td>14</td><td>0</td><td>0</td></tr>
-<tr><td>20260620</td><td>J001</td><td>1</td><td>80</td><td>1</td><td>0</td></tr>
-<tr><td>20260623</td><td>J001</td><td>1</td><td>83</td><td>1</td><td>1</td></tr>
+<tr><td>20260618</td><td>J001</td><td>1</td><td>78</td><td>1</td><td>0</td></tr>
+<tr><td>20260620</td><td>J001</td><td>1</td><td>80</td><td>2</td><td>0</td></tr>
+<tr><td>20260623</td><td>J001</td><td>1</td><td>83</td><td>2</td><td>1</td></tr>
 </tbody>
 </table>
 </div>
 
-<p>「4/15 時点の掲載中求人数」は <code>SELECT SUM(is_open) FROM fct_job_posting_daily WHERE snapshot_date_key = 20260415</code> になる。<strong>ソースが後からどう変わっても、この行は変わらない。</strong></p>
+<p>「4/15 時点の掲載中求人数」はこの1文になる。<strong>ソースが後からどう変わっても、この行は変わらない。</strong></p>
+
+<pre><code>-- 4/15 時点の掲載中求人数（パーティション1枚だけを読む）
+SELECT SUM(is_open)
+FROM {{ ref('fct_job_posting_daily') }}
+WHERE snapshot_date = DATE '2026-04-15'
+</code></pre>
+
+<p>絞るのは <code>snapshot_date_key</code>（表示用の整数キー）ではなく、パーティションを張った DATE 列 <code>snapshot_date</code> である。<strong>プルーニングはパーティション列への述語にしか効かない</strong>ので、<code>snapshot_date_key</code> で絞るとフルスキャンになる。</p>
 
 <h2>6. 判断基準</h2>
 

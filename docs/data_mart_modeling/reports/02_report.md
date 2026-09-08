@@ -89,3 +89,22 @@ python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py docs/data_mart_modelin
 | m-7 | §2(b) の DML 表現を「競合するとキューイングと再試行に回る」に緩めた |
 
 その他: 正典追加に伴い §3 の `fct_selection_event` のキー列挙に `agency_key` を足した。図は未変更（`check_svg.py` 再実行して `0 errors, 0 warnings`）。段落は全て3文以内、`<pre>` 内の生の `<`/`>` はゼロ、タグの対応検査も通過。
+
+---
+
+## 修正ラウンド2（再レビュー `review/02_rereview.md` §3 への対応）
+
+| ID | 対応 |
+|---|---|
+| N-1 | 正典 §5 の `S003`（`AG02` → `M002`、`J001`、6/18 送信）に追従。`J001` の表に `20260618` の行（`days_since_posted` = 78、`scout_count_cum` = 1）を足し、`20260620` / `20260623` の `scout_count_cum` を 1 → **2** に修正。リード文も「`J001` 宛のスカウトは正典に2件ある。`S003` が 6/18 送信、`S001` が 6/20 送信、`P001` が 6/23 応募」に差し替えた。`0 → 0 → 1 → 2 → 2` の並びが「累計は `<=` で数える」の実例になる |
+| N-2 | §2(a) の「答えは `WHERE snapshot_date = DATE '2026-04-15'` の1パーティション読み」に修正。§5 末尾も `<pre>` のクエリ例に起こして `WHERE snapshot_date = DATE '2026-04-15'` にし、「絞るのは `snapshot_date_key`（表示用の整数キー）ではなくパーティションを張った DATE 列 `snapshot_date`。プルーニングはパーティション列への述語にしか効かないので、`snapshot_date_key` で絞るとフルスキャンになる」を1段落追加 |
+| n-1 | `macros/audit_key.sql` のスタブ（`COALESCE((SELECT MIN(audit_key) FROM dim_audit WHERE dbt_invocation_id = '{{ invocation_id }}'), -1)`、本設計は 10回）を `date_key` マクロの直後に追加。印刷されたモデルがそのまま compile できる状態になった |
+| n-2 | §1 の判断表「型の選び方」セルに「ただし数えたい事象のトランザクションファクトが無い場合は例外（応募数は §6 の2行目）」を追記 |
+| n-4 | §3 の「すべて `applications` 側から降りてきた次元」を「`applications` と、その求人・スカウトから降りてきた次元」に修正 |
+
+### 未対応（理由あり）
+
+- **n-3（`application_cum` と `scout_cum` を1つの CTE に畳む）: 意図的に見送り。** `posting_days` に `daily_applications` と `daily_scouts` を同時に `event_date <= full_date` で結ぶと、両者の行が直積になって `SUM(application_count)` がスカウト件数分、`SUM(scout_count)` が応募件数分だけ水増しされる（`J001` の 6/23 なら応募1 × スカウト2 で `application_count_cum` が 2 になる）。CTE を分けているのは視線移動より正しさの都合なので、そのままにした。
+- **n-5（`valid_to` の番兵値と JST 変換の上限）: 05回へ送る。** 再レビュー自身が「この回では触れなくてよい」としており、SCD2 の番兵値の決定は 05回の論点。
+
+図は今ラウンドも未変更。`check_svg.py` は `0 errors, 0 warnings`。段落は全て3文以内、`<pre>` 内の生の `<`/`>` はゼロ、表10本すべて `.table-wrap` 内。

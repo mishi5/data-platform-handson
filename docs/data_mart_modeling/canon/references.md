@@ -79,7 +79,7 @@
 | 01 | DWT ch.2–3; Grain; Matrix; DT#3 #77 #179 | Reis（概念→論理） |
 | 02 | DWT ch.4; Fact Tables; DT#50 #95 | — |
 | 03 | DWT ch.3 #6; SK; DT#5 #43 #46 #83 #100 #127 | dbt Kimball; ECM |
-| 04 | DWT ch.1 #4（加法性）; DT#77 | MetricFlow |
+| 04 | DWT ch.1–2（加法性）; DT#77 | MetricFlow |
 | 05 | DWT ch.5; SCD 1–2; DT#15 #152 | FDE; SCD2 harmful; dbt snapshots |
 | 06 | DWT ch.7, 8, 10; DT#142 | BQ nested |
 | 07 | DWT ch.1; Manifesto | Fowler; Fivetran OBT; Hightouch 2; BQ partition |
