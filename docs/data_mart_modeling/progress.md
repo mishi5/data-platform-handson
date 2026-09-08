@@ -22,3 +22,6 @@
 - 2026-09-08 00:29 頃 レート制限（session limit）で 00 修正・01 ラウンド2報告・02/03/04/07 レビュー・05 執筆が途中終了。09:05 再開。状態: 00 HTML は途中修正（report 未追記）、01 は HTML/report ともラウンド2完了、02 レビューは書き上がり REVISE、05 は HTML/report 完了、06 完了
 - 05 Ruling: `dim_member_daily` を正典に追加／6/15 の変化は Type4（mini）・8/1 は Type2 と正典 §5 に明記（`dim_member` は 2 行）／`M001.registered_at`=2026-01-05
 - 06 Ruling: `S003`（AG02→M002, J001, 6/18）を正典に追加／ブリッジは `dim_member` の全 SCD2 版に展開と明記／supertype/subtype の章は DWT ch.10（brief 06 と references を訂正）／`br_review_tag` は追加しない（演習内の将来提案のまま）
+- 09:10 再開バッチ: 00 修正（fresh）/ 02 修正ラウンド1（resume）/ 01 再レビュー / 03 レビュー / 05 レビュー を起動。04/06/07 レビューと 08〜10 執筆は順次
+- 00 修正ラウンド1 完了（12件 FIXED）→ 再レビュー起動。04 レビュー起動
+- 02 修正ラウンド1 完了（14件 FIXED）→ 再レビュー起動

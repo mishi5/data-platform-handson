@@ -75,7 +75,7 @@
 <tr><th>行の更新</th><td>しない（不変）</td><td>しない（期間が閉じたら不変）</td><td><strong>する</strong>（マイルストーンごとに再訪）</td><td>しない</td></tr>
 <tr><th>日付キーの数</th><td>1</td><td>1</td><td>多い（マイルストーン数）</td><td>1〜2</td></tr>
 <tr><th>加法性</th><td>加法</td><td><strong>半加法</strong>（期間をまたいで足せない）</td><td>ラグは非加法、フラグは加法</td><td>件数のみ加法</td></tr>
-<tr><th>典型の問い</th><td>「日別の応募数は？」</td><td>「4/15 に掲載中だった求人は？」</td><td>「応募から内定まで何日？どこで落ちた？」</td><td>「反応が無かったスカウトは？枠を使わなかった企業は？」</td></tr>
+<tr><th>典型の問い</th><td>「日別のスカウト送信数は？」</td><td>「4/15 に掲載中だった求人は？」</td><td>「応募から内定まで何日？どこで落ちた？」</td><td>「反応が無かったスカウトは？枠を使わなかった企業は？」</td></tr>
 <tr><th>題材の例</th><td><code>fct_scout</code>, <code>fct_selection_event</code></td><td><code>fct_job_posting_daily</code>, <code>fct_contract_monthly</code></td><td><code>fct_application_pipeline</code>, <code>fct_scout_funnel</code></td><td><code>fct_page_view</code></td></tr>
 </tbody>
 </table>
@@ -132,7 +132,7 @@ WHERE DATE(posted_at, 'Asia/Tokyo') &lt;= '2026-04-15'
 
 <ul>
 <li><strong>ストリーミングバッファの行は DML で触れない。</strong>ストリーミング挿入した直後の行はバッファがフラッシュされるまで <code>UPDATE</code> / <code>DELETE</code> / <code>MERGE</code> の対象にできない。応募当日に届いた <code>document</code> イベントを即座に反映しようとすると失敗する。</li>
-<li><strong>DML は行単位の更新に向かない。</strong>ステージ遷移1件ごとに <code>UPDATE ... WHERE application_id = 'P001'</code> を投げると、パーティション指定が無ければ表全体をスキャンして書き戻す。同一テーブルへの変更 DML は同時実行が制限されるため、件数が増えるほど詰まる。</li>
+<li><strong>DML は行単位の更新に向かない。</strong>ステージ遷移1件ごとに <code>UPDATE ... WHERE application_id = 'P001'</code> を投げると、パーティション指定が無ければ表全体をスキャンして書き戻す。同一テーブルへの変更 DML は競合するとキューイングと再試行に回るので、件数が増えるほど詰まる。</li>
 <li><strong>冪等でない。</strong>同じイベントを二度流したときに何が起きるかが、UPDATE 文の書き方次第で変わる。</li>
 </ul>
 
@@ -167,7 +167,7 @@ WHERE DATE(posted_at, 'Asia/Tokyo') &lt;= '2026-04-15'
 </div>
 
 <div class="aside kimball">
-<p><strong>Kimball の主張（Fact Tables, 2008）:</strong> 3型はどれかを選ぶものではなく、同じビジネスプロセスに対して並存しうる。粒度の宣言は「外部キーの列挙」ではなく<strong>1行が業務上何を表すかの言明</strong>であり、これを先に決めないと加法性の判断（単価は足せない、金額は足せる）ができない。</p>
+<p><strong>Kimball の主張（Fact Tables, 2008 / DWT ch.4）:</strong> 3型はどれかを選ぶものではなく、同じビジネスプロセスに対して並存しうる。粒度の宣言は「外部キーの列挙」ではなく<strong>1行が業務上何を表すかの言明</strong>であり、これを先に決めないと加法性の判断（単価は足せない、金額は足せる）ができない。</p>
 </div>
 
 <h3>定期スナップショットの半加法性</h3>
@@ -210,10 +210,12 @@ WHERE DATE(posted_at, 'Asia/Tokyo') &lt;= '2026-04-15'
 </ul>
 
 <div class="aside kimball">
-<p><strong>Kimball の主張（DT#95）:</strong> ヘッダの次元性をすべて明細に降ろす。ヘッダの伝票番号は<strong>退化ディメンション</strong>としてファクトに残し、それ専用のディメンション表は作らない。ヘッダ単位の金額（送料など）は明細に按分するか、按分できないなら別ファクトにする。</p>
+<p><strong>Kimball の主張（DT#95）:</strong> ヘッダの次元性をすべて明細に降ろす。ヘッダの伝票番号は<strong>退化ディメンション</strong>としてファクトに残し、それ専用のディメンション表は作らない。</p>
 </div>
 
-<p>この題材の決定: <code>fct_selection_event</code> は <code>member_key</code> / <code>company_key</code> / <code>job_posting_key</code> / <code>agent_key</code> / <code>job_category_key</code> / <code>channel_key</code> を<strong>全部自分で持つ</strong>（すべて <code>applications</code> 側から降りてきた次元）。<code>application_id</code> はディメンションを作らず退化ディメンションとして置く。<code>fct_application_pipeline</code> も同じ次元を持つので、両者は同じディメンションで drill across できる。</p>
+<p>ヘッダ単位の金額（送料のような、明細に自然に割り当てられない額）の扱いは DT#95 の範囲外である。この題材では <code>applications</code> がヘッダ金額を持たないので問題にならない。</p>
+
+<p>この題材の決定: <code>fct_selection_event</code> は <code>member_key</code> / <code>company_key</code> / <code>job_posting_key</code> / <code>agency_key</code> / <code>agent_key</code> / <code>job_category_key</code> / <code>channel_key</code> を<strong>全部自分で持つ</strong>（すべて <code>applications</code> 側から降りてきた次元）。<code>application_id</code> はディメンションを作らず退化ディメンションとして置く。<code>fct_application_pipeline</code> も同じ次元を持つので、両者は同じディメンションで drill across できる。</p>
 
 <h3>サマリー単独は危険（DT#77）</h3>
 
@@ -276,7 +278,10 @@ WHERE DATE(posted_at, 'Asia/Tokyo') &lt;= '2026-04-15'
 <p>ソースは <code>selection_events</code>（1行 = 1ステージ遷移）。これを <code>application_id</code> で <code>GROUP BY</code> し、ステージごとに条件付き <code>MIN()</code> でピボットする。<code>MIN()</code> なのは、同じステージが複数回記録されたときに<strong>最初の到達</strong>をマイルストーンとするため（何回通ったかは <code>fct_selection_event</code> 側で数える）。</p>
 
 <pre><code>-- models/marts/fct_application_pipeline.sql
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table',
+    partition_by={'field': 'applied_date', 'data_type': 'date', 'granularity': 'day'}
+) }}
 
 WITH milestones AS (
 
@@ -313,6 +318,7 @@ postings AS (
     SELECT
         job_posting_id,
         company_id,
+        agency_id,
         job_category_code
     FROM {{ ref('stg_careervoice__job_postings') }}
 
@@ -324,14 +330,6 @@ scouts AS (                -- 応募のきっかけになったスカウト（�
         scout_id,
         sender_agent_id
     FROM {{ ref('stg_careervoice__scouts') }}
-
-),
-
-audit AS (                 -- この実行の監査行（DT#164、10回）
-
-    SELECT audit_key
-    FROM {{ ref('dim_audit') }}
-    WHERE dbt_invocation_id = '{{ invocation_id }}'
 
 )
 
@@ -348,13 +346,16 @@ SELECT
     DATE(a.applied_at, 'Asia/Tokyo') AS applied_date,   -- パーティション用の DATE 列
 
     -- ディメンションキー（応募時点の版を結ぶ。as-of の作法は 05回）
-    mem.member_key,
-    co.company_key,
-    jp.job_posting_key,
-    jc.job_category_key,
-    ch.channel_key,
-    COALESCE(ag.agent_key, -1) AS agent_key,   -- スカウト経由でなければ担当者なし = -1
-    aud.audit_key,                             -- 全ファクトが持つ（DT#164）
+    -- 未達だけでなく「ディメンション側に該当行が無い」場合も -1 に落とす（DT#43）
+    COALESCE(mem.member_key,       -1) AS member_key,
+    COALESCE(co.company_key,       -1) AS company_key,
+    COALESCE(jp.job_posting_key,   -1) AS job_posting_key,
+    COALESCE(jc.job_category_key,  -1) AS job_category_key,
+    COALESCE(ch.channel_key,       -1) AS channel_key,
+    COALESCE(agc.agency_key,       -1) AS agency_key,   -- 求人がエージェント経由でなければ -1
+    COALESCE(ag.agent_key,         -1) AS agent_key,    -- スカウト経由でなければ -1
+    -- member_profile_mini_key（応募時点）はここに同じ形で足す（03回 / 05回）
+    {{ audit_key() }} AS audit_key,            -- 全ファクトが持つ（DT#164、定義は 10回）
 
     -- メジャー: 未達のラグは NULL のまま（0 で埋めない）
     DATE_DIFF(DATE(m.offer_at, 'Asia/Tokyo'),
@@ -383,7 +384,6 @@ SELECT
     a.scout_id
 
 FROM applications AS a
-CROSS JOIN audit AS aud
 LEFT JOIN milestones AS m USING (application_id)
 LEFT JOIN postings   AS jp_src USING (job_posting_id)
 LEFT JOIN scouts     AS sc USING (scout_id)
@@ -398,6 +398,10 @@ LEFT JOIN {{ ref('dim_company') }} AS co
 LEFT JOIN {{ ref('dim_job_posting') }}  AS jp ON jp.job_posting_id  = a.job_posting_id
 LEFT JOIN {{ ref('dim_job_category') }} AS jc ON jc.job_category_code = jp_src.job_category_code
 LEFT JOIN {{ ref('dim_channel') }}      AS ch ON ch.source_channel  = a.source_channel
+LEFT JOIN {{ ref('dim_agency') }}       AS agc
+    ON  agc.agency_id = jp_src.agency_id
+    AND a.applied_at &gt;= agc.valid_from
+    AND a.applied_at &lt;  agc.valid_to
 LEFT JOIN {{ ref('dim_agent') }}        AS ag
     ON  ag.agent_id = sc.sender_agent_id
     AND a.applied_at &gt;= ag.valid_from
@@ -405,6 +409,10 @@ LEFT JOIN {{ ref('dim_agent') }}        AS ag
 </code></pre>
 
 <p><code>member_profile_mini_key</code>（応募時点の年収帯 × 転職意欲）も同じ形で足す。ミニディメンションの解決は 03回、時点の合わせ方は 05回で扱う。</p>
+
+<p>ディメンションキーを全部 <code>COALESCE(..., -1)</code> で包んでいるのは、<strong>未達だけでなく「ディメンション側に該当行が無い」場合も未知として <code>-1</code> に落とす</strong>ためである。SCD2 の区間が応募時刻をカバーしない（遅延到着・区間の穴）と <code>member_key</code> は NULL になるが、<code>relationships</code> テストは NULL 行を黙って無視するので気づけない。<code>-1</code> に落としておけば <code>not_null</code> で検出できる。</p>
+
+<p>担当エージェント（<code>agent_key</code>）は求人ではなくスカウト（<code>applications.scout_id</code> → <code>scouts.sender_agent_id</code>）から解決する。求人が知っているのは <code>agency_id</code> までなので、そちらは縮約ディメンション <code>dim_agency</code> に結んで <code>agency_key</code> にする。<code>-1</code> は INT64 キーを前提にした表記で、STRING キーなら <code>'-1'</code> になる（キー型の判断は 03回）。</p>
 
 <h3>テストは「累積スナップショットであること」を検査する</h3>
 
@@ -429,6 +437,9 @@ models:
           - relationships:             # -1 行が dim_date に無いとここで落ちる
               to: ref('dim_date')
               field: date_key
+      - name: member_key
+        description: ディメンション側に該当行が無い場合も -1（NULL にしない）
+        tests: [not_null]
       - name: current_stage
         tests:
           - accepted_values:
@@ -451,7 +462,7 @@ models:
 <div class="table-wrap">
 <table>
 <thead><tr>
-<th>実行日</th><th><code>applied</code></th><th><code>document</code></th><th><code>first_iv</code></th><th><code>final_iv</code></th><th><code>offer</code></th><th><code>accepted</code></th><th><code>hired</code></th><th><code>closed</code></th><th><code>current_stage</code></th><th><code>days_applied_to_offer</code></th></tr></thead>
+<th>実行日</th><th><code>applied</code></th><th><code>document</code></th><th><code>first_interview</code></th><th><code>final_interview</code></th><th><code>offer</code></th><th><code>accepted</code></th><th><code>hired</code></th><th><code>closed</code></th><th><code>current_stage</code></th><th><code>days_applied_to_offer</code></th></tr></thead>
 <tbody>
 <tr><td>6/23</td><td>20260623</td><td>-1</td><td>-1</td><td>-1</td><td>-1</td><td>-1</td><td>-1</td><td>-1</td><td><code>applied</code></td><td>NULL</td></tr>
 <tr><td>7/1</td><td>20260623</td><td>20260701</td><td>-1</td><td>-1</td><td>-1</td><td>-1</td><td>-1</td><td>-1</td><td><code>document</code></td><td>NULL</td></tr>
@@ -617,7 +628,11 @@ models:
 <p>定期スナップショットは「行が存在すること」自体が情報なので、ソースを畳むのではなく<strong>掛け算で行を作る</strong>。<code>J001</code>（4/1 掲載、<code>closed_at</code> が NULL）なら 4/1 から今日まで毎日1行が立つ。</p>
 
 <pre><code>-- models/marts/fct_job_posting_daily.sql
-{{ config(materialized='table') }}
+{{ config(
+    materialized='incremental',
+    incremental_strategy='insert_overwrite',
+    partition_by={'field': 'snapshot_date', 'data_type': 'date', 'granularity': 'day'}
+) }}
 
 WITH postings AS (
 
@@ -644,8 +659,14 @@ posting_days AS (          -- ここで行を作る（範囲結合）
         DATE_DIFF(d.full_date, p.posted_date, DAY) AS days_since_posted
     FROM postings AS p
     INNER JOIN {{ ref('dim_date') }} AS d
-        ON d.full_date BETWEEN p.posted_date
-                           AND COALESCE(p.closed_date, CURRENT_DATE('Asia/Tokyo'))
+        -- 掲載期間は [posted_date, closed_date) の半開区間。終了日当日は掲載中に数えない
+        ON  d.full_date &gt;= p.posted_date
+        AND d.full_date &lt;  COALESCE(p.closed_date,
+                                    DATE_ADD(CURRENT_DATE('Asia/Tokyo'), INTERVAL 1 DAY))
+    {% if is_incremental() %}
+    -- 過去のパーティションは作り直さない。当日 + ルックバック3日だけを作る（09回）
+    WHERE d.full_date &gt;= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 3 DAY)
+    {% endif %}
 
 ),
 
@@ -672,55 +693,86 @@ daily_scouts AS (
 
 ),
 
-audit AS (
+-- 累計は「その日までの全履歴」から数える。window 関数で積み上げると、
+-- 増分実行で当日分の行しか作らないときに窓が空になり 0 から数え直しになる
+application_cum AS (
 
-    SELECT audit_key
-    FROM {{ ref('dim_audit') }}
-    WHERE dbt_invocation_id = '{{ invocation_id }}'
+    SELECT
+        pd.job_posting_id,
+        pd.snapshot_date_key,
+        COALESCE(SUM(da.application_count), 0) AS application_count_cum
+    FROM posting_days AS pd
+    LEFT JOIN daily_applications AS da
+        ON  da.job_posting_id = pd.job_posting_id
+        AND da.event_date &lt;= pd.full_date
+    GROUP BY pd.job_posting_id, pd.snapshot_date_key
+
+),
+
+scout_cum AS (
+
+    SELECT
+        pd.job_posting_id,
+        pd.snapshot_date_key,
+        COALESCE(SUM(ds.scout_count), 0) AS scout_count_cum
+    FROM posting_days AS pd
+    LEFT JOIN daily_scouts AS ds
+        ON  ds.job_posting_id = pd.job_posting_id
+        AND ds.event_date &lt;= pd.full_date
+    GROUP BY pd.job_posting_id, pd.snapshot_date_key
 
 )
 
 SELECT
     pd.snapshot_date_key,
     pd.full_date AS snapshot_date,               -- パーティション用の DATE 列
-    jp.job_posting_key,
-    co.company_key,
-    jc.job_category_key,
-    -- 求人が持つのは agency_id までで、担当者（agent_id）は求人だけでは決まらない。
-    -- 直接掲載も担当者未確定も -1（未知 = -1、DT#43）
-    -1 AS agent_key,
-    aud.audit_key,
+    COALESCE(jp.job_posting_key,  -1) AS job_posting_key,
+    COALESCE(co.company_key,      -1) AS company_key,
+    COALESCE(jc.job_category_key, -1) AS job_category_key,
+    -- 担当者（agent_id）は求人だけでは決まらないので、縮約ディメンションに結ぶ。
+    -- 直接掲載（agency_id が NULL）は -1（DT#43）
+    COALESCE(agc.agency_key,      -1) AS agency_key,
+    {{ audit_key() }} AS audit_key,             -- 定義は 10回
 
     1 AS is_open,                                -- 半加法: 日をまたいで足さない
     pd.days_since_posted,
-    SUM(COALESCE(da.application_count, 0)) OVER (
-        PARTITION BY pd.job_posting_id ORDER BY pd.snapshot_date_key
-    ) AS application_count_cum,
-    SUM(COALESCE(ds.scout_count, 0)) OVER (
-        PARTITION BY pd.job_posting_id ORDER BY pd.snapshot_date_key
-    ) AS scout_count_cum,
+    ac.application_count_cum,
+    sc.scout_count_cum,
 
     pd.job_posting_id                            -- 退化ディメンション
 
 FROM posting_days AS pd
-CROSS JOIN audit AS aud
-LEFT JOIN daily_applications AS da
-    ON da.job_posting_id = pd.job_posting_id AND da.event_date = pd.full_date
-LEFT JOIN daily_scouts AS ds
-    ON ds.job_posting_id = pd.job_posting_id AND ds.event_date = pd.full_date
+INNER JOIN application_cum AS ac
+    USING (job_posting_id, snapshot_date_key)
+INNER JOIN scout_cum AS sc
+    USING (job_posting_id, snapshot_date_key)
 LEFT JOIN {{ ref('dim_job_posting') }}  AS jp ON jp.job_posting_id    = pd.job_posting_id
 LEFT JOIN {{ ref('dim_job_category') }} AS jc ON jc.job_category_code = pd.job_category_code
 LEFT JOIN {{ ref('dim_company') }} AS co
     ON  co.company_id = pd.company_id
     AND pd.full_date &gt;= DATE(co.valid_from, 'Asia/Tokyo')
     AND pd.full_date &lt;  DATE(co.valid_to,   'Asia/Tokyo')
+LEFT JOIN {{ ref('dim_agency') }} AS agc
+    ON  agc.agency_id = pd.agency_id
+    AND pd.full_date &gt;= DATE(agc.valid_from, 'Asia/Tokyo')
+    AND pd.full_date &lt;  DATE(agc.valid_to,   'Asia/Tokyo')
 </code></pre>
 
-<p><code>agent_key</code> をここで <code>-1</code> に固定しているのは手抜きではない。<code>job_postings</code> が持つのは <code>agency_id</code>（会社としてのエージェンシー）までで、<code>dim_agent</code> の粒度である担当者は求人だけでは決まらないからである。</p>
+<p>エージェント側のキーが <code>agent_key</code> ではなく <code>agency_key</code> なのは、<code>job_postings</code> が持つのが <code>agency_id</code>（会社としてのエージェンシー）までで、<code>dim_agent</code> の粒度である担当者は求人だけでは決まらないからである。担当者ディメンションに <code>agency_id</code> で結ぶと1求人 × 担当者数に行が増え、<strong>粒度宣言（1行 = 1求人 × 1日）が壊れる</strong>。</p>
 
-<p><code>agency_id</code> で結ぶと1求人 × 担当者数に行が増え、<strong>粒度宣言（1行 = 1求人 × 1日）が壊れる</strong>。担当者別に見たい問いは <code>fct_scout</code> / <code>fct_placement</code> 側で答える。</p>
+<p>だからここは <code>dim_agent</code> を <code>agency_id</code> 粒度へ畳んだ<strong>縮約ディメンション <code>dim_agency</code></strong>（DWT ch.4）に結ぶ。直接掲載（<code>agency_id</code> が NULL）は <code>-1</code>。担当者別に見たい問いは <code>fct_scout</code> / <code>fct_placement</code> 側で答える。</p>
 
-<p><code>dim_date</code> の <code>-1</code> 行は <code>full_date</code> が NULL なので <code>BETWEEN</code> に一致せず、勝手に混ざらない。<code>J001</code> の行はこうなる（<code>S001</code> は 6/20 送信、<code>P001</code> は 6/23 応募）。</p>
+<p><code>materialized='incremental'</code> + <code>insert_overwrite</code> にしているのがこのモデルの要点である。<strong>ルックバック窓（3日）より前のパーティションは二度と作り直さない。これが「いつ流しても同じ数字」の実体</strong>である。</p>
+
+<p>毎回ソースの現在値から全期間を再展開するなら、§2(a) で否定したクエリと同じ弱点を抱えることになる（ルックバック幅の設計は 09回）。</p>
+
+<p>累計メジャー（<code>application_count_cum</code> / <code>scout_count_cum</code>）を window 関数で積み上げていないのは、増分実行では直近3日分の行しか作らないからである。窓に過去の行が入らないので、<code>SUM() OVER (ORDER BY snapshot_date_key)</code> は 0 から数え直してしまう。<strong>累計は常にソース側の全履歴から <code>&lt;=</code> で数える</strong>。</p>
+
+<p>この累計は掲載期間内に届いた分だけを数える。掲載終了後に届いた応募は、その求人の行がもう立たないので入らない。</p>
+
+<p>掲載期間は <code>[posted_date, closed_date)</code> の半開区間として扱う。終了日当日は掲載中に数えない — §2(a) の「壊れている」クエリ（<code>closed_at &gt; '2026-04-15'</code>）と同じ規約に揃えてある。</p>
+
+<p><code>dim_date</code> の <code>-1</code> 行は <code>full_date</code> が NULL なので比較が NULL になり、勝手に混ざらない。<code>J001</code> の行はこうなる（<code>S001</code> は 6/20 送信、<code>P001</code> は 6/23 応募）。</p>
 
 <div class="table-wrap">
 <table>
@@ -742,7 +794,8 @@ LEFT JOIN {{ ref('dim_company') }} AS co
 <table>
 <thead><tr><th>状況（問いの形）</th><th>選択</th><th>理由</th></tr></thead>
 <tbody>
-<tr><td>「日別の応募数は？」<br>いつ何件起きたか</td><td>トランザクション（<code>fct_selection_event</code>）</td><td>事象があるときだけ行が立てばよい。最も細かい粒度が取れる</td></tr>
+<tr><td>「日別のスカウト送信数は？」<br>いつ何件起きたか</td><td>トランザクション（<code>fct_scout</code>）</td><td>事象があるときだけ行が立てばよい。最も細かい粒度が取れる</td></tr>
+<tr><td>「日別の応募数は？」<br>プロセスの開始を数える</td><td>累積スナップショット（<code>fct_application_pipeline</code>）を <code>applied_date_key</code> で数える</td><td>1行 = 1応募なので行を数えれば応募数になる。<code>selection_events.stage</code> に「応募」が無いため、応募単独のトランザクションファクトは正典に存在しない</td></tr>
 <tr><td>「4/15 に掲載中だった求人は？」<br>その日/その月の状態</td><td>定期スナップショット（<code>fct_job_posting_daily</code>）</td><td>活動が無い日も行が要る。ソース再構成では再現性が無い</td></tr>
 <tr><td>「応募から内定まで何日？」<br>開始と終了があるプロセスのラグ</td><td>累積スナップショット（<code>fct_application_pipeline</code>）</td><td>複数の日付キーを1行に並べないと差分が取れない</td></tr>
 <tr><td>「どのステージで落ちたか」<br>歩留まり</td><td>累積スナップショット</td><td>1行 = 1応募なので、行を数えるだけでファネルになる。イベント表だと重複計上しやすい</td></tr>

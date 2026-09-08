@@ -65,3 +65,27 @@ python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py docs/data_mart_modelin
 - Techniques PDF（2013）を実読できていない（WebFetch がバイナリを返す）。3型・ファクトレスの定義は Fact Tables 記事と Design Tip から取っており、Techniques の言い回しは引用していない。
 - DWT ch.4 は書籍のため未読。章番号の参照のみで、章本文からの引用はしていない。
 - 図は1枚のみ（ブリーフ指定どおり）。「定期スナップショットの密度 vs トランザクションの疎」を比較図にしたくなったが、§1 の比較表で足りるため描いていない。
+
+---
+
+## 修正ラウンド1（レビュー `review/02_review.md` への対応）
+
+| ID | 対応 |
+|---|---|
+| C-1 | §6 の1行目を「日別のスカウト送信数は？→ トランザクション（`fct_scout`）」に差し替え、「日別の応募数は？→ 累積スナップショットを `applied_date_key` で数える（`selection_events` に `applied` が無いため応募単独のトランザクションファクトは正典に無い）」を新規行として追加。§1 の4型比較表の「典型の問い」も「日別のスカウト送信数は？」に修正 |
+| I-1 | 正典追従。`fct_job_posting_daily` の `-1 AS agent_key` を `COALESCE(agc.agency_key, -1) AS agency_key` に差し替え、`dim_agency` への as-of 結合を追加。直後の2段落を「縮約ディメンションを使う理由」として書き直した。`fct_application_pipeline` にも `agency_key`（求人の `agency_id` → `dim_agency`）を追加し、`postings` CTE に `agency_id` を戻した（`agent_key` はスカウト経由の解決のまま） |
+| I-2 | `fct_job_posting_daily` の config を `materialized='incremental'` + `insert_overwrite` + `partition_by={'field':'snapshot_date',...}` に変更し、`posting_days` に `{% if is_incremental() %}` のルックバック3日の述語を追加。「ルックバック窓より前のパーティションは二度と作り直さない」を本文に明記（09回へ送付） |
+| I-2 派生 | レビュー案のまま増分化すると、累計メジャーの `SUM() OVER (ORDER BY snapshot_date_key)` が窓に過去行を持たず 0 から数え直しになる。`application_cum` / `scout_cum` CTE（`event_date <= full_date` で全履歴から集計）に置き換え、その理由を本文に1段落追加した |
+| I-3 | `posting_days` の範囲結合を `BETWEEN` から半開区間 `[posted_date, closed_date)` に変更（`DATE_ADD(CURRENT_DATE, INTERVAL 1 DAY)` で無期限掲載を表現）。§2(a) のクエリと同じ規約であることを本文で明示。`J001` の表の値は不変 |
+| I-4 | 両モデルの全ディメンションキーを `COALESCE(..., -1)` で包み、`schema.yml` に `member_key` の `not_null` を追加。「未達だけでなくディメンション側に該当行が無い場合も -1」「`relationships` は NULL 行を無視するので気づけない」を本文に1段落追加 |
+| I-5 | `audit` CTE と `CROSS JOIN` を両モデルから削除し、`{{ audit_key() }} AS audit_key`（定義は 10回）の1行に置換。0行化・二重化のリスクが消えた |
+| I-6 | DT#95 の aside を原典どおり前2文で閉じ、按分の話を aside の外の本文へ（この題材はヘッダ金額を持たないため1文に圧縮） |
+| m-1 | 「`-1` は INT64 キー前提の表記。STRING キーなら `'-1'`（型の判断は 03回）」を本文に追記（正典 §4 の追記とも一致） |
+| m-2 | `fct_application_pipeline` の config に `partition_by={'field':'applied_date',...}` を追加し、コメントと整合させた |
+| m-3 | SQL に `-- member_profile_mini_key（応募時点）はここに同じ形で足す（03回 / 05回）` の1行を追加 |
+| m-4 | 3型の aside の帰属を `（Fact Tables, 2008 / DWT ch.4）` に修正 |
+| m-5 | 「累計は掲載期間内に届いた分だけを数える（掲載終了後の応募は入らない）」を本文に明記 |
+| m-6 | `P001` の表のヘッダを `first_interview` / `final_interview` に戻した |
+| m-7 | §2(b) の DML 表現を「競合するとキューイングと再試行に回る」に緩めた |
+
+その他: 正典追加に伴い §3 の `fct_selection_event` のキー列挙に `agency_key` を足した。図は未変更（`check_svg.py` 再実行して `0 errors, 0 warnings`）。段落は全て3文以内、`<pre>` 内の生の `<`/`>` はゼロ、タグの対応検査も通過。
