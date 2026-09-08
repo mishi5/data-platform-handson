@@ -58,3 +58,5 @@
 - 09 修正ラウンド1 完了（11件 FIXED）→ 再レビュー起動
 - 08 レビュー REVISE（critical=2 important=3 minor=8。MV 制約の事実誤認 / 手元基盤の記述の事実誤認 / 演習の窓）→ 修正ラウンド 1/3 送付
 - 10 レビュー REVISE（critical=2 important=3 minor=11）→ 修正ラウンド 1/3 送付。Ruling: audit_key() は 10 回が正本（引数=値、quality_flag 3値、loaded_at=run_started_at、source_system='src_careervoice'）。03 回 §5(e) の下書き定義は横断レビュー後の修正ウェーブで 10 回に揃える（TODO）
+- 09 再レビュー: 11件 ADDRESSED、新規 Important 1（AVG の検算）→ 修正ラウンド 2/3 送付
+- 08 修正ラウンド1 完了（13件 FIXED。執筆者が bq query で SQL を実行確認したと報告）→ 再レビュー起動

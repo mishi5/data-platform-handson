@@ -57,7 +57,7 @@
 <tr><td>集約テーブルの本数</td><td>日次の単一ファクト集約（<code>agg_company_rating_daily</code>）とエンティティ集約（<code>agg_company_entity</code>）の 2 系統だけ。問いごとには作らない</td><td>正本が分からなくなる</td><td>2, 6</td></tr>
 <tr><td><code>agg_company_entity</code> の位置づけ</td><td>ドリルアクロスを事前に済ませた企業 OBT。指標は窓付き（<code>_30d</code>, <code>_90d</code>）、正本は各ファクト</td><td>ECM。再計算可能な派生物として扱う</td><td>4, 5, 6</td></tr>
 <tr><td><code>avg_overall_score_90d</code></td><td>持ってよい。ただし算出は <code>sum/count</code> から。1 エンティティ 1 行の終端テーブルで再集約しない契約</td><td>04 回の原則の例外条件</td><td>6, 7</td></tr>
-<tr><td>BigQuery マテリアライズド・ビュー</td><td><code>agg_company_rating_daily</code> は候補。ドリルアクロスと <code>agg_company_entity</code> は MV にできない</td><td>MV は <code>FULL OUTER JOIN</code>・非決定関数・集約の後段計算が不可</td><td>5, 6</td></tr>
+<tr><td>BigQuery マテリアライズド・ビュー</td><td>ドリルアクロスと <code>agg_company_entity</code> は MV にできない。<code>agg_company_rating_daily</code> は条件を満たすが、定義が固まるまで通常のテーブルで運用する</td><td>MV は <code>FULL OUTER JOIN</code>・自己結合・非決定関数・集約の後段計算が不可。定義 SQL は後から変更できない</td><td>5, 6</td></tr>
 </tbody>
 </table>
 </div>
@@ -71,7 +71,7 @@
 <thead><tr><th>条件</th><th>意味</th><th>CareerVoice での点検</th><th>破れる例</th></tr></thead>
 <tbody>
 <tr><td>同じ意味</td><td>同じ値が同じ実体を指す</td><td><code>dim_company</code> の 1 行は法人 1 社。<code>corporate_number</code> が同一なら同一企業</td><td>片方が「掲載主体」、片方が「採用法人」を company と呼ぶ</td></tr>
-<tr><td>同じキー</td><td>行ヘッダに使うキーの採番が一致</td><td>全ファクトが <code>dim_company</code> 由来の <code>company_key</code> を持つ（<code>fct_scout</code> は <code>dim_scout_sender</code> 経由）</td><td>片方がイベント時点版、片方が現在値版</td></tr>
+<tr><td>同じキー</td><td>行ヘッダに使うキーの採番が一致</td><td><code>fct_scout</code> / <code>fct_scout_funnel</code> を除く全ファクトが <code>dim_company</code> 由来の <code>company_key</code> を持つ。この 2 本は <code>dim_scout_sender</code>（<code>sender_id</code> が <code>company</code> なら <code>company_id</code>）経由で企業に戻す</td><td>片方がイベント時点版、片方が現在値版</td></tr>
 <tr><td>同じ属性名</td><td>列名と値の集合が一致</td><td><code>employee_size_band</code> は <code>lt50</code>/<code>50_299</code>/<code>300_999</code>/<code>ge1000</code> の 4 値だけ</td><td>片方だけ <code>lt300</code> という区分を足す</td></tr>
 </tbody>
 </table>
@@ -85,9 +85,9 @@
 <tbody>
 <tr><td><code>dim_date</code></td><td><code>full_date</code>, <code>month</code>, <code>fiscal_year</code>, <code>iso_week</code></td><td>全ファクト（ロールプレイングで <code>submitted_date_key</code>, <code>sent_date_key</code>, <code>applied_date_key</code> …）</td><td>役割が違っても値のドメインは同一。<code>-1</code>（未到達）行を行ヘッダに出すか毎回決める</td></tr>
 <tr><td><code>dim_company</code></td><td><code>name</code>, <code>industry</code>, <code>employee_size_band</code>, <code>listing_status</code></td><td><code>fct_review</code>, <code>fct_review_moderation</code>, <code>fct_page_view</code>, <code>fct_job_posting_daily</code>, <code>fct_application_pipeline</code>, <code>fct_contract_monthly</code>, <code>fct_placement</code>, <code>fct_selection_event</code></td><td>SCD2。行ヘッダに使う前に版を揃える（§2a）</td></tr>
-<tr><td><code>dim_member</code></td><td><code>prefecture</code>, <code>region</code>, <code>birth_year</code></td><td><code>fct_scout</code>, <code>fct_scout_funnel</code>, <code>fct_page_view</code>, <code>fct_application_pipeline</code>, <code>fct_placement</code></td><td><code>fct_review</code> は匿名性の固定判断により <code>member_key</code> を持たない。会員はクチコミと横に並べられない</td></tr>
+<tr><td><code>dim_member</code></td><td><code>prefecture</code>, <code>region</code>, <code>birth_year</code></td><td><code>fct_scout</code>, <code>fct_scout_funnel</code>, <code>fct_page_view</code>, <code>fct_selection_event</code>, <code>fct_application_pipeline</code>, <code>fct_placement</code></td><td><code>fct_review</code> は匿名性の固定判断により <code>member_key</code> を持たない。会員はクチコミと横に並べられない</td></tr>
 <tr><td><code>dim_job_category</code></td><td><code>level1_name</code>, <code>level2_name</code>, <code>level3_name</code></td><td><code>fct_review</code>, <code>fct_job_posting_daily</code>, <code>fct_selection_event</code>, <code>fct_application_pipeline</code>, <code>fct_placement</code></td><td>不揃い階層を固定深さに平坦化済み。3 レベルの名前が全ファクトで共通の行ヘッダになる</td></tr>
-<tr><td><code>dim_agent</code> / <code>dim_agency</code></td><td><code>agent_name</code>, <code>agency_name</code>, <code>agency_tier</code></td><td><code>fct_scout</code>（<code>dim_scout_sender</code> 経由）, <code>fct_selection_event</code>, <code>fct_application_pipeline</code>, <code>fct_placement</code>, <code>fct_job_posting_daily</code></td><td><code>dim_agency</code> は <code>dim_agent</code> の縮約ディメンション。担当者が特定できないファクトはこちらに寄せる（DWT ch.4）</td></tr>
+<tr><td><code>dim_agent</code> / <code>dim_agency</code></td><td><code>agent_name</code>, <code>agency_name</code>, <code>agency_tier</code></td><td><code>fct_scout</code> / <code>fct_scout_funnel</code>（<code>dim_scout_sender</code> 経由）, <code>fct_selection_event</code>, <code>fct_application_pipeline</code>, <code>fct_placement</code>, <code>fct_job_posting_daily</code></td><td><code>dim_agency</code> は <code>dim_agent</code> の縮約ディメンション。担当者が特定できないファクトはこちらに寄せる（DWT ch.4）</td></tr>
 </tbody>
 </table>
 </div>
@@ -203,7 +203,7 @@
 <h3>5-1. ドリルアクロス（企業 × 月）</h3>
 
 <p>3 つのファクトをそれぞれ同じ行ヘッダ <code>(company_key, month_key)</code> に集約し、<code>FULL OUTER JOIN ... USING</code> で並べる。BigQuery の <code>USING</code> は結合キーを 1 列に併合し、<code>FULL OUTER JOIN</code> では両側の値を合成するので、3 段のチェーンでもキー列は 1 つのまま残る。</p>
-<p>フィルタは DATE 型のパーティション列（<code>submitted_date</code> / <code>sent_date</code> / <code>applied_date</code>）に掛ける。<code>_date_key</code>（INT64）で絞るとプルーニングが効かない。</p>
+<p>フィルタは DATE 型のパーティション列（<code>submitted_date</code> / <code>sent_date</code> / <code>applied_date</code>）に掛ける。<code>_date_key</code>（INT64）で絞るとプルーニングが効かない。行ヘッダの <code>month_key</code> も <code>DATE_TRUNC</code> が返す DATE で、正典の <code>date_key</code>（INT64 <code>YYYYMMDD</code>）とは別物である（ブリーフの列名に合わせただけで、ディメンションのキーではない）。</p>
 
 <pre><code>-- analyses/drill_across_company_month.sql
 -- 企業 × 月で クチコミ / スカウト / 応募 を横に並べる
@@ -249,14 +249,18 @@ scout_monthly AS (
 ),
 
 application_monthly AS (
+    -- 分母（企業送信スカウト）と母集団を揃えるため、経路別の内訳も出す
     SELECT
         m.current_company_key AS company_key,
         DATE_TRUNC(f.applied_date, MONTH) AS month_key,
         COUNT(*) AS application_count,
+        COUNTIF(ch.source_channel = 'scout_company') AS application_count_scout_company,
         SUM(f.is_hired) AS hired_count
     FROM {{ ref('fct_application_pipeline') }} AS f
     INNER JOIN company_map AS m
         USING (company_key)
+    INNER JOIN {{ ref('dim_channel') }} AS ch
+        ON ch.channel_key = f.channel_key
     WHERE f.applied_date BETWEEN DATE '2026-01-01' AND DATE '2026-08-31'
     GROUP BY 1, 2
 ),
@@ -270,6 +274,7 @@ drilled AS (
         r.sum_overall_score,
         s.scout_count,
         a.application_count,
+        a.application_count_scout_company,
         a.hired_count
     FROM review_monthly AS r
     FULL OUTER JOIN scout_monthly AS s
@@ -285,7 +290,8 @@ SELECT
     SAFE_DIVIDE(d.sum_overall_score, d.review_count) AS avg_overall_score,
     d.scout_count,
     d.application_count,
-    SAFE_DIVIDE(d.application_count, d.scout_count) AS applications_per_scout
+    -- 分子分母とも「企業が送ったスカウト」に揃える（全チャネル応募を分子にしない）
+    SAFE_DIVIDE(d.application_count_scout_company, d.scout_count) AS apply_rate_scout_company
 FROM drilled AS d
 INNER JOIN {{ ref('dim_company') }} AS c
     ON c.company_key = d.company_key
@@ -295,14 +301,19 @@ ORDER BY company_name, month_key
 
 <p>読み方の要点は 3 つ。各パスは 1 ファクトしか触らない、平均や比率は結合したあとに <code>SAFE_DIVIDE</code> で作る、行ヘッダを増やしたければ 3 つのパス全部に同じ列を足す（Soul 1 のドリルダウン）。3 つ全部に足せない列は、そもそもコンフォームドではない。</p>
 
+<p>比率の分子と分母は母集団を揃える。<code>scout_count</code> は <code>sender_type = 'company'</code> に絞った企業送信スカウトなので、分子も <code>dim_channel</code> で <code>scout_company</code> に絞る。揃えないなら名前を変えて母集団の違いを列名に出す（§3 のコンフォームドファクト）。</p>
+
+<p><code>company_map</code> は <code>INNER JOIN</code> なので、<code>dim_company</code> に <code>-1</code>（未知）行が <code>is_current</code> で存在しないと、未知企業のファクト行が黙って消える。この回のテーマがまさに「行が消える」ことなので、<code>-1</code> 行は必ず現行版として置く（DT#43）。</p>
+
 <h3>5-2. グループ企業まで畳む</h3>
 
-<p><code>C003</code>（ヒノデ物流）は <code>parent_company_id</code> が <code>C001</code> なので、グループ単位で見たい問いがある。<code>br_company_hierarchy</code> の祖先側は <code>is_current</code> 版だけ、子孫側は全版を採り、<code>company_id</code>（自然キー）で畳む。</p>
+<p><code>C003</code>（ヒノデ物流）は <code>parent_company_id</code> が <code>C001</code> なので、グループ単位で見たい問いがある。<code>br_company_hierarchy</code> の祖先側は <code>is_current</code> 版だけ、子孫側は全 SCD2 版を採り、<code>company_id</code>（自然キー）で畳む。出力を <code>company_key</code> にしておけば <code>company_map</code> とそのまま差し替えられる。</p>
 
 <pre><code>group_map AS (
+    -- 全 SCD2 版の company_key -&gt; グループ親（is_current）の company_key
     SELECT DISTINCT
-        anc.company_id AS group_company_id,
-        des.company_id AS member_company_id
+        des.company_key,
+        anc.company_key AS group_company_key
     FROM {{ ref('br_company_hierarchy') }} AS b
     INNER JOIN {{ ref('dim_company') }} AS anc
         ON anc.company_key = b.ancestor_company_key
@@ -312,7 +323,9 @@ ORDER BY company_name, month_key
 )
 </code></pre>
 
-<p><code>company_map</code> の代わりにこれを挟むと、行ヘッダが「グループ」に変わる。<code>C001</code> の行に <code>C001</code> 自身と <code>C003</code> の数字が合算される（<code>depth = 0</code> の自己行を含むため）。祖先側を全版にすると同じグループが版の数だけ増えるので、必ず <code>is_current</code> で絞る。</p>
+<p>§5-1 の各パスで <code>INNER JOIN company_map AS m USING (company_key)</code> を <code>INNER JOIN group_map AS g USING (company_key)</code> に、<code>m.current_company_key AS company_key</code> を <code>g.group_company_key AS company_key</code> に置き換えれば、行ヘッダがグループに変わる。<code>C001</code> の行に <code>C001</code> 自身と <code>C003</code> の数字が合算される（<code>depth = 0</code> の自己行を含むため）。</p>
+
+<p><code>br_company_hierarchy</code> は 06 回の実装で既に「祖先側は <code>is_current</code> のみ、子孫側は全版」で作られているので、<code>anc.is_current</code> は安全網としての再指定である。祖先側に旧版が混ざると同じグループが版の数だけ増える。</p>
 
 <h3>5-3. <code>agg_company_entity</code>（ECM 風エンティティ集約）</h3>
 
@@ -395,7 +408,8 @@ scouts AS (
 
 applications AS (
     -- パーティション列は applied_date。hired_date で絞ってもプルーニングは効かないので
-    -- applied_date 側にも広めの下限を置く
+    -- applied_date 側にも広めの下限を置く。応募から入社まで 365 日を超えた案件は
+    -- hires_90d から落ちる。許容できないなら fct_placement（hired_date がパーティション列）から取る
     SELECT
         m.current_company_key AS company_key,
         COUNTIF(f.applied_date &gt;= DATE_SUB({{ asof }}, INTERVAL 30 DAY)) AS applications_30d,
@@ -470,11 +484,14 @@ models:
       - name: company_id
         tests: [not_null]
       - name: review_count_total
-        description: 全期間のクチコミ件数。加法
+        description: |
+          全期間の投稿クチコミ件数。fct_review の粒度どおり submitted 全件で、
+          審査中・却下も含む（published のみではない）。加法
         tests: [not_null]
       - name: avg_overall_score_90d
         description: |
-          直近 90 日の overall_score 平均。sum_overall_score_90d / review_count_90d。
+          直近 90 日に投稿された overall_score の平均。sum_overall_score_90d / review_count_90d。
+          母集団は review_count_total と同じ submitted 全件。
           該当クチコミが 0 件なら NULL（0 ではない）。非加法。
       - name: scouts_sent_30d
         description: 直近 30 日に当該企業が送信したスカウト数。加法
@@ -528,13 +545,15 @@ GROUP BY 1, 2, 3
 <tr><td>集約は出力そのものでなければならない。集約値をさらに計算・フィルタ・結合できない</td><td><code>SAFE_DIVIDE(sum, count)</code> を MV 内に持てない。04 回の「和と件数だけ持つ」方針と一致する</td></tr>
 <tr><td>使える集約関数は限定（<code>SUM</code>, <code>COUNT</code>, <code>COUNTIF</code>, <code>AVG</code>, <code>MIN</code>, <code>MAX</code>, <code>APPROX_COUNT_DISTINCT</code>, <code>HLL_COUNT.INIT</code> ほか）</td><td>一覧外の <code>COUNT(DISTINCT ...)</code> は不可。近似でよければ <code>APPROX_COUNT_DISTINCT</code>（内部はスケッチ）</td></tr>
 <tr><td>非決定的関数（<code>CURRENT_DATE()</code> など）と UDF、ウィンドウ関数が不可</td><td><code>agg_company_entity</code> の <code>_30d</code> / <code>_90d</code> 窓は <code>CURRENT_TIMESTAMP()</code> 起点なので MV にできない</td></tr>
-<tr><td>MV の <code>partition_by</code> はベーステーブルのパーティションと粒度を合わせる必要がある。MV の上に MV は作れない</td><td><code>rating_date</code> は <code>fct_review</code> の <code>submitted_date</code> と同粒度。<code>agg_company_entity</code> は MV 化した <code>agg_company_rating_daily</code> を参照できなくなる</td></tr>
+<tr><td>MV の <code>partition_by</code> は<strong>ベーステーブルと同じ列</strong>に、時間パーティションなら同じ粒度で張る（"Materialized views must be partitioned on the same column as the base table with matching granularity"）。また "You can't nest materialized views over other materialized views."</td><td><code>rating_date</code> は <code>fct_review</code> の <code>submitted_date</code> の別名なので条件を満たす。ネスト禁止はここでは効かない — 参照側の <code>agg_company_entity</code> は <code>materialized='table'</code> であり MV ではない</td></tr>
 <tr><td>定義 SQL は後から変更できない（<code>--full-refresh</code> で drop/create）</td><td>集約定義が動く時期は通常のテーブルで運用し、固まってから MV に移す</td></tr>
 </tbody>
 </table>
 </div>
 
-<p>最後の行が実務上いちばん効く。<code>agg_company_rating_daily</code> を MV にすると <code>agg_company_entity</code> がそれを <code>ref</code> できなくなるため、この回では <code>agg_company_rating_daily</code> は通常のテーブル（09 回で増分）に置き、MV は「単一ファクトの集約を BI が直接叩く」ケースの選択肢として保留する。</p>
+<p>MV は普通のテーブルと同じように直接クエリでき（"You can query your materialized views directly, the same way you query a regular table or standard view."）、ベーステーブルへのクエリも自動で書き換えられる。<code>agg_company_entity</code> は <code>materialized='table'</code> なので、<code>agg_company_rating_daily</code> を MV 化しても <code>{{ ref('agg_company_rating_daily') }}</code> はそのまま通る。参照側は移行の障害にならない。</p>
+
+<p>MV 化を止めているのは定義 SQL の不変性である。<code>agg_company_rating_daily</code> の 8 軸の和はまだ動く余地があり、変更のたびに drop/create が要る。定義が固まり、09 回の <code>insert_overwrite</code> より自動維持が有利になった時点で MV へ移す。</p>
 
 <h2>6. 判断基準</h2>
 
@@ -579,7 +598,8 @@ GROUP BY 1, 2, 3
 
 <details>
 <summary>解答例</summary>
-<p>結ぶのは <code>fct_review</code>（企業×月の <code>sum_overall_score</code> と <code>review_count</code>）と <code>fct_scout</code>（企業×月の送信数）と <code>fct_application_pipeline</code>（企業×月の応募数）の 3 パス。応募率はここでは「送ったスカウト 1 通あたりの応募数」と定義する。ファクト同士は結ばず、§5-1 の <code>drilled</code> を入力にして前月差を取る。</p>
+<p>結ぶのは <code>fct_review</code>（企業×月の <code>sum_overall_score</code> と <code>review_count</code>）と <code>fct_scout</code>（企業×月の送信数）と <code>fct_application_pipeline</code>（企業×月の応募数）の 3 パス。応募率は「企業が送ったスカウト 1 通あたりの、<code>scout_company</code> チャネル応募数」と定義する。分母が <code>sender_type = 'company'</code> に絞られている以上、分子も <code>dim_channel</code> で同じ経路に絞らないと母集団が揃わない（§3 のコンフォームドファクト）。</p>
+<p>ファクト同士は結ばず、§5-1 の <code>drilled</code> を入力にして前月差を取る。</p>
 <pre><code>-- §5-1 の CTE 群（company_map / *_monthly / drilled）をそのまま前置する
 SELECT
     company_key,
@@ -587,9 +607,10 @@ SELECT
     SAFE_DIVIDE(sum_overall_score, review_count) AS avg_score,
     SAFE_DIVIDE(sum_overall_score, review_count)
         - LAG(SAFE_DIVIDE(sum_overall_score, review_count)) OVER w AS d_avg_score,
-    SAFE_DIVIDE(application_count, scout_count) AS apply_rate,
-    SAFE_DIVIDE(application_count, scout_count)
-        - LAG(SAFE_DIVIDE(application_count, scout_count)) OVER w AS d_apply_rate
+    SAFE_DIVIDE(application_count_scout_company, scout_count) AS apply_rate,
+    SAFE_DIVIDE(application_count_scout_company, scout_count)
+        - LAG(SAFE_DIVIDE(application_count_scout_company, scout_count))
+            OVER w AS d_apply_rate
 FROM drilled
 WINDOW w AS (PARTITION BY company_key ORDER BY month_key)
 </code></pre>
@@ -628,8 +649,8 @@ WINDOW w AS (PARTITION BY company_key ORDER BY month_key)
 <thead><tr><th>候補指標</th><th>元ファクト</th><th>可否</th></tr></thead>
 <tbody>
 <tr><td>受信スカウト数（30 日）</td><td><code>fct_scout</code></td><td>✓ <code>member_key</code> を全 SCD2 版から現在版に寄せる</td></tr>
-<tr><td>開封率・返信率（90 日）</td><td><code>fct_scout_funnel</code></td><td>✓ ただし <code>SUM(is_opened)</code> と件数を別列で持ち、比率は下流で作る</td></tr>
-<tr><td>応募数（30 日）・入社（90 日）</td><td><code>fct_application_pipeline</code></td><td>✓ <code>M001</code> の <code>P001</code>（6/23 応募・8/1 入社）が両方に立つ</td></tr>
+<tr><td>開封率・返信率（90 日）</td><td><code>fct_scout_funnel</code></td><td>✓ ただし <code>SUM(is_opened)</code> と件数を別列で持ち、比率は下流で作る。(b) と同じ条件で比率を持たせてもよいが、返信率は分母が「送信」か「開封」かで 2 通りあるため、分子分母を残して下流に選ばせる</td></tr>
+<tr><td>応募数（30 日）・入社（90 日）</td><td><code>fct_application_pipeline</code></td><td>✓ ただし固定窓なので両方には立たない。<code>M001</code> の <code>P001</code>（6/23 応募・8/1 入社）は <code>asof</code> が 7/23 以前なら <code>applications_30d</code> に、8/1〜10/30 なら <code>hires_90d</code> にしか入らない。窓幅の選択がファネルの見え方を決める</td></tr>
 <tr><td>閲覧企業数（30 日）</td><td><code>fct_page_view</code></td><td>△ <code>COUNT(DISTINCT company_key)</code> は再集約不能。持つなら会員単位の終端値と割り切る</td></tr>
 <tr><td>投稿クチコミ数・平均スコア</td><td><code>fct_review</code></td><td>✗ <code>member_key</code> が無い。<code>int_review_member_link</code> の再結合は制限データセット外に出せない</td></tr>
 <tr><td>希望職種</td><td><code>br_member_desired_job_category</code></td><td>△ 多値。1 行 1 会員を壊すので <code>priority = 1</code> の 1 件だけを属性として持つ</td></tr>
@@ -643,9 +664,10 @@ WINDOW w AS (PARTITION BY company_key ORDER BY month_key)
 <h2>8. 参考: 手元の基盤ではどうか</h2>
 
 <div class="aside">
-<p><code>dbt_logs_analysis</code> の <code>mart_url_performance</code> と <code>mart_error_analysis</code> は、どちらも <code>url_path</code> と日付を行ヘッダに持つ。この 2 本を横に並べるドリルアクロスは形の上では成立する。ただし共通ディメンションのテーブルが無く、両者が <code>stg_access_logs</code> から独立に <code>url_path</code> を導出しているため、片方の正規化ルールだけが変わると「同じ名前で違うドメイン」になる（Soul 2 の conformed 条件が破れる）。</p>
+<p><code>dbt_logs_analysis</code> の <code>mart_url_performance</code> は <code>url_path</code> × <code>date</code>（<code>GROUP BY url_path, date</code>）、<code>mart_error_analysis</code> は <code>date</code> × <code>hour</code> × <code>error_detail</code> を行ヘッダに持つ。共通する行ヘッダは <code>date</code> だけで、<code>mart_error_analysis</code> は <code>access_errors</code> CTE で読んだ <code>url_path</code> を <code>GROUP BY date, hour, status_code</code> で捨てている。この 2 本は URL でドリルアクロスできない — Soul 2 の「共通の行ヘッダが同じドメインを持つ」以前に、片方に列が無い。</p>
+<p><code>url_path</code> の導出自体は <code>stg_access_logs</code> の <code>split(url, '?')[offset(0)]</code> 1 か所に閉じており、両マートはそれを継承している。つまりコンフォームドの前提は既にできていて、条件は「揃える」ではなく「粒度を落とさない」側にある。<code>exposures.yml</code> の <code>error_monitoring_alert</code> は <code>mart_error_analysis</code> だけ、<code>url_performance_dashboard</code> は <code>mart_url_performance_incremental</code> だけを参照しており、両者を横断する利用者は今のところいない。</p>
 <p><code>news_pipeline</code> の <code>summaries</code> と <code>raw_articles</code> は <code>article_id</code> で横に並ぶが、日時列が <code>raw_articles</code> 側にしかない。日付を行ヘッダにするには必ず片側結合が要る状態で、<code>dim_date</code> に相当する共通軸が存在しない。この回の基準で言えば、日付がコンフォームドディメンションになっていない。</p>
-<p>試せる種: <code>dim_url_path</code> を 1 本作って両マートから <code>ref</code> し、<code>mart_url_performance</code> と <code>mart_error_analysis</code> を <code>FULL OUTER JOIN USING (url_path, date)</code> で並べる analysis を書く。</p>
+<p>試せる種: <code>mart_error_analysis</code> の <code>access_error_summary</code> に <code>url_path</code> を残した派生モデルを作り、<code>mart_url_performance</code> と <code>FULL OUTER JOIN USING (url_path, date)</code> で並べる analysis を書く。</p>
 </div>
 
 <h2>参照文献</h2>
@@ -658,6 +680,7 @@ WINDOW w AS (PARTITION BY company_key ORDER BY month_key)
 <li>Maxime Beauchemin, Entity-Centric Data Modeling for Analytics（Preset, 2023） — <a href="https://preset.io/blog/introducing-entity-centric-data-modeling-for-analytics/">preset.io</a></li>
 <li>Hightouch, A Guide to Modern Data Warehouse Modelling — Part 2 — <a href="https://hightouch.com/blog/data-warehouse-modelling-part-2">hightouch.com</a></li>
 <li>dbt, BigQuery configurations（<code>materialized_view</code> の設定キー、<code>partition_by</code> / <code>cluster_by</code>） — <a href="https://docs.getdbt.com/reference/resource-configs/bigquery-configs">docs.getdbt.com</a></li>
+<li>Google Cloud, マテリアライズド・ビューの概要 — <a href="https://cloud.google.com/bigquery/docs/materialized-views-intro">cloud.google.com</a> ／ 作成（増分 MV の対応集約関数と禁止構文） — <a href="https://cloud.google.com/bigquery/docs/materialized-views-create">cloud.google.com</a></li>
 </ul>
 
 </body>

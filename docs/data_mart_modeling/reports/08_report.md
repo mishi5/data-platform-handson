@@ -67,3 +67,34 @@
 
 - なし。ブリーフの §1〜§7 の必須内容と図の指定（なし）はすべて満たした。
 - ただし §5-2（グループ企業の畳み込み）はブリーフに無い追加節である。オーケストレータから「企業グループの再集約は `br_company_hierarchy` の子孫側から `company_id` で畳む（祖先側は `is_current`、子孫側は全版）」という規約が来ていたため、ドリルアクロスの行ヘッダの話題に接続する形で入れた。不要なら削除できる独立した h3 にしてある。
+
+---
+
+## 修正ラウンド 1
+
+正典・`references.md` を再読し、裁定済みの項目（`agg_company_entity` への `dim_company`(`is_current`) 属性平坦化と `audit_key` 非保持、`dim_scout_sender.sender_id` の意味、BQ MV の URL 追加）を反映した。
+
+| ID | 対応 |
+|---|---|
+| C-1 | §5-4 制約表の最終行を公式の事実に修正（`partition_by` は「ベーステーブルと**同じ列**に同粒度」、ネスト禁止は参照側が `materialized='table'` なので効かない）。結論の段を、MV は直接クエリ可（"You can query your materialized views directly, the same way you query a regular table or standard view."）で `ref` の障害にならない → MV 化を止めているのは定義 SQL の不変性、に書き直し。§1 判断一覧表の MV 行も同じ理由に揃えた |
+| C-2 | §8 第 1 段を実物に合わせて全面差し替え。`mart_url_performance` = `url_path` × `date`（`GROUP BY url_path, date`）、`mart_error_analysis` = `date` × `hour` × `error_detail`（`access_error_summary` が `GROUP BY date, hour, status_code` で `url_path` を捨てる）、`url_path` の導出は `stg_access_logs` の `split(url, '?')[offset(0)]` 1 か所に閉じている、を確認して記述。`exposures.yml` の依存（`error_monitoring_alert` → `mart_error_analysis`、`url_performance_dashboard` → `mart_url_performance_incremental`）も追記。「試せる種」は `url_path` を残した派生モデルを作る案に変更（`dim_url_path` 案は撤回） |
+| I-1 | §7(c)「応募数（30 日）・入社（90 日）」行を「固定窓なので両方には立たない。`asof` が 7/23 以前なら `applications_30d`、8/1〜10/30 なら `hires_90d`」に修正。窓幅がファネルの見え方を決めるという教材化 |
+| I-2 | §5-2 の `group_map` を `(des.company_key, anc.company_key AS group_company_key)` 出力に変更し、`company_map` とそのまま差し替えられる形に。置き換え手順（`USING (company_key)` と `g.group_company_key AS company_key`）を明記。`anc.is_current` が 06 回の実装に対する安全網である旨を 1 文追加 |
+| I-3 | §5-1 の `application_monthly` に `dim_channel` を結合し `COUNTIF(ch.source_channel = 'scout_company')` を追加。最終 SELECT の `applications_per_scout` を `apply_rate_scout_company`（分子分母とも企業送信スカウト）に変更。§7(a) の解答 SQL と定義文も同じ母集団に揃えた |
+| M-1 | §1「同じキー」行を「`fct_scout` / `fct_scout_funnel` を除く全ファクトが `company_key` を持つ。この 2 本は `dim_scout_sender`（`sender_id` が company なら `company_id`）経由」に修正 |
+| M-2 | §1「結ぶファクト」列に `dim_member` 行へ `fct_selection_event`、`dim_agent`/`dim_agency` 行へ `fct_scout_funnel` を追記 |
+| M-3 | §5-1 に「`month_key` は `DATE_TRUNC` が返す DATE で、正典の `date_key`（INT64 `YYYYMMDD`）とは別物」の 1 文を追加 |
+| M-4 | `schema.yml` の `review_count_total` を「`fct_review` の粒度どおり `submitted` 全件、審査中・却下を含む」に、`avg_overall_score_90d` にも同じ母集団を明記 |
+| M-5 | §7(c) 開封率・返信率のセルに「(b) と同じ条件で比率を持たせてもよいが、返信率は分母が『送信』か『開封』かで 2 通りあるため分子分母を残して下流に選ばせる」を追記 |
+| M-6 | §5-3 `applications` CTE のコメントに「応募から入社まで 365 日を超えた案件は `hires_90d` から落ちる。許容できないなら `fct_placement`（`hired_date` がパーティション列）から取る」を追記 |
+| M-7 | §5-1 の読み方に「`company_map` は `INNER JOIN` なので、`-1`（未知）行が `is_current` で存在しないと未知企業のファクト行が黙って消える（DT#43）」を 1 段追加 |
+| M-8 | §5-4 のパーティション制約を公式の "Materialized views must be partitioned on the same column as the base table with matching granularity" に合わせ、`rating_date` が `fct_review.submitted_date` の別名なので条件を満たす、と対応づけた |
+
+参照文献に BigQuery マテリアライズド・ビューの 2 URL（`materialized-views-intro` / `materialized-views-create`）を追加した。
+
+### 再検証
+
+- 修正後の §5-1 SQL（`dim_channel` 結合と `apply_rate_scout_company` を含む）と §5-2 の `group_map` を `bq query` でダミーテーブル実行し、コンパイルと期待値を確認（3 月＝クチコミのみ、6 月＝スカウトと応募のみ、`apply_rate_scout_company` = 1.0）。
+- `check_svg.py`: `0 errors, 1 warnings`（warning は「`<svg>` が見つからない」＝図なし指定どおり）。
+- 正典外テーブル名は `agg_member_entity`（裁定済み）と §8 の手元基盤名（`mart_url_performance` / `mart_url_performance_incremental` / `mart_error_analysis` / `stg_access_logs`、いずれも実在）のみ。`dim_url_path` は削除。
+- 本文の URL はすべて `references.md` 掲載か kimballgroup.com。3 文超の `<p>` / `<li>` は 0。タグ balance・`<pre>` 内の生 `<` なしを再確認。
