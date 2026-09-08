@@ -87,7 +87,7 @@ BigQuery には Datastream（CDC）で `src_careervoice` データセットに�
 サロゲートキーは `<entity>_key`（INT64 ハッシュではなく `FARM_FINGERPRINT` 由来の INT64、または dbt_utils `generate_surrogate_key` の STRING — **03回で判断を扱う。それ以外の回は `_key` と書くだけで型に踏み込まない**）。
 自然キーはソースの `<entity>_id` をそのまま持つ。日付キーは `date_key` INT64 `YYYYMMDD`（DT#5）。未知/未達は `-1`（DT#43。キーが STRING 型のディメンションでは `'-1'`）。
 SCD2 のディメンション（`dim_member` / `dim_company` / `dim_agent` / `dim_agency` / `dim_scout_sender` の 5 本）は一律に `<entity>_key`, `valid_from`(TIMESTAMP), `valid_to`(TIMESTAMP, 現行行は `9999-12-31`), `is_current`(BOOL) を持つ。
-**全ファクトは `audit_key` を持つ**（下表の FK 列では省略している）。
+**全ファクトは `audit_key` を持つ**（下表の FK 列では省略している）。`schema.yml` のテストは `data_tests:`（dbt 1.8+。`tests:` は旧称）で書く。
 パーティション用に、ファクトは主要な日付キーと並べて DATE 型の `<role>_date`（例: `sent_date_key` と `sent_date`）を持つ。`partition_by` はこの DATE 列に張る。
 
 ### ディメンション
@@ -121,7 +121,7 @@ SCD2 のディメンション（`dim_member` / `dim_company` / `dim_agent` / `di
 | `fct_review_moderation` | `submitted_date_key`, `screening_date_key`, `published_date_key`, `rejected_date_key`, `company_key`, `moderation_reason_key`, `audit_key` | `hours_to_screening`, `hours_to_decision`, `moderation_rounds`, `is_published`(0/1), `is_rejected` | `review_id` | 累積スナップショット。行は**更新される** |
 | `fct_page_view` | `view_date_key`, `member_key`(-1=匿名), `member_profile_mini_key`, `company_key`, `job_posting_key`, `page_context_key`, `audit_key` | `view_count`(=1) | `event_id`, `session_id`, `review_id` | ファクトレス寄り。**パーティション: `view_date`、クラスタ: `company_key`** |
 | `fct_job_posting_daily` | `snapshot_date_key`, `job_posting_key`, `company_key`, `agency_key`(-1=直接掲載), `job_category_key` | `is_open`(=1), `days_since_posted`, `application_count_cum`, `scout_count_cum` | `job_posting_id` | **半加法**: 日をまたいで足せない |
-| `fct_scout` | `sent_date_key`, `member_key`, `member_profile_mini_key`(送信時点), `scout_sender_key`, `job_posting_key`, `audit_key` | `scout_count`(=1) | `scout_id`, `template_id` | 加法。**パーティション: `sent_date`、クラスタ: `scout_sender_key`, `member_key`**（07/09 回で共通） |
+| `fct_scout` | `sent_date_key`, `member_key`, `member_profile_mini_key`(送信時点), `scout_sender_key`, `job_posting_key`, `audit_key` | `scout_count`(=1) | `scout_id`, `template_id` | 加法。**パーティション: `sent_date`、クラスタ: `scout_sender_key`, `member_key`**（07/09 回で共通）。`materialized='incremental'` + `insert_overwrite`（09回）。**star 側のファクトには `require_partition_filter` を付けない**（配布物 `obt_*` にだけ付ける。07回） |
 | `fct_scout_funnel` | `sent_date_key`, `opened_date_key`, `replied_date_key`, `applied_date_key`, `member_key`, `scout_sender_key`, `job_posting_key` | `hours_to_open`, `hours_to_reply`, `is_opened`, `is_replied`, `is_interested`, `is_applied` | `scout_id` | 累積スナップショット |
 | `fct_selection_event` | `event_date_key`, `application_key`(退化でよい), `member_key`, `company_key`, `job_posting_key`, `agency_key`(`job_postings.agency_id` またはスカウト送信者の所属、無ければ -1), `agent_key`(スカウト経由のみ、無ければ -1), `job_category_key`, `channel_key` | `event_count`(=1) | `application_id`, `event_id`, `stage` | 原子粒度（DT#77）。累積の裏付け |
 | `fct_application_pipeline` | `applied_date_key`, `document_date_key`, `first_interview_date_key`, `final_interview_date_key`, `offer_date_key`, `accepted_date_key`, `hired_date_key`, `closed_date_key`, `member_key`, `member_profile_mini_key`(応募時点), `company_key`, `job_posting_key`, `agency_key`, `agent_key`(スカウト経由のみ、無ければ -1), `job_category_key`, `channel_key` | `days_applied_to_offer`, `days_offer_to_hired`, `current_stage`(初期値 `applied`、以降は `selection_events.stage` の値), `is_hired`, `is_rejected`, `is_withdrawn` | `application_id`, `scout_id` | 累積スナップショット |
@@ -145,7 +145,7 @@ SCD2 のディメンション（`dim_member` / `dim_company` / `dim_agent` / `di
 | 職種 | `ENG` → `ENG-BE` → `ENG-BE-JAVA` / `ENG` → `ENG-DATA`（level 2 で終端＝不揃い） | |
 | 求人 | `J001` | `C001` のデータエンジニア（`ENG-DATA`）、2026-04-01 掲載、直接 |
 | 求人 | `J002` | `C002` のバックエンド（`ENG-BE-JAVA`）、`A01` 経由 |
-| クチコミ | `R001` | `M001` → `C002`、2026-03-10 投稿、`former`/`fulltime`/`1_3`、`overall_score`=3.5、2026-03-12 公開 |
+| クチコミ | `R001` | `M001` → `C002`、2026-03-10 投稿、`former`/`fulltime`/`1_3`、`overall_score`=3.5、**03-11 に `low_quality` で差し戻し1回**（`screening`→`submitted`）、2026-03-12 公開。`review_moderation_events` は 3 行（`submitted→screening` 3/10、`screening→submitted` 3/11、`submitted→published` 3/12）。`moderation_rounds`=2（審査担当者が判定を下した回数＝差し戻しと公開） |
 | クチコミ | `R002` | `M002` → `C001`、2026-04-02 投稿、却下（`defamation`） |
 | スカウト | `S001` | `C001`(company) → `M001`、`J001`、2026-06-20 送信、06-21 開封、06-22 返信 `interested` |
 | スカウト | `S002` | `AG01`(agent) → `M003`、`J002`、2026-06-25 送信、未開封 |
