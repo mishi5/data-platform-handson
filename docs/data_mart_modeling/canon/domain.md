@@ -96,6 +96,7 @@ SCD2 のディメンション（`dim_member` / `dim_company` / `dim_agent` / `di
 |---|---|---|---|---|
 | `dim_date` | `date_key` | 0 | `full_date`, `year`, `quarter`, `month`, `iso_week`, `day_of_week`, `is_holiday_jp`, `fiscal_year`(4月始まり), `date_label`(表示名。`-1` 行は `未到達`) | ロールプレイングで `submitted_date`, `published_date` 等に |
 | `dim_member` | `member_id` | **2** | `birth_year`, `gender`, `prefecture`, `region`, `current_company_id`, `current_job_category`, `registered_date` | `member_key`, `valid_from`, `valid_to`, `is_current` |
+| `dim_member_daily` | (`snapshot_date`,`member_id`) | 日次スナップショット | `snapshot_date`(DATE), `member_id`, `member_key`, `member_profile_mini_key`, `current_company_id`, `current_job_category_code`, `annual_income_band`, `job_change_intent` | FDE 方式の代替（05回）。`partition_by=snapshot_date`, `cluster_by=member_id`, `require_partition_filter=true`。1行 = 1会員 × 1日（その日の終わり時点） |
 | `dim_member_profile_mini` | (`annual_income_band`,`job_change_intent`) | — | 5 × 3 = 15行 | **ミニディメンション**（DT#127）。速く変わる属性を `dim_member` から分離 |
 | `dim_company` | `company_id` | **2** | `name`(Type1で上書き), `industry`, `sector`, `employee_size_band`, `listing_status`, `hq_prefecture`, `parent_company_id`, `founded_year` | **Type 6 相当**: `name` は Type1、他は Type2 |
 | `br_company_hierarchy` | (`ancestor_company_key`,`descendant_company_key`) | — | `depth`, `is_leaf`, `is_root` | 企業グループの**不揃い階層ブリッジ**（DWT ch.7） |
@@ -110,7 +111,7 @@ SCD2 のディメンション（`dim_member` / `dim_company` / `dim_agent` / `di
 | `dim_page_context` | 組合せ | — | `page_type` × `device` × `referrer_type` × `is_unlocked` = 3×3×4×2 = 72行 | ジャンク |
 | `dim_contract_plan` | `plan_code` | 0 | `plan_name`, `scout_quota_monthly`, `monthly_fee` | |
 | `dim_audit` | `audit_key` | — | `batch_id`, `source_system`, `loaded_at`, `dbt_invocation_id`, `quality_flag` | **監査ディメンション**（DT#164）。全ファクトに `audit_key` |
-| `br_member_desired_job_category` | (`member_key`,`job_category_key`) | — | `priority`, `weighting_factor`(=1/希望数) | **多値ブリッジ**（DT#142） |
+| `br_member_desired_job_category` | (`member_key`,`job_category_key`) | — | `priority`, `weighting_factor`(=1/希望数) | **多値ブリッジ**（DT#142）。`member_key` は `dim_member` の**全 SCD2 版に展開**する（ファクトの `member_key` と直結するため） |
 
 ### ファクト（メジャーと退化ディメンション）
 
@@ -122,8 +123,8 @@ SCD2 のディメンション（`dim_member` / `dim_company` / `dim_agent` / `di
 | `fct_job_posting_daily` | `snapshot_date_key`, `job_posting_key`, `company_key`, `agency_key`(-1=直接掲載), `job_category_key` | `is_open`(=1), `days_since_posted`, `application_count_cum`, `scout_count_cum` | `job_posting_id` | **半加法**: 日をまたいで足せない |
 | `fct_scout` | `sent_date_key`, `member_key`, `member_profile_mini_key`(送信時点), `scout_sender_key`, `job_posting_key`, `audit_key` | `scout_count`(=1) | `scout_id`, `template_id` | 加法 |
 | `fct_scout_funnel` | `sent_date_key`, `opened_date_key`, `replied_date_key`, `applied_date_key`, `member_key`, `scout_sender_key`, `job_posting_key` | `hours_to_open`, `hours_to_reply`, `is_opened`, `is_replied`, `is_interested`, `is_applied` | `scout_id` | 累積スナップショット |
-| `fct_selection_event` | `event_date_key`, `application_key`(退化でよい), `member_key`, `company_key`, `job_posting_key`, `agent_key`, `job_category_key`, `channel_key` | `event_count`(=1) | `application_id`, `event_id`, `stage` | 原子粒度（DT#77）。累積の裏付け |
-| `fct_application_pipeline` | `applied_date_key`, `document_date_key`, `first_interview_date_key`, `final_interview_date_key`, `offer_date_key`, `accepted_date_key`, `hired_date_key`, `closed_date_key`, `member_key`, `member_profile_mini_key`(応募時点), `company_key`, `job_posting_key`, `agent_key`, `job_category_key`, `channel_key` | `days_applied_to_offer`, `days_offer_to_hired`, `current_stage`(初期値 `applied`、以降は `selection_events.stage` の値), `is_hired`, `is_rejected`, `is_withdrawn` | `application_id`, `scout_id` | 累積スナップショット |
+| `fct_selection_event` | `event_date_key`, `application_key`(退化でよい), `member_key`, `company_key`, `job_posting_key`, `agency_key`(`job_postings.agency_id` またはスカウト送信者の所属、無ければ -1), `agent_key`(スカウト経由のみ、無ければ -1), `job_category_key`, `channel_key` | `event_count`(=1) | `application_id`, `event_id`, `stage` | 原子粒度（DT#77）。累積の裏付け |
+| `fct_application_pipeline` | `applied_date_key`, `document_date_key`, `first_interview_date_key`, `final_interview_date_key`, `offer_date_key`, `accepted_date_key`, `hired_date_key`, `closed_date_key`, `member_key`, `member_profile_mini_key`(応募時点), `company_key`, `job_posting_key`, `agency_key`, `agent_key`(スカウト経由のみ、無ければ -1), `job_category_key`, `channel_key` | `days_applied_to_offer`, `days_offer_to_hired`, `current_stage`(初期値 `applied`、以降は `selection_events.stage` の値), `is_hired`, `is_rejected`, `is_withdrawn` | `application_id`, `scout_id` | 累積スナップショット |
 | `fct_contract_monthly` | `month_date_key`(月初), `company_key`, `contract_plan_key` | `scout_quota`, `scouts_sent`, `scouts_remaining`, `monthly_fee`, `is_active` | `contract_id` | **半加法**（枠残高は月をまたいで足せない、企業をまたいでは足せる） |
 | `fct_placement` | `hired_date_key`, `member_key`, `company_key`, `job_posting_key`, `agency_key`, `agent_key`(`applications.scout_id`→`scouts.sender_agent_id` で解決、無ければ -1), `job_category_key` | `annual_income`, `fee_rate`, `fee_amount`(= `annual_income` × `fee_rate`) | `placement_id`, `application_id` | `fee_amount` 加法、`fee_rate` 非加法（加重平均は `SUM(fee_amount)/SUM(annual_income)`） |
 | `agg_company_rating_daily` | `date_key`, `rating_date`(DATE, パーティション列), `company_key` | `review_count`, `sum_score_*`(8軸), `sum_overall_score` | | 04回: **平均を持たず和と件数を持つ** |
@@ -136,7 +137,7 @@ SCD2 のディメンション（`dim_member` / `dim_company` / `dim_agent` / `di
 | 企業 | `C001` | アオゾラ商事（`industry`=商社, `employee_size_band`=`ge1000`, `listed`, 親会社なし） |
 | 企業 | `C002` | ネクスト技研（IT, `50_299`, `unlisted`, 親なし）。**2026-05-01 に `employee_size_band` が `300_999` に変化**（SCD2 の題材） |
 | 企業 | `C003` | ヒノデ物流（物流, `300_999`, `unlisted`, **`parent_company_id`=`C001`**） |
-| 会員 | `M001` | 1991年生 / 東京 / 現職 `C002` / `annual_income_band`=`400_600`, `job_change_intent`=`passive`。**2026-06-15 に `active`・`600_800` に変化**、2026-08-01 に `C001` へ入社 |
+| 会員 | `M001` | `registered_at`=2026-01-05 / 1991年生 / 東京 / 現職 `C002` / `annual_income_band`=`400_600`, `job_change_intent`=`passive`。**2026-06-15 に `active`・`600_800` に変化**（＝`dim_member_profile_mini` 側の Type4。`dim_member` の行は増えない）、2026-08-01 に `C001` へ入社（＝`dim_member.current_company_id` の Type2。`dim_member` は 2 行になる） |
 | 会員 | `M002` | 1985年生 / 大阪 / 現職 `C001` / `800_1000` / `none`。希望職種 2件（`ENG-BE`, `ENG-DATA`） |
 | 会員 | `M003` | 1998年生 / 福岡 / 現職なし / `lt400` / `active` |
 | エージェント | `A01` / `AG01` | キャリアブリッジ（`gold`）/ 担当 佐藤 |
@@ -148,6 +149,7 @@ SCD2 のディメンション（`dim_member` / `dim_company` / `dim_agent` / `di
 | クチコミ | `R002` | `M002` → `C001`、2026-04-02 投稿、却下（`defamation`） |
 | スカウト | `S001` | `C001`(company) → `M001`、`J001`、2026-06-20 送信、06-21 開封、06-22 返信 `interested` |
 | スカウト | `S002` | `AG01`(agent) → `M003`、`J002`、2026-06-25 送信、未開封 |
+| スカウト | `S003` | `AG02`(agent) → `M002`、`J001`、2026-06-18 送信、未開封（希望職種2件の会員宛＝ブリッジの二重計上の題材） |
 | 応募 | `P001` | `M001` → `J001`、`scout_company`、2026-06-23 応募 → 07-01 書類 → 07-08 一次 → 07-15 最終 → 07-20 内定 → 07-22 承諾 → 08-01 入社 |
 | 契約 | `K001` | `C001` `premium`（枠 200/月, 300,000円）2026-01-01〜 |
 

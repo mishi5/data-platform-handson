@@ -17,3 +17,8 @@
 - 01 レビュー REVISE（critical=2 important=5 minor=8）→ 修正ラウンド 1/3 を執筆エージェントに送付
 - 04 執筆完了（DONE_WITH_CONCERNS）。Ruling: `agg_company_rating_daily.rating_date`（DATE）と `fee_amount = annual_income × fee_rate` を正典に採用。HLL スケッチ列を持つ新集約表は**追加しない**（正典を増やさない。CTE 内の説明で足りる）。§2(b) の 600→440 の置換はブリーフの意図を保っているので採用
 - 07 執筆完了（DONE_WITH_CONCERNS）。Ruling: Fowler 講演の URL を YouTube（Coalesce 2020）に訂正し references.md を更新（discourse スレッドは別議論と注記）。`obt_*` プレフィクスと `obt_scout_funnel` を正典に採用。図の accent 変更（OBT の方がスキャンバイトが多い）はレビューで妥当性を判定させる
+- 00 レビュー REVISE（critical=1 important=3 minor=8）→ 修正ラウンド 1/3 を執筆エージェントに送付。04/07 のレビュー起動
+- 01 修正ラウンド1 完了（15件 FIXED）。Ruling: `fct_selection_event` / `fct_application_pipeline` に `agency_key` を追加（dim_agency 経由）、`agent_key` はスカウト経由のみ — 01 の I5 で判明した一対多を正典側で解消 — 01 にラウンド2で反映させる
+- 2026-09-08 00:29 頃 レート制限（session limit）で 00 修正・01 ラウンド2報告・02/03/04/07 レビュー・05 執筆が途中終了。09:05 再開。状態: 00 HTML は途中修正（report 未追記）、01 は HTML/report ともラウンド2完了、02 レビューは書き上がり REVISE、05 は HTML/report 完了、06 完了
+- 05 Ruling: `dim_member_daily` を正典に追加／6/15 の変化は Type4（mini）・8/1 は Type2 と正典 §5 に明記（`dim_member` は 2 行）／`M001.registered_at`=2026-01-05
+- 06 Ruling: `S003`（AG02→M002, J001, 6/18）を正典に追加／ブリッジは `dim_member` の全 SCD2 版に展開と明記／supertype/subtype の章は DWT ch.10（brief 06 と references を訂正）／`br_review_tag` は追加しない（演習内の将来提案のまま）

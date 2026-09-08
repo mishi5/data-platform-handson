@@ -1,0 +1,86 @@
+# 05 履歴を持つ：SCD とスナップショット — 執筆報告
+
+- 出力: `docs/data_mart_modeling/html/05_scd.html`
+- タイトル: `履歴を持つ：SCD とスナップショット — データマート設計 05`
+- 図: 1 枚（as-of join の概念図、`#dg-asof`）／`check_svg.py` = **0 errors, 0 warnings**
+
+## 1. 完了した節
+
+| 節 | 内容 | ブリーフの必須項目 |
+|---|---|---|
+| §1 | 導入 1 段落 + 「この回で確定させる判断」表（7 行）+ **Type 0〜7 の表**（定義 / 履歴 / 行の増え方 / CareerVoice での適用） | ✓ `dim_company.name`=1、`employee_size_band`=2、`dim_member_profile_mini` 経由=4、`dim_company` 全体=6 相当。Type 3/5/7 は「採らない」を明記 |
+| §2 | 壊れ方 3 例 | ✓ (a) `dim_company` Type1 で `C002` の `50_299` 時代の平均が出せない（`R001` 3/10 投稿 vs 5/1 の規模変化）(b) 現在の `member_key` で結んで `S001`(6/20) が 8/1 入社後の版に紐づく (c) `valid_to` NULL で `BETWEEN` が外れる |
+| §3 | Kimball 原則表（Type 0〜7 の原典定義、英語原文を引用）+ aside 2 枚（DT#15 の Type 6 = 2+3+1／surrogate key pipeline） | ✓ 「ファクトはロード時点でサロゲートキーを解決する」原則を独立の aside に |
+| §4 | FDE の日次スナップショット（利点/欠点の 7 行比較表）、Zach Wilson の運用コスト論と反論、「何が変わり何が残るか」、**エンティティ別の判断表** | ✓ 会員=スナップショット／企業=SCD2 を根拠付きで |
+| §5 | (a) dbt snapshot YAML + `dim_company` モデル + `schema.yml` (b) `dim_member` の版畳み込み + **as-of join の `fct_scout`**、`M001`/`S001` の結果行を 3 表で (c) `dim_member_daily`（`insert_overwrite` + `partition_by(snapshot_date)`）と `snapshot_date = DATE(sent_at)` 結合、結果行 (d) `company_id` で `is_current` 版へ再結合 | ✓ 4 項目すべて。図は §5 冒頭 |
+| §6 | 「行数 × 変化頻度 × 必要な時間精度 → 選択」の 8 行表 + 採らなかった Type 3/5/7 とその採用条件 | ✓ |
+| §7 | 演習 3 問、各 `<details>` に解答例 | ✓ (a) `AG01` の `A01`→`A02` 移籍と成果報酬の帰属 (b) `M001` の `dim_member` 行数と `valid_from/to` (c) `dim_company.name` の Type1 で困る分析 |
+| §8 | `news_pipeline` の `summaries` = Type1、`updated_at` 相当が無いので `strategy: check` になる、`dbt_logs_analysis` には SCD 対象が無い、試せる種 1 行（4 項目） | ✓ 手元の基盤への言及はこの節だけ |
+| 参照文献 | 使った 12 件のみ | ✓ 全 URL が `canon/references.md` 内 |
+
+## 2. 読んだ文献と引用した要点
+
+WebFetch で実際に取得（DT#15 は PDF が WebFetch でテキスト化できなかったため、保存された PDF を Read で画像として読んだ）。
+
+| 文献 | 引用・使用した要点 | 使った節 |
+|---|---|---|
+| SCD Part 1（Type1） | "Type 1 destroys the history of a particular field" / 事前計算集約は "taken offline and recomputed" / 規制環境では "Type 1 changes may be outlawed" | §2-a, §3 |
+| SCD Part 2（Type2/3） | begin/end effective datetime、reason、current flag の 5 列。"The end-effective-datetime of a Type 2 dimension record must be exactly equal to the begin-effective-datetime of the next change"。surrogate key pipeline = "ensures facts use contemporary surrogate keys, guaranteeing the correct dimension profiles are associated with fact table activity" | §2-c（境界の重複＝`BETWEEN` の罠）, §3 |
+| DT#15 Combining SCD Techniques（PDF, 2000-10-29, Margy Ross） | Type2 で "the fact table rows will reference the new surrogate key with the new roll-up thereby **perfectly partitioning history**"／"perhaps we should refer to this as Type 6 (2+3+1)"／完全な Type 6 は「当時の値」と「現在の値」を**両方**列として持つ | §3 aside, §5-a aside, §7-c |
+| DT#152（Type 0,4,5,6,7） | Type0 "Facts are always grouped by this original value"／Type4 "A group of dimension attributes are split off into a separate mini-dimension"／Type5 "embedding a 'current profile' mini-dimension key in the base dimension"／Type6 "filtered or grouped by either the type 2 value in effect when the measurement occurred or the attribute's current value"／Type7 "dual foreign keys ... a surrogate key ... plus the dimension's durable supernatural key" | §1 表, §3 表, §6 |
+| FDE（ssp.sh/brain/functional-data-engineering） | "the partition (not the row) is the atomic unit of state; always overwrite whole partitions instead of UPDATE/DELETE/APPEND"／ディメンションは "append a full snapshot per run; trade cheap storage for clarity and reproducibility" | §4 |
+| ssp.sh/brain/snapshotting | 冪等・再現性（不変パーティションなので再実行が安全）／`GROUP BY date` で時系列が自明／欠点はストレージ重複とスナップショット間の粒度喪失 | §4 比較表 |
+| SCD-2 considered harmful（Zach Wilson） | バックフィルの直列性（"Rerun November 1st... wait for it to finish..."）／クエリの複雑さ（`valid_from <= ... AND (valid_to > ...`）／日次用と backfill 用の 2 系統コード／代替は "all 30 days kick off in parallel"。**コメント欄の Chris Gambill の反論**（人手編集の業務データ・規制下の監査証跡は SCD2 でなければならない、Wilson は答えていない）も引いた | §4 modern aside |
+| dbt Snapshots | 新 YAML 形式（`snapshots/*.yml` の `name` / `relation` / `config`）、`strategy: timestamp` vs `check`、`dbt_valid_from/to/scd_id/updated_at`、**現行行の `dbt_valid_to` は既定 NULL**、`dbt_valid_to_current` で上書き可 | §2-c, §5-a |
+| dbt BigQuery configs / BQ partitioned tables | `insert_overwrite`、`partition_by`、`require_partition_filter` | §5-c |
+
+## 3. `check_svg` の結果
+
+```
+$ python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py docs/data_mart_modeling/html/05_scd.html
+0 errors, 0 warnings
+```
+
+図の設計: viewBox 800×392、ノード 6（版 3 + イベント 3）、矢印 4（縦の解決 3 + 時間軸 1）、accent 1 系統（6/15〜7/31 の版と、そこに落ちる `S001`・`P001`）。斜めのコネクタゼロ。日本語ラベルは全て 11px 以上（`--mono` に日本語フォントのフォールバックを足した）。
+
+## 4. 正典への変更提案
+
+### 提案 1（要判断）: `dim_member_daily` を正典に追加する
+
+ブリーフ §5-c が名指しで要求しているが `canon/domain.md` §4 に無い。本文では次の定義で書いた。
+
+| テーブル | 粒度 | 列 | 物理 |
+|---|---|---|---|
+| `dim_member_daily` | 1 行 = 1 会員 × 1 日（その日の終わり = 翌 00:00 JST 時点の版） | `snapshot_date`(DATE), `member_id`, `member_key`, `member_profile_mini_key`, `current_company_id`, `current_job_category_code`, `annual_income_band`, `job_change_intent` | `partition_by=snapshot_date`, `cluster_by=member_id`, `require_partition_filter=true`, `insert_overwrite` |
+
+`dim_member`（Type2）は正典どおり残し、役割を分けた（`dim_member` = ファクトが指すキーの発行元／`dim_member_daily` = 母集団と時点属性の参照先）。09 回の増分戦略と 08 回の ECM でも使えるはずなので、正典に入れるなら早い方がよい。
+
+### 提案 2（要判断）: 6/15 の変化がどのディメンションに属するかの明記
+
+`canon/domain.md` §5 は「`M001` は 2026-06-15 に `active`・`600_800` に変化」と書き、ブリーフ §7-b は「6/15 と 8/1 の変化で `dim_member` は何行になるか」と問う。しかし §4 では `annual_income_band` / `job_change_intent` は `dim_member_profile_mini`（Type 4）側であり、`dim_member` の属性ではない。
+
+**本文の扱い**: 正典（Type 4 の切り分け）を優先し、**`dim_member` は 2 行**とした。6/15 の変化は `snap_members` には 3 版を作るが `dim_member` の属性は動かないので畳む、という形で §5-b に畳み込みの SQL（`TO_JSON_STRING(STRUCT(...))` + `LAG` + 累積和）を置き、§7-b の解答をそこに接続した。図の 3 つの帯も「`snap_members` の版」と明示し、注記で「v1→v2 は `dim_member` の行を増やさない」と書いた。
+
+結果として、ブリーフの意図（S001 が最新版ではなく 6/15 以降の版に当たる）は満たしつつ、正典の Type 4 の判断も壊していない。§7-b は「3 行と答えたくなるが 2 行」という良い引っかけになった。**この読み替えを是としない場合は、`domain.md` §4 の `dim_member` に `annual_income_band` / `job_change_intent` を戻す（＝ミニディメンションをやめる）必要があり、03 回・06 回に影響する。**
+
+### 提案 3（軽微）: `M001` の `registered_at` の値
+
+`dim_member` の最初の版の `valid_from` に必要だが正典に無い。本文では **2026-01-05 00:00:00** を使った。正典 §5 に追記するか、別の値に揃えたい場合は指示がほしい。
+
+## 5. 迷った判断とその理由
+
+| 迷い | 決めたこと | 理由 |
+|---|---|---|
+| ブリーフは `BETWEEN valid_from AND valid_to` を要求しているが、dbt snapshot の規約（旧行の `valid_to` = 新行の `valid_from`）だと境界時刻ちょうどで 2 行に当たる | §2-c で `BETWEEN` を「壊れ方」として扱い、正しい形として**半開区間** `>= valid_from AND < valid_to` を提示。§5 の SQL は全て半開区間 | 「実際に動く SQL」を出す方が writer_prompt の要件。ブリーフの `BETWEEN` は失敗形として活かした |
+| 会員をスナップショットにすると行数が爆発する（ブリーフ §4 も欠点として挙げている）のに、判断はスナップショット | `dim_member`（Type2、変化の遅い属性のみ）と `dim_member_daily`（日次全件）を**役割分担**させた。時点属性の解決と母集団の問いは後者、ファクトが指すキーは前者 | どちらか一方では説明が破綻する。`dim_member_profile_mini`（Type 4）が既に速い属性を吸収している正典の構造がこの分担を支えている |
+| `dbt_valid_to_current` は Snowflake 例（`to_date('9999-12-31')`）で書かれている | BigQuery 方言で `"cast('9999-12-31' as timestamp)"` に直した。既存スナップショット向けに `COALESCE(dbt_valid_to, timestamp '9999-12-31')` も併記 | 正典が `valid_to` を TIMESTAMP・`9999-12-31` と規定しているため |
+| サロゲートキーの型（INT64 か STRING か） | 踏み込まず、SQL では `dbt_utils.generate_surrogate_key(...)` を使い「生成方法は 03 回の判断に従う。この回に必要なのは版ごとに 1 つのキーがあることだけ」と明記。結果表のキーは `(v1)` / `(v2)` という表示上のプレースホルダにした | `domain.md` §4 の「それ以外の回は `_key` と書くだけで型に踏み込まない」に従った |
+| 執筆中に `domain.md` が更新され `dim_agency`（`dim_agent` の縮約、SCD2）と `fct_placement.agency_key` が追加された | §7-a の演習を書き直した。`agency_key`（`placements.agency_id` 由来）と `agent_key`（scout 経由）の**2 経路が同じ答えを返すのが正しい状態**で、片方だけ Type1 にすると 1 行から 2 つの答えが出る、という論点に作り替えた。§1・§4・§6 の表にも `dim_agency` を追加 | 更新後の正典が正。結果として「縮約ディメンションは元と同じ SCD 型に揃える」という DWT ch.4 の原則を演習で扱えるようになり、ブリーフの意図（移籍の帰属は業務ルールで決める）も残した |
+| `fct_scout` の `audit_key` | SQL から省き、モデルの焦点を as-of 解決に絞った（10 回で扱う旨は本文に書いていない） | 全ファクトが `audit_key` を持つのは正典どおりだが、この回の SQL に入れると監査ディメンションの生成ロジックの説明が要る。**軽微な未達**として下に再掲 |
+
+## 6. 未達事項
+
+1. **`fct_scout` の SQL に `audit_key` が入っていない。** 正典は「全ファクトは `audit_key` を持つ」と定めている。as-of join の説明に集中させるため省いたが、10 回（監査ディメンション）と突き合わせたときに不整合に見える可能性がある。1 行のコメントを足すか、`{{ ref('dim_audit') }}` からの解決を書き足すかは横断レビューの判断に委ねる。
+2. **`dim_member_daily` が正典未収載**（提案 1）。採否が決まるまで、この回だけが持つテーブル名になる。
+3. **DWT 3rd ed. ch.5 は書籍のため本文を直接参照できていない。** SCD Type 0〜7 の定義は Design Tip #152 と SCD Part 1–2（いずれも Kimball Group 公式）から取り、章番号は `p.meta` と参照文献での参照に留めた。
+4. **`M001` の `registered_at`** を独自に置いた（提案 3）。

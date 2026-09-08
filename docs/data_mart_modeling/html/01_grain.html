@@ -210,6 +210,7 @@ Grain（2003）: <em>“Declaring the grain means saying exactly what a fact tab
 
 <ul>
 <li><strong><code>fct_review</code> の member 列だけが ✗。</strong>これは技術的制約ではなく方針。少人数企業ではクチコミの属性から投稿者が特定できるため、<code>fct_review</code> は <code>member_key</code> を持たず、投稿時点の会員属性は <code>dim_review_attributes</code>（<code>employment_status</code> × <code>employment_type</code> × <code>years_of_service_band</code> = 30行のジャンクディメンション）に落とす。会員 × クチコミの結合が必要な分析は <code>int_review_member_link</code> に隔離する。<strong>マトリクスの空セルには「そのプロセスに関係ない」と「意図的に持たない」の2種類がある。</strong>後者は理由を書き添える。</li>
+<li><strong>agent 列は「agent / agency」の2解像度をまとめた表記。</strong>担当者まで決まるファクトは <code>agent_key</code>、エージェンシー止まりのファクトは縮約ディメンション <code>dim_agency</code> の <code>agency_key</code> を持つ（両方持つファクトもある）。マトリクスの列は<strong>コンフォームドな意味の単位</strong>であって物理テーブル1本とは限らない。</li>
 <li><strong>date 列に単純な ✓ が無い。</strong>累積スナップショットの行は複数の日付ロールを持つ。ロールプレイングディメンション（<code>submitted_date</code>, <code>published_date</code>, <code>replied_date</code>…）は同一の <code>dim_date</code> を別名で参照する。1つの物理テーブルが1列に複数回現れるのは、コンフォームド性が保たれている証拠。</li>
 <li><strong>company 列は10プロセス全てに ✓ が付く。</strong>10行を貫く唯一のディメンションであり、上の「✓ が2つ以上ある列はコンフォームドでなければならない」を最も強く受けるのがここ。つまり <code>dim_company</code> の定義が全社の分析結果を左右する。「投稿当時の企業規模」と「現在の企業規模」を両方答えるため、ファクトはイベント時点の <code>company_key</code>（SCD2 版）を持ち、現在値は <code>company_id</code> で <code>is_current</code> 版に再結合する（05回）。</li>
 </ul>
@@ -270,6 +271,8 @@ models:
       1行 = 1応募の1選考ステージ遷移（`selection_events` の1イベント）。
       粒度キー: `event_id`。`audit_key` は行の由来（バッチ・品質フラグ）を指す
       外部キーであって粒度キーではない。全ファクト共通、DT#164、10回で扱う。
+      エージェント関与は解像度の違う2本で持つ: `agency_key`（縮約ディメンション、
+      紹介経由でも決まる）と `agent_key`（スカウト経由でのみ担当者まで決まる）。
       入れないもの: 応募そのもの（`applications.applied_at`）、
       応募単位の所要日数（`fct_application_pipeline` に置く）。
     data_tests:
@@ -279,11 +282,19 @@ models:
           arguments:
             combination_of_columns:
               - event_id
-      # ディメンション結合が一対多になって行が増えていないか
+      # 結合で行が増えて（一対多）も減って（INNER JOIN）もいないか
       - dbt_utils.equal_rowcount:
           arguments:
             compare_model: ref('stg_careervoice__selection_events')
     columns:
+      - name: agency_key
+        description: "エージェンシー。-1 = エージェント関与なし。"
+        data_tests:
+          - not_null   # COALESCE(..., -1) が効いているか（DT#43、NULL 外部キー禁止）
+      - name: agent_key
+        description: "担当者。-1 = 担当者を特定できない（紹介経由を含む）。"
+        data_tests:
+          - not_null
       - name: event_count
         description: "常に 1。粒度に忠実な唯一のメジャー。"
         data_tests:
@@ -373,7 +384,7 @@ postings AS (
     SELECT
         job_posting_id,
         company_id,
-        agency_id,          -- エージェント経由求人。agency 止まりで agent は特定できない
+        agency_id,          -- エージェント経由求人。agency_key の解決に使う
         job_category_code
     FROM {{ ref('stg_careervoice__job_postings') }}
 
@@ -404,11 +415,12 @@ SELECT
     COALESCE(dcat.job_category_key, -1) AS job_category_key,
     COALESCE(dch.channel_key, -1) AS channel_key,
 
-    -- エージェント担当者。-1 = エージェント関与なし
-    -- 経路① スカウト経由（source_channel = 'scout_agent'）: scouts.sender_agent_id で担当者が一意
-    -- 経路② 紹介経由（source_channel = 'agent_referral'）: 手がかりは job_postings.agency_id だけで
-    --        agency 止まり。dim_agent を agency_id で結ぶと1エージェンシー複数担当者の
-    --        一対多になり粒度が崩れるので結ばない。下記の注意を参照
+    -- エージェンシー。-1 = エージェント関与なし
+    -- 求人がエージェント経由（job_postings.agency_id）か、スカウト送信者の所属で決まる
+    COALESCE(dag.agency_key, -1) AS agency_key,
+
+    -- 担当者。-1 = 担当者を特定できない（直接応募・企業スカウト・紹介経由）
+    -- スカウト経由（scouts.sender_agent_id）でのみ個人まで一意に決まる
     COALESCE(da.agent_key, -1) AS agent_key,
 
     -- 監査ディメンション（DT#164）。全ファクト共通。値の生成は10回で定義するマクロに委ねる
@@ -442,6 +454,11 @@ LEFT JOIN {{ ref('dim_agent') }} AS da
     ON s.sender_agent_id = da.agent_id
    AND e.occurred_at &gt;= da.valid_from
    AND e.occurred_at &lt; da.valid_to
+-- 縮約ディメンション。求人側の agency を優先し、無ければスカウト送信者の所属を使う
+LEFT JOIN {{ ref('dim_agency') }} AS dag
+    ON COALESCE(p.agency_id, da.agency_id) = dag.agency_id
+   AND e.occurred_at &gt;= dag.valid_from
+   AND e.occurred_at &lt; dag.valid_to
 LEFT JOIN {{ ref('dim_job_posting') }} AS dj
     ON p.job_posting_id = dj.job_posting_id
 LEFT JOIN {{ ref('dim_job_category') }} AS dcat
@@ -450,9 +467,13 @@ LEFT JOIN {{ ref('dim_channel') }} AS dch
     ON a.source_channel = dch.source_channel
 </code></pre>
 
-<p><strong><code>agent_key</code> の解決漏れを隠さない。</strong><code>source_channel = 'agent_referral'</code>（スカウトを介さないエージェント紹介）は <code>scouts</code> に行が無いため、この実装では <code>agent_key = -1</code>、つまり「エージェント関与なし」と同じ値に落ちる。<code>job_postings.agency_id</code> からは agency までしか辿れず、<code>dim_agent</code> を agency で結べば一対多になって粒度が壊れる。</p>
+<p><strong>解像度の違う2本の FK を並べる。</strong><code>agent_key</code>（担当者）はスカウト経由でしか決まらない。<code>source_channel = 'agent_referral'</code> のような紹介経由は <code>scouts</code> に行が無いからだ。</p>
 
-<p>担当者を復元するにはソース側の追加（応募と担当エージェントの紐付け）が要る。<strong>粒度の宣言が正しくても、ディメンションの解決漏れは別の欠陥として残る</strong>——粒度テストは緑のまま、チャネル別ファネルだけが恒常的に歪む（03回）。</p>
+<p>一方 <code>agency_key</code> は <code>job_postings.agency_id</code>（またはスカウト送信者の所属）から決まるので、紹介経由でも失われない。</p>
+
+<p><code>dim_agency</code> は <code>dim_agent</code> の<strong>縮約（shrunken/rollup）ディメンション</strong>（DWT ch.4）で、属性が <code>dim_agent</code> の完全な部分集合になっている——つまりコンフォームド。だから「担当者別」と「エージェンシー別」を同じ <code>agency_tier</code> で drill across できる。</p>
+
+<p>ここで <code>dim_agent</code> を <code>agency_id</code> で結んで済ませたくなるが、1エージェンシーに複数担当者がいるので<strong>一対多になり粒度が崩れる</strong>。<strong>解像度が足りないときに粗い側のディメンションを別 FK として足すのが正解で、細かい側のディメンションを粗いキーで結ぶのは誤り</strong>。前者は行数を変えず、後者は変える。</p>
 
 <p><code>P001</code> をこのモデルに通すと 6 行（<code>document</code> / <code>first_interview</code> / <code>final_interview</code> / <code>offer</code> / <code>accepted</code> / <code>hired</code>）。応募そのもの（06-23）は行にならない。</p>
 

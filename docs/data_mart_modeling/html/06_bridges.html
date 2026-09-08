@@ -52,7 +52,7 @@
 <thead><tr><th>問題</th><th>題材の具体</th><th>手段 A</th><th>手段 B</th><th>この回の決定</th></tr></thead>
 <tbody>
 <tr><td>多値</td><td>会員の希望職種。<code>member_desired_job_categories</code>、<code>M002</code> は 2 件</td><td><code>br_member_desired_job_category</code> + <code>weighting_factor</code></td><td><code>dim_member</code> に <code>desired_job_categories ARRAY&lt;STRUCT&lt;…&gt;&gt;</code> を内包</td><td><strong>ブリッジ</strong>。ARRAY は §4・§6 の条件下での対案</td></tr>
-<tr><td>不揃い階層（企業グループ）</td><td><code>companies.parent_company_id</code>。<code>C003</code>（ヒノデ物流）→ <code>C001</code>（アオゾラ商事）</td><td><code>br_company_hierarchy</code>（祖先-子孫 + <code>depth</code>）</td><td>固定深さに平坦化（<code>parent_name</code> 等の位置属性）</td><td><strong>階層ブリッジ</strong>。深さが不定で、買収で伸びる</td></tr>
+<tr><td>不揃い階層（企業グループ）</td><td><code>companies.parent_company_id</code>。<code>C003</code>（ヒノデ物流）→ <code>C001</code>（アオゾラ商事）</td><td><code>br_company_hierarchy</code>（祖先-子孫 + <code>depth</code>）</td><td>固定深さの位置属性に平坦化</td><td><strong>階層ブリッジ</strong>。深さが不定で、買収で伸びる</td></tr>
 <tr><td>不揃い階層（職種）</td><td><code>job_categories.level</code>。<code>ENG</code>→<code>ENG-BE</code>→<code>ENG-BE-JAVA</code> と <code>ENG</code>→<code>ENG-DATA</code></td><td>階層ブリッジ</td><td><code>dim_job_category</code> に <code>level1_name</code>/<code>level2_name</code>/<code>level3_name</code> を平坦化</td><td><strong>平坦化</strong>。深さ 1〜3 で幅が狭く、レベル名が合意されている</td></tr>
 <tr><td>異種</td><td>スカウト送信主体。<code>scouts.sender_type</code> = <code>company</code> / <code>agent</code></td><td><code>dim_scout_sender</code>（supertype、<code>sender_type</code> + 固有属性 NULL 許容）</td><td><code>fct_scout</code> に <code>sender_company_key</code> と <code>sender_agent_key</code> の 2 本 + <code>-1</code></td><td><strong>supertype 1 本</strong></td></tr>
 </tbody>
@@ -309,13 +309,23 @@ models:
       weighting_factor は member_key 内で合計 1。重みなしで結合すると二重計上になる。
     columns:
       - name: member_key
-        tests: [not_null, relationships: {to: ref('dim_member'), field: member_key}]
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_member')
+              field: member_key
       - name: job_category_key
-        tests: [not_null, relationships: {to: ref('dim_job_category'), field: job_category_key}]
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_job_category')
+              field: job_category_key
       - name: weighting_factor
         tests:
           - not_null
-          - dbt_utils.accepted_range: {min_value: 0, max_value: 1, inclusive: false}
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1
     tests:
       - dbt_utils.unique_combination_of_columns:
           combination_of_columns: [member_key, job_category_key]
@@ -500,6 +510,13 @@ desired AS (
     FROM weighted
     GROUP BY member_id
 
+),
+
+member_versions AS (
+
+    -- dim_member の既存本体（SCD2 版の会員行）。この対案では一切変えない
+    SELECT * FROM {{ ref('snap_members') }}
+
 )
 
 SELECT
@@ -510,7 +527,6 @@ SELECT
         d.desired_job_categories,
         ARRAY&lt;STRUCT&lt;code STRING, priority INT64, weight FLOAT64&gt;&gt;[]
     ) AS desired_job_categories
--- m は dim_member の既存の本体（SCD2 版の会員行）。この対案では一切変えない
 FROM member_versions AS m
 LEFT JOIN desired AS d
     ON m.member_id = d.member_id
@@ -623,18 +639,15 @@ GROUP BY jc.level2_name
 
 <h3>(c) <code>fct_placement.agent_key</code> が <code>-1</code> のとき <code>dim_agent</code> に <code>-1</code> 行を持つべきか</h3>
 
-<p>直接応募による入社を <code>fct_placement</code> に入れると <code>agent_key</code> が <code>-1</code> になる。<code>dim_agent</code> に <code>-1</code> 行を作るのと、<code>dim_scout_sender</code> に寄せて統一するのと、どちらか。</p>
+<p>正典の <code>fct_placement</code> は <code>agent_key</code> を <code>applications.scout_id</code> → <code>scouts.sender_agent_id</code> で解決し、辿れなければ <code>-1</code> を入れる。<code>dim_agent</code> に <code>-1</code> 行を作るのと、<code>dim_scout_sender</code> に寄せて統一するのと、どちらか。</p>
 
 <details>
 <summary>解答例</summary>
-<p><strong>まず前提を疑う。</strong>正典の <code>fct_placement</code> は「1 行 = 1 入社（エージェント経由）」と粒度を宣言しており、ソースの <code>placements.agency_id</code> も NULL 許容ではない。この宣言のままなら <code>agent_key = -1</code> は出ない。出るとしたら粒度宣言が「全入社」に広がった時で、それは <code>fee_amount</code> が NULL になる行を混ぜるということでもある。<strong>粒度の変更が先にあり、<code>-1</code> はその結果</strong>。</p>
-<p><strong>そのうえで、<code>dim_agent</code> の <code>-1</code> 行は持つ。</strong>理由は 2 つ。</p>
-<ol>
-<li>正典の <code>fct_job_posting_daily</code> は <code>agent_key(-1=直接)</code> を既に持っている。<code>dim_agent</code> に <code>-1</code> 行が無ければこのファクトの結合が壊れる。粒度の話とは無関係に必要。</li>
-<li>DT#43。ディメンションの FK に NULL を置かず、<code>-1</code> の行に「直接（エージェント経由でない）」という表示名を入れる。BI で「エージェント別」を出したとき、直接応募が行として見える。</li>
-</ol>
-<p><strong><code>dim_scout_sender</code> に統一しない。</strong>DT#3 の「プロセス単位」がそのまま効く。<code>dim_scout_sender</code> の意味は「スカウトを送った主体」で、<code>fct_placement.agent_key</code> の意味は「入社を仲介したエージェント」。別のビジネスプロセスの別の役割であり、値域も違う（送信主体には企業が入るが、仲介者に企業は入らない）。畳むと「送信主体別の入社数」という無意味な軸ができ、コンフォームド性を壊す。判断基準の 3 番目の表の第 3 行「属性もメジャーも粒度も違う → 分離」。</p>
-<p><code>dim_agent</code> と <code>dim_scout_sender</code> の重複（同じ担当者が両方に出る）は許容する。<code>dim_scout_sender</code> は <code>sender_type</code> + <code>sender_id</code> を自然キーに持つので、<code>agent_id</code> から辿ることはできる。</p>
+<p><strong>まず <code>-1</code> の意味を確定させる。</strong><code>fct_placement</code> の粒度は「1 行 = 1 入社（エージェント経由）」なので、<code>agency_key</code> は必ず埋まる。埋まらないのは <code>agent_key</code> のほうで、その意味は「直接応募」ではなく<strong>「仲介した担当者を特定できない」</strong>である。<code>source_channel</code> が <code>agent_referral</code> でスカウトを経由していない入社がこれに当たる。意味が「該当なし」なのか「不明」なのかで表示名が変わるので、ここを曖昧にしたまま <code>-1</code> 行を作ってはいけない。</p>
+<p><strong><code>dim_agent</code> に <code>-1</code> 行を持つ。</strong>DT#43 の「ディメンションの外部キーに NULL を置かない」がそのまま効く。<code>-1</code> 行の <code>agent_name</code> には「担当者不明」を入れる。これが無いと、<code>fct_placement</code> と <code>dim_agent</code> の <code>INNER JOIN</code> でこれらの入社が静かに消える。消えたことは画面に出ない（§2(b) と同じ壊れ方）。</p>
+<p><strong>ただし、この問いには正典側の先回りがある。</strong><code>dim_agency</code>（<code>dim_agent</code> の縮約ディメンション）が用意されており、<code>fct_placement</code> は <code>agency_key</code> も持つ。担当者別に切れない分析は最初から <code>dim_agency</code> を主軸にするのが正しく、<code>agent_key = -1</code> は「担当者別のドリルダウンでは不明として1 行に集まる」という副次的な扱いになる。<strong><code>-1</code> 行を置くことと、<code>-1</code> が多い軸を主軸にしないことは別の判断で、両方要る。</strong></p>
+<p><strong><code>dim_scout_sender</code> には統一しない。</strong>DT#3 の「部門ではなくビジネスプロセス」がそのまま効く。<code>dim_scout_sender</code> の意味は「スカウトを送った主体」で、値域には企業が入る。<code>fct_placement.agent_key</code> の意味は「入社を仲介した担当者」で、企業は入らない。別プロセスの別の役割であり、畳むと「送信主体別の入社数」という、企業側の行が常に空になる軸ができる。判断基準の 3 番目の表の第 3 行「属性もメジャーも粒度も違う → 分離」。</p>
+<p>同じ担当者が <code>dim_agent</code> と <code>dim_scout_sender</code> の両方に出る重複は許容する。<code>dim_scout_sender</code> の自然キーは (<code>sender_type</code>, <code>sender_id</code>) なので <code>agent_id</code> から辿れる。コンフォームドディメンションとして共有すべきなのは <code>dim_agent</code> のほうで、<code>dim_scout_sender</code> はスカウトプロセス専用の supertype と割り切る。</p>
 </details>
 
 <h2>8. 参考: 手元の基盤ではどうか</h2>

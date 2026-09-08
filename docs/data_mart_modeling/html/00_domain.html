@@ -91,7 +91,8 @@
 </div>
 
 <div class="aside kimball">
-<strong>Kimball（DWT ch.18 / Techniques「Gather Business Requirements and Data Realities」）</strong>: 設計に入る前に、業務側の要求とソースデータの現実を<strong>同時に</strong>掴めと言う。要求は業務代表との対話で KPI・意思決定プロセス・分析ニーズとして引き出し、データの現実はソース側の担当者への聞き取りと高レベルのプロファイリングで確かめる。片側だけで進めると、実装できないモデルか、誰も使わないモデルのどちらかになる。以下の5つが CareerVoice での「要求」側、§3 が「現実」側にあたる。
+<strong>Kimball（DWT ch.18 / Techniques「Gather Business Requirements and Data Realities」）</strong>: 設計に入る前に、業務側の要求とソースデータの現実を<strong>同時に</strong>掴めと言う。要求は業務代表との対話で KPI・意思決定プロセス・分析ニーズとして引き出し、データの現実はソース側の担当者への聞き取りと高レベルのプロファイリングで確かめる。片側だけで進めると、実装できないモデルか、誰も使わないモデルのどちらかになる。<br>
+以下の5つが CareerVoice での「要求」側、§3 が「現実」側にあたる。
 </div>
 
 <h3>分析側が答えたい問い</h3>
@@ -108,7 +109,9 @@
 
 <h2>3. ソースシステムの簡易モデル</h2>
 
-<p>OLTP は BigQuery の <code>src_careervoice</code> データセットに Datastream（CDC）で複製されている前提。全テーブルが <code>updated_at</code> を持ち、マスタ系は論理削除 <code>deleted_at</code> を持つ。<strong>列は以下が全てで、以降の回もこれ以外を持ち出さない。</strong></p>
+<p>OLTP は BigQuery の <code>src_careervoice</code> データセットに Datastream（CDC）で複製されている前提。行が更新されるテーブル（<code>members</code>, <code>member_desired_job_categories</code>, <code>companies</code>, <code>agencies</code>, <code>agents</code>, <code>reviews</code>, <code>job_postings</code>, <code>contracts</code>）だけが <code>updated_at</code> を持ち、論理削除 <code>deleted_at</code> を持つのは <code>members</code> だけである。残る9表（<code>job_categories</code>, <code>industries</code>, <code>prefectures</code>, <code>review_moderation_events</code>, <code>scouts</code>, <code>applications</code>, <code>selection_events</code>, <code>placements</code>, <code>page_views</code>）は追記型で更新列を持たない。</p>
+
+<p><code>scouts</code> の <code>opened_at</code> / <code>replied_at</code> / <code>reply_type</code> だけが例外で、更新列を持たないまま後から値が埋まる。<strong>列は以下が全てで、以降の回もこれ以外を持ち出さない。</strong></p>
 
 <h3>会員・企業（マスタ）</h3>
 <div class="table-wrap">
@@ -266,21 +269,25 @@
 
   <line class="sep" x1="40" y1="472" x2="920" y2="472"/>
   <rect class="box-focal" x="40" y="484" width="20" height="12" rx="2"/>
-  <text class="jp" x="68" y="494">イベント行が積まれるテーブル（白は状態を上書き更新するテーブル）</text>
+  <text class="jp" x="68" y="494">イベントが1行として記録されるテーブル（白は当事者・契約のマスタ）</text>
   <text class="jp" x="608" y="494">矢印 = 外部キー（子 → 親）</text>
 </svg>
 
-<p class="cap">図に出していない外部キーが3本ある。<code>members.current_company_id</code> → <code>companies</code>、<code>companies.parent_company_id</code> → <code>companies</code>（自己参照、<code>C003</code> の親が <code>C001</code>）、<code>agents.agency_id</code> → <code>agencies</code>。参照マスタ（<code>job_categories</code>, <code>industries</code>, <code>prefectures</code>）、多値の <code>member_desired_job_categories</code>、審査ログの <code>review_moderation_events</code>、成果報酬の <code>placements</code>、イベントログの <code>page_views</code> も図からは省いた。</p>
+<p class="cap">図に出していない外部キーが4本ある。<code>members.current_company_id</code> → <code>companies</code>、<code>companies.parent_company_id</code> → <code>companies</code>（自己参照、<code>C003</code> の親が <code>C001</code>）、<code>agents.agency_id</code> → <code>agencies</code>、<code>job_postings.agency_id</code> → <code>agencies</code>（<code>J002</code> が <code>A01</code> 経由であることの根拠）。仲介会社そのもの（<code>agencies</code>）、参照マスタ（<code>job_categories</code>, <code>industries</code>, <code>prefectures</code>）、多値の <code>member_desired_job_categories</code>、審査ログの <code>review_moderation_events</code>、成果報酬の <code>placements</code>、イベントログの <code>page_views</code> も図からは省いた。</p>
+
+<p class="cap">塗ったテーブルも <code>reviews.status</code> や <code>scouts.opened_at</code> のように後から列が更新される。追記と更新が混ざる点が 02回（ファクトの型）と 05回（履歴の持ち方）の論点になる。</p>
 
 <h3>OLTP としての設計意図</h3>
 
 <p>この形はアプリケーションの都合で正しい。<code>job_categories</code> は <code>parent_code</code> による自己参照で階層を持ち、<code>industries</code> や <code>prefectures</code> はコード表に切り出されている。重複を消して更新を1箇所に閉じる、正規化の教科書どおりの形だ。</p>
 
-<p>状態は列で持つ。<code>reviews.status</code>、<code>job_postings.status</code>、<code>contracts.status</code>、<code>scouts.opened_at</code>/<code>replied_at</code> はいずれも行を上書きして遷移する。削除は <code>deleted_at</code> による論理削除で、行は消えない。<strong>つまり OLTP を素直に読むと「今」しか分からない</strong>。<code>C002</code> の <code>employee_size_band</code> が 2026-05-01 に <code>50_299</code> から <code>300_999</code> へ変わったとき、その前に投稿された <code>R001</code> を「当時の規模」で集計する手段はソース側に無い。</p>
+<p>状態は列で持つ。<code>reviews.status</code>、<code>job_postings.status</code>、<code>contracts.status</code>、<code>scouts.opened_at</code>/<code>replied_at</code> はいずれも行を上書きして遷移する。<code>members</code> の削除も <code>deleted_at</code> を立てるだけで、行は消えない。</p>
+
+<p><strong>つまり OLTP を素直に読むと「今」しか分からない</strong>。<code>C002</code> の <code>employee_size_band</code> が 2026-05-01 に <code>50_299</code> から <code>300_999</code> へ変わったとき、その前に投稿された <code>R001</code> を「当時の規模」で集計する手段はソース側に無い。</p>
 
 <div class="aside kimball">
 <strong>Kimball（Manifesto, 1997）</strong>: ER モデリングはトランザクション処理には適切で、そこでは最高のトランザクション性能とデータ整合性が得られる。しかしデータがエンドユーザーに届く前に、理解しやすさと性能の両方のために次元モデルへ変換しなければならない、と主張する。<br>
-Manifesto が次元モデルの強みとして挙げるのは4つ — 予測可能な枠組み、対称性（どのディメンションからでも等しく入れる）、優雅な拡張性（行や列を足すだけで既存クエリを壊さない）、そして緩やかに変化するディメンションやファクトレスファクトのような<strong>定型の対処法が揃っていること</strong>。このシリーズが扱うのは4つ目の「定型」の中身である。
+Manifesto が次元モデルの強みとして挙げるのは5つ — 予測可能な枠組み、対称性（どのディメンションからでも等しく入れる）、優雅な拡張性（行や列を足すだけで既存クエリを壊さない）、緩やかに変化するディメンションやファクトレスファクトのような<strong>定型の対処法が揃っていること</strong>、そして集約を管理するユーティリティ群。このシリーズが扱うのは4つ目の「定型」の中身で、5つ目の集約は 04回・08回で扱う。
 </div>
 
 <h2>4. ビジネスプロセスの棚卸し</h2>
@@ -288,7 +295,8 @@ Manifesto が次元モデルの強みとして挙げるのは4つ — 予測可�
 <p>次元モデルの行は<strong>ビジネスプロセス</strong>であって部門ではない（DT#3）。CareerVoice の場合、「マーケ部のマート」「エージェント事業部のマート」を作ると、スカウトも応募も両方に複製されて数字が食い違う。</p>
 
 <div class="aside kimball">
-<strong>Kimball（Design Tip #3）</strong>: 「データマートは部門で定義される」は業界で最も広く流布した誤りの一つだと断じている。マーケのマートにも受注が入り、セールスのマートにも受注が入れば、同じ情報が複数箇所に存在し、真実のバージョンが割れる。開発も保守もストレージも重複する。<strong>プロセス単位で一度だけ公開し、コンフォームドディメンションで各部門から参照させる。</strong> バスマトリクスの行がプロセスであってレポート名でも部門名でもないのはこのためだ。
+<strong>Kimball（Design Tip #3）</strong>: 「データマートは部門で定義される」は業界で最も広く流布した誤りの一つだと断じている。マーケのマートにも受注が入り、セールスのマートにも受注が入れば、同じ情報が複数箇所に存在し、真実のバージョンが割れる。開発も保守もストレージも重複する。<br>
+<strong>プロセス単位で一度だけ公開し、コンフォームドディメンションで各部門から参照させる。</strong> バスマトリクスの行がプロセスであってレポート名でも部門名でもないのはこのためだ。
 </div>
 
 <p>プロセスの見つけ方は2方向から挟む。業務側が口にするパフォーマンス指標を聞き（「返信率」「歩留まり」「枠消化率」）、ソースシステムの側でそれを生む操作を探す（<code>scouts</code> の insert、<code>selection_events</code> の insert、<code>contracts</code> の月次判定）。CareerVoice では10個に棚卸しした。</p>
@@ -315,7 +323,7 @@ Manifesto が次元モデルの強みとして挙げるのは4つ — 予測可�
 </table>
 </div>
 
-<p>10行のうち3行が累積スナップショット、2行が定期スナップショットである点に注意する。CareerVoice の問いの半分は「ファネル」と「リードタイム」なので、トランザクションファクトだけでは答えられない。型の選び方は 02回。</p>
+<p>10行のうち3行が累積スナップショット、2行が定期スナップショットである点に注意する。§2 に挙げた5つの問いのうち2つが「ファネル」と「リードタイム」で、これはトランザクションファクトだけでは答えられない。型の選び方は 02回。</p>
 
 <div class="aside modern">
 <strong>再解釈（Hightouch, Part 1）</strong>: 現代の構成は raw（Fivetran などが同期したソースそのまま）→ staging（列名の整理・重複排除・JSON 展開・クレンジング、raw と 1:1）→ reporting models（結合してビジネスの問いに答える）の3層で、<strong>raw を直接使ってレポート層を作らない</strong>ことを原則に置く。バスマトリクスはこの3層目の設計図であって、staging の設計図ではない。命名規約もこの層に対応する（<code>stg_careervoice__reviews</code> / <code>int_review_member_link</code> / <code>fct_review</code>）。
@@ -324,7 +332,8 @@ Manifesto が次元モデルの強みとして挙げるのは4つ — 予測可�
 <h2>5. 概念 → 論理 → 物理</h2>
 
 <div class="aside modern">
-<strong>再解釈（Joe Reis, Practical Data Modeling ch.14）</strong>: 概念モデル（CDM）は業務側と共有する「町の地図」で、名詞（エンティティ）と動詞（関係）だけを置き、実装の詳細を持たない。論理モデル（LDM）は属性・主キー・外部キー・多重度まで書くがストレージ技術は選ばない。物理モデルで初めて具体的な技術に落とす。Reis はこの順を飛ばすと<strong>「セマンティックな衝突」</strong>—— 業務と IT が用語の定義で合意できない状態 —— が起きると言い、CDM を最も価値のある成果物と位置づける。
+<strong>再解釈（Joe Reis, Practical Data Modeling ch.14）</strong>: 概念モデル（CDM）は業務側と共有する「町の計画（Town Plan）」で、名詞（エンティティ）と動詞（関係）だけを置き、実装の詳細を持たない。論理モデル（LDM）は属性・主キー・外部キー・多重度まで書くがストレージ技術は選ばない。物理モデルで初めて具体的な技術に落とす。<br>
+Reis はこの順を飛ばすと、部門ごとに「顧客」の定義が食い違ったまま業務と IT が合意できない状態になると言い、CDM を最も価値のある成果物と位置づける。
 </div>
 
 <p>Kimball の4ステップは、この階層のうち概念と論理にまたがる。ステップ1が概念、ステップ2〜4が論理で、物理は4ステップの<strong>後</strong>に来る。</p>
@@ -341,7 +350,8 @@ Manifesto が次元モデルの強みとして挙げるのは4つ — 予測可�
 </div>
 
 <div class="aside kimball">
-<strong>Kimball（Techniques, Four-Step Dimensional Design Process）</strong>: 4つの決定は「① プロセスを選ぶ → ② 粒度を宣言する → ③ ディメンションを特定する → ④ ファクトを特定する」。<strong>粒度は必ずディメンションとファクトより先に宣言する</strong>。候補になるディメンションもファクトも、粒度と整合していなければならないからだ。粒度宣言は設計に対する拘束力のある契約であり、異なる粒度は同じファクトテーブルに混ぜてはならない。
+<strong>Kimball（Techniques, Four-Step Dimensional Design Process）</strong>: 4つの決定は「① プロセスを選ぶ → ② 粒度を宣言する → ③ ディメンションを特定する → ④ ファクトを特定する」。<strong>粒度は必ずディメンションとファクトより先に宣言する</strong>。候補になるディメンションもファクトも、粒度と整合していなければならないからだ。<br>
+粒度宣言は設計に対する拘束力のある契約であり、異なる粒度は同じファクトテーブルに混ぜてはならない。
 </div>
 
 <p>各回がどの段階に属するかを先に置く。物理の回（07, 09）だけを読んでも設計は決まらない。</p>
@@ -373,7 +383,7 @@ Manifesto が次元モデルの強みとして挙げるのは4つ — 予測可�
 <table>
 <thead><tr><th>論点</th><th>決定</th><th>理由</th><th>扱う回</th></tr></thead>
 <tbody>
-<tr><td>クチコミの匿名性</td><td><code>fct_review</code> は <code>member_key</code> を<strong>持たない</strong>。会員属性は投稿時点の <code>dim_member_profile_mini</code> 相当をジャンク化した <code>dim_review_attributes</code> に落とす。会員×クチコミの結合が要る分析は <code>int_review_member_link</code>（アクセス制限データセット）に隔離</td><td>公開分析からの個人特定リスク（少人数企業では属性で特定できる）</td><td>00, 01, 03</td></tr>
+<tr><td>クチコミの匿名性</td><td><code>fct_review</code> は <code>member_key</code> を<strong>持たない</strong>。会員属性は投稿時点の <code>dim_member_profile_mini</code> 相当を<strong>ジャンク化した <code>dim_review_attributes</code></strong> に落とす。会員×クチコミの結合が要る分析は <code>int_review_member_link</code>（アクセス制限データセット）に隔離</td><td>公開分析からの個人特定リスク（少人数企業では属性で特定できる）</td><td>00, 01, 03</td></tr>
 <tr><td>企業属性の時点</td><td>ファクトには<strong>イベント時点</strong>の <code>company_key</code>（SCD2 版）を持つ。現在値で見たい場合は <code>dim_company</code> の <code>is_current</code> 版へ <code>company_id</code> で再結合</td><td>「投稿当時の規模」と「現在の規模」を両方答えられる</td><td>05</td></tr>
 <tr><td>集約テーブルの平均</td><td><code>avg_*</code> を持たず <code>sum_*</code> + <code>count</code> を持つ</td><td>再集約可能性</td><td>04, 08</td></tr>
 <tr><td>累積スナップショットの裏に原子ファクト</td><td><code>fct_application_pipeline</code> の裏に <code>fct_selection_event</code> を必ず置く</td><td>サマリーだけは危険（DT#77）</td><td>02</td></tr>
@@ -384,7 +394,9 @@ Manifesto が次元モデルの強みとして挙げるのは4つ — 予測可�
 </table>
 </div>
 
-<p>1行目だけが Kimball の原則と正面から衝突する。10 Rules の Rule #1 は「原子の詳細を入れよ」、Rule #5 は「外部キーを NULL にするな」と言うが、<code>fct_review</code> から <code>member_key</code> を落とすのは<strong>原子性を意図的に下げる</strong>判断だ。理由は性能でも簡潔さでもなく、少人数企業では「30代・男性・在籍3〜5年・エンジニア」だけで投稿者が特定できてしまう点にある。原子ファクトが要る分析は <code>int_review_member_link</code> に隔離し、公開マートには出さない。この衝突の扱いは 01回と 03回で詰める。</p>
+<p>1行目だけが Kimball の原則と正面から衝突する。10 Rules の Rule #1 は「原子の詳細を入れよ」、Rule #5 は「多対多はファクトテーブルで解決し、その外部キーを NULL にしてはならない」と言うが、<code>fct_review</code> から <code>member_key</code> を落とすのは<strong>原子性を意図的に下げる</strong>判断だ。理由は性能でも簡潔さでもなく、少人数企業では「30代・男性・在籍3〜5年・エンジニア」だけで投稿者が特定できてしまう点にある。</p>
+
+<p>原子ファクトが要る分析は <code>int_review_member_link</code> に隔離し、公開マートには出さない。この衝突の扱いは 01回と 03回で詰める。</p>
 
 <h2>7. 演習</h2>
 
@@ -423,7 +435,7 @@ Manifesto が次元モデルの強みとして挙げるのは4つ — 予測可�
 <tr><td><code>screening</code> → <code>published</code></td><td>ファクト（日付キー + メジャー）</td><td><code>published_date_key</code>, <code>is_published</code>(0/1)</td><td>同上。到達したか否かは 0/1 の加法メジャー</td></tr>
 <tr><td><code>screening</code> → <code>rejected</code></td><td>ファクト（日付キー + メジャー）</td><td><code>rejected_date_key</code>, <code>is_rejected</code></td><td>同上</td></tr>
 <tr><td>遷移の所要時間</td><td>ファクト（メジャー）</td><td><code>hours_to_screening</code>, <code>hours_to_decision</code></td><td>数値の測定値。粒度（1クチコミの審査ライフサイクル）と整合する</td></tr>
-<tr><td>差し戻し回数</td><td>ファクト（メジャー）</td><td><code>moderation_rounds</code></td><td>加法。原子行は <code>review_moderation_events</code> 側に残る</td></tr>
+<tr><td>審査ラウンド数</td><td>ファクト（メジャー）</td><td><code>moderation_rounds</code></td><td><code>review_moderation_events</code> の行数を数えた加法メジャー。差し戻し（<code>screening</code> → <code>submitted</code>）を表現するなら正典の <code>status</code> 遷移に足す必要がある（01回で検討）</td></tr>
 <tr><td>却下理由 <code>reason_code</code></td><td><strong>ディメンション</strong></td><td><code>dim_moderation_reason</code>（<code>reason_name</code>, <code>severity</code>）</td><td>フィルタ・グループ化に使う記述的な文脈。コードのままファクトに置かない（10 Rules #7）</td></tr>
 <tr><td>投稿時の会員属性<br>(<code>employment_status</code> ほか)</td><td><strong>ディメンション</strong></td><td><code>dim_review_attributes</code>（2×3×5 = 30行）</td><td>低カーディナリティの組合せ。ジャンクディメンションにまとめる</td></tr>
 <tr><td>現在の <code>status</code> そのもの</td><td>どちらでもない</td><td>—</td><td>4つの日付キーと <code>is_published</code> / <code>is_rejected</code> で完全に表現できる。状態列を別に持つと二重管理になる</td></tr>
@@ -436,11 +448,11 @@ Manifesto が次元モデルの強みとして挙げるのは4つ — 予測可�
 
 <h2>8. 参考: 手元の基盤ではどうか</h2>
 
-<p><code>dbt_logs_analysis</code> はマートを<strong>データソース起点</strong>で切っている。<code>mart_url_performance</code> はビジネスプロセス名ではなくソーステーブル（アクセスログ）に対する集計軸の名前で、<code>mart_error_analysis</code> も同じソースを別の切り口で見ているだけだ。DT#3 の基準を当てれば、行が「プロセス」ではなく「レポートの見出し」になっている状態にあたる。</p>
-
-<p><code>news_pipeline</code> は逆で、収集（<code>raw_articles</code>）・要約と採点（<code>summaries</code>）・通知（<code>notified_at</code>）・お気に入り（<code>favorites</code>）がそれぞれ別のプロセスに対応し、自然にプロセス起点になっている。設計意図というより、Cloud Run のエンドポイントを <code>/collect</code> と <code>/notify</code> に分けた結果としてそうなった。<strong>アプリの処理境界がプロセス境界と一致していると、マートの行も自然に揃う。</strong></p>
-
-<p>チュートリアルの種: <code>dbt_logs_analysis</code> のアクセスログを「ページ表示」という1プロセスとして粒度宣言し直し、<code>mart_url_performance</code> をその上の集約として置き換えると、01回の粒度テストと 08回のドリルアクロスがそのまま試せる。</p>
+<div class="aside">
+<code>dbt_logs_analysis</code> はマートを<strong>データソース起点</strong>で切っている。<code>mart_url_performance</code> はプロセス名ではなくソーステーブル（アクセスログ）に対する集計軸の名前で、DT#3 の基準では行が「プロセス」ではなく「レポートの見出し」になっている状態にあたる。<br>
+<code>news_pipeline</code> は逆で、収集（<code>raw_articles</code>）・要約と採点（<code>summaries</code>）・通知（<code>notified_at</code>）・お気に入り（<code>favorites</code>）がそれぞれ別プロセスに対応する。<strong>アプリの処理境界がプロセス境界と一致していると、マートの行も自然に揃う。</strong><br>
+チュートリアルの種: アクセスログを「ページ表示」という1プロセスとして粒度宣言し直すと、01回の粒度テストと 08回のドリルアクロスがそのまま試せる。
+</div>
 
 <h2>参照文献</h2>
 

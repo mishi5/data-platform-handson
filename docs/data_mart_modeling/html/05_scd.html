@@ -1,0 +1,826 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>履歴を持つ：SCD とスナップショット — データマート設計 05</title>
+<style>
+  :root { --bg:#ffffff; --fg:#1a1a1a; --muted:#666; --border:#e0e0e0;
+          --accent:#0b6bcb; --card:#f7f8fa; --code:#f3f4f6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171a; --fg:#e8e8e8; --muted:#9aa0a6; --border:#2c3136;
+            --accent:#6aa9ff; --card:#1b1f23; --code:#1f2429; }
+  }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+    line-height:1.8; max-width:900px; margin:0 auto; padding:24px 20px 64px; }
+  h1 { font-size:1.6rem; margin:0 0 4px; line-height:1.4; }
+  h2 { font-size:1.2rem; border-bottom:1px solid var(--border); padding-bottom:6px; margin:40px 0 16px; }
+  h3 { font-size:1.02rem; margin:24px 0 8px; }
+  .meta { color:var(--muted); font-size:.85rem; margin:0 0 24px; }
+  a { color:var(--accent); }
+  table { border-collapse:collapse; width:100%; margin:12px 0 20px; font-size:.9rem; }
+  th, td { border:1px solid var(--border); padding:6px 10px; vertical-align:top; text-align:left; }
+  th { background:var(--card); }
+  .table-wrap { overflow-x:auto; }
+  code { background:var(--code); border:1px solid var(--border); border-radius:4px; padding:1px 5px; font-size:.85em; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:8px; padding:14px 16px;
+        overflow-x:auto; font-size:.84rem; line-height:1.55; }
+  pre code { background:none; border:none; padding:0; font-size:inherit; }
+  .aside { border-left:3px solid var(--accent); background:var(--card); padding:10px 16px; margin:16px 0; font-size:.92rem; }
+  .kimball { border-left-color:#8a6d3b; }
+  .modern { border-left-color:#3b8a5a; }
+  details { border:1px solid var(--border); border-radius:8px; padding:8px 14px; margin:10px 0; background:var(--card); }
+  summary { cursor:pointer; font-weight:600; }
+  svg { max-width:100%; height:auto; display:block; margin:20px 0; }
+  ul, ol { padding-left:1.3em; }
+  .ref li { font-size:.88rem; }
+</style>
+</head>
+<body>
+
+<h1>履歴を持つ：SCD とスナップショット</h1>
+<p class="meta">データマート設計 05 ／ 参照: DWT ch.5, Slowly Changing Dimensions Part 1–2, Design Tip #15 #152 ／ 再解釈: Functional Data Engineering（ディメンションの日次スナップショット）, SCD-2 considered harmful, dbt snapshots</p>
+
+<h2>1. この回が決めること</h2>
+
+<p>ディメンションの属性が変わったとき、古い値をどう残すか。残し方は Type 0〜7 の 8 通りあり、それぞれ「行が増えるか」「ファクトから見えるのは版か現在値か」が違う。この回はその選択と、選んだ結果として必ず必要になる <strong>as-of join（イベント時点の版でファクトのキーを解決する結合）</strong> の実装を決める。</p>
+
+<div class="table-wrap">
+<table>
+<caption style="text-align:left;color:var(--muted);font-size:.85rem;padding-bottom:6px;">この回で確定させる判断</caption>
+<thead>
+<tr><th>決めること</th><th>決定</th><th>根拠</th></tr>
+</thead>
+<tbody>
+<tr><td>企業の履歴</td><td><code>dim_company</code> は SCD2。<code>name</code> だけ Type1 上書き（＝ Type 6 相当）</td><td>数万行 × 年単位の変化。行の増え方が問題にならない。社名は集計軸ではない</td></tr>
+<tr><td>会員の履歴</td><td>時点属性の解決は <code>dim_member_daily</code>（日次スナップショット）を一次にする。<code>dim_member</code> は Type2 のまま残し、変化の遅い属性（<code>current_company_id</code> 等）に限定する</td><td>数百万行 × 高頻度変化。Type2 だけだと行が読めない速度で増え、バックフィルが日次逐次になる</td></tr>
+<tr><td>会員の速く変わる属性</td><td><code>annual_income_band</code> / <code>job_change_intent</code> は <code>dim_member_profile_mini</code>（Type 4 ミニディメンション、15 行）へ</td><td>正典の固定判断。<code>dim_member</code> の版を増やさずにイベント時点の値を持てる</td></tr>
+<tr><td>エージェントの履歴</td><td><code>dim_agent</code>（担当者）と縮約ディメンション <code>dim_agency</code> はどちらも SCD2</td><td>数千行・数十行。移籍の前後で成果報酬の帰属が変わる（§7-a）</td></tr>
+<tr><td>ファクトのキー解決</td><td>ロード時点で as-of join し、<code>member_key</code> / <code>company_key</code> を確定する。BI 側では解決しない</td><td>Kimball の surrogate key pipeline。クエリごとに時点述語を書かせない</td></tr>
+<tr><td>現在値で見たいとき</td><td>ファクト → 版 → <code>company_id</code>（自然キー）で <code>is_current</code> 行へ再結合</td><td>ファクトに二重 FK を持たせる Type 7 は採らない。列が増える割に用途が限定的</td></tr>
+<tr><td>現行行の <code>valid_to</code></td><td>NULL ではなく <code>9999-12-31</code></td><td>NULL は範囲述語を静かに外す（§2-c）</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Type 0〜7 と CareerVoice での適用</h3>
+
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>Type</th><th>定義</th><th>履歴</th><th>行の増え方</th><th>CareerVoice での適用</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>0</strong> Retain Original</td><td>原始値を保持し、変更を受け付けない</td><td>変わらないので不要</td><td>増えない</td><td><code>dim_date</code>、<code>dim_channel</code>、<code>dim_contract_plan</code>、<code>dim_moderation_reason</code></td></tr>
+<tr><td><strong>1</strong> Overwrite</td><td>新しい値で上書きする</td><td><strong>失われる</strong></td><td>増えない</td><td><code>dim_company.name</code>、<code>dim_job_category</code>、<code>dim_job_posting</code></td></tr>
+<tr><td><strong>2</strong> Add New Row</td><td>変化のたびに新しいサロゲートキーで行を追加。<code>valid_from</code> / <code>valid_to</code> / <code>is_current</code> を持つ</td><td>完全に残る</td><td>変化 1 回につき +1 行</td><td><code>dim_member</code>、<code>dim_company</code>、<code>dim_agent</code>、<code>dim_scout_sender</code></td></tr>
+<tr><td><strong>3</strong> Add New Attribute</td><td>列を追加して「もう一つの現実」を並べる（現行 + 1 世代前）</td><td>1 世代だけ</td><td>増えない</td><td>採らない。世代が 1 つで足りる場面が無い（§6）</td></tr>
+<tr><td><strong>4</strong> Add Mini-Dimension</td><td>速く変わる属性群を別ディメンションへ切り出す。ファクトが両方の <code>_key</code> を持つ</td><td>ファクト側に時点の組合せが残る</td><td>ベースは増えない。mini は組合せ数で固定</td><td><code>dim_member_profile_mini</code>（5 × 3 = 15 行）。<code>fct_scout</code> / <code>fct_page_view</code> / <code>fct_application_pipeline</code> が <code>member_profile_mini_key</code> を持つ</td></tr>
+<tr><td><strong>5</strong> Mini-Dimension + Type1 Outrigger</td><td>Type 4 に加え、ベース側に「現在のプロファイル」キーを Type1 で埋め込む</td><td>Type 4 と同じ + 現在値へ直行できる</td><td>増えない</td><td>採らない。<code>dim_member</code> から現在値へ直行する分析要求が今は無い（§6 に採る条件）</td></tr>
+<tr><td><strong>6</strong> Type1 + Type2（2+3+1）</td><td>Type2 の行に、全版へ上書きされる Type1 属性を混ぜる</td><td>版 + 現在値の両方</td><td>Type2 と同じ</td><td><code>dim_company</code> 全体。<code>name</code> が Type1、<code>employee_size_band</code> 等が Type2</td></tr>
+<tr><td><strong>7</strong> Dual Type1 and Type2</td><td>ファクトが二重 FK（版のサロゲートキー + durable な自然キー）を持つ</td><td>版 + 現在値の両方</td><td>増えない</td><td>採らない。同じ効果を「版 → <code>company_id</code> → <code>is_current</code> 行」の 2 ホップで得る（§5-d）</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>2. どこで壊れるか</h2>
+
+<h3>(a) <code>dim_company</code> を Type1 にする — 過去のレポートが翌月には別の数字になる</h3>
+
+<p><code>C002</code>（ネクスト技研）は 2026-05-01 に <code>employee_size_band</code> が <code>50_299</code> から <code>300_999</code> へ変わった。<code>R001</code> は 2026-03-10 投稿、当時の <code>C002</code> は <code>50_299</code> である。Type1 で上書きすると <code>R001</code> は <code>300_999</code> 帯のクチコミとして集計され、「規模帯別のクチコミ平均スコア」が過去に遡って動く。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>設計</th><th>2026-04 に出したレポート</th><th>2026-06 に同じ SQL を流した結果</th></tr></thead>
+<tbody>
+<tr><td>Type1（上書き）</td><td><code>50_299</code> の平均に <code>R001</code>（3.5）が入る</td><td><code>300_999</code> の平均に <code>R001</code> が移る。<strong>両方の帯の数字が変わる</strong></td></tr>
+<tr><td>Type2（版を追加）</td><td><code>50_299</code> の平均に <code>R001</code> が入る</td><td>同じ。<code>fct_review.company_key</code> が 3 月版を指しているので動かない</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>Kimball はこれを「Type 1 destroys the history of a particular field」と書き、さらに事前計算した集約テーブルは「taken offline and recomputed」が必要になると付け加える。CareerVoice では <code>agg_company_rating_daily</code> がそれに当たる。</p>
+
+<h3>(b) <code>fct_scout</code> を現在の <code>member_key</code> で結ぶ — スカウトの宛先が入社後の姿になる</h3>
+
+<p><code>M001</code> は 2026-06-15 に <code>job_change_intent</code> が <code>passive</code> → <code>active</code>、<code>annual_income_band</code> が <code>400_600</code> → <code>600_800</code> に変わり、2026-08-01 に <code>C001</code> へ入社した（<code>current_company_id</code> が <code>C002</code> → <code>C001</code>）。<code>S001</code> は <code>C001</code> が 2026-06-20 に送ったスカウトである。</p>
+
+<p>現在の版で結ぶと、<code>S001</code> は 6/15 以降の版ではなく 8/1 入社後の版に紐づく。すると「<code>C001</code> が自社に在籍している会員へスカウトを送った」ように見える。企業別スカウト返信率の分母から自社社員を除く運用ルールがあれば <code>S001</code> は消え、無ければ返信率が不当に高く出る。どちらにせよ、<strong>スカウトが刺さった理由（当時 <code>active</code> で <code>C002</code> 在籍だった）が消える。</strong></p>
+
+<h3>(c) <code>valid_to</code> を NULL にする — 8 月以降のイベントだけが静かに落ちる</h3>
+
+<p>dbt snapshot の既定では現行行の <code>dbt_valid_to</code> は NULL である。この列をそのまま <code>valid_to</code> にすると、範囲述語が NULL 比較になって UNKNOWN を返し、行が落ちる。</p>
+
+<pre><code>-- 現行行が valid_to = NULL の場合
+where s.sent_at between dm.valid_from and dm.valid_to   -- 現行行に当たるはずの行が落ちる
+</code></pre>
+
+<p>厄介なのは<strong>気づきにくさ</strong>である。<code>S001</code>（6/20）が当たるのは 6/15〜7/31 の版で、この行は既に閉じている（<code>valid_to</code> が入っている）。壊れるのは 8/1 以降のイベントだけなので、テストデータでは再現しない。内部結合なら行が消え、外部結合なら <code>member_key</code> が NULL になって <code>-1</code>（未知）へ落ちる。</p>
+
+<p>もう 1 つ、<code>BETWEEN</code> そのものが罠になる。Kimball は「The end-effective-datetime of a Type 2 dimension record must be exactly equal to the begin-effective-datetime of the next change」と規定し、dbt snapshot もこの規約に従う。境界時刻ちょうどのイベントは <code>BETWEEN</code> だと 2 つの版に当たり、ファクトが 2 行に増える。</p>
+
+<pre><code>-- 正しい形: valid_to に 9999-12-31 を入れ、範囲は半開区間にする
+where s.sent_at &gt;= dm.valid_from
+  and s.sent_at &lt;  dm.valid_to
+</code></pre>
+
+<h2>3. Kimball の原則</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>技法</th><th>定義（Design Tip #152 / SCD Part 1–2）</th><th>使う条件</th></tr></thead>
+<tbody>
+<tr><td>Type 0</td><td>「The attribute value never changes. Facts are always grouped by this original value.」</td><td>durable な識別子と日付ディメンションの属性</td></tr>
+<tr><td>Type 1</td><td>既存の値を新しい値で上書きする</td><td>(1) 誤りの訂正 (2) 履歴を追わないと明示的に決めた属性。ただし規制対象の環境では「Type 1 changes may be outlawed」</td></tr>
+<tr><td>Type 2</td><td>新しいサロゲートキーの行を追加。effective / expiration の日時、変更理由、current flag を持つ</td><td>履歴を完全に残す必要があり、行の増加が許容できる規模</td></tr>
+<tr><td>Type 3</td><td>「alternate reality」を表す列を追加し、旧値をそこへ退避して主列を上書きする</td><td>属性が視点によって正当に複数の値を持つとき（商品分類の付け替えなど）</td></tr>
+<tr><td>Type 4</td><td>「A group of dimension attributes are split off into a separate mini-dimension.」ファクトがベースと mini の両方のサロゲートキーを持つ</td><td>速く変わり、かつ値の組合せ数が小さい属性群</td></tr>
+<tr><td>Type 5</td><td>Type 4 に加え、ベース側に「current profile」の mini キーを Type1 属性として埋め込む</td><td>ファクトを経由せずに現在のプロファイル値へ辿りたいとき</td></tr>
+<tr><td>Type 6</td><td>「Fact rows can be filtered or grouped by either the type 2 value in effect when the measurement occurred or the attribute's current value.」現在値は同じ durable key を持つ全ての過去行へ上書きされる</td><td>版と現在値の両方で同じ属性を切りたいとき</td></tr>
+<tr><td>Type 7</td><td>「The fact table contains dual foreign keys for a given dimension: a surrogate key linked to the dimension table where type 2 attributes are tracked, plus the dimension's durable supernatural key linked to the current row.」</td><td>Type 6 と同じ効果を、物理的な上書きなしに得たいとき</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="aside kimball">
+<p><strong>Design Tip #15 — Type 6 は 2+3+1 である。</strong> Margy Ross は Type 2 を土台に置いた上で、「For all prior dimension rows for a given product, the current roll-up attribute will be overwritten to reflect the current state of the world」と書き、この組合せを「perhaps we should refer to this as Type 6 (2+3+1)」と呼んだ。Type 2 の効果については「the fact table rows will reference the new surrogate key with the new roll-up <strong>thereby perfectly partitioning history</strong>」。履歴を分割するのはディメンションではなく、<strong>ファクトが指すキー</strong>である。</p>
+</div>
+
+<div class="aside kimball">
+<p><strong>ファクトはロード時点でサロゲートキーを解決する。</strong> Kimball はこれを surrogate key pipeline と呼び、「ensures facts use contemporary surrogate keys, guaranteeing the correct dimension profiles are associated with fact table activity」とする。この原則の実務上の意味は 2 つ。(1) 時点解決のロジックは ETL に 1 か所だけ置き、クエリには持ち込まない。(2) 一度書いたファクト行のキーは<strong>後から書き換えない</strong>。ディメンション側に新しい版が増えても、既存のファクト行は古い版を指し続ける。</p>
+</div>
+
+<h2>4. 現代の再解釈</h2>
+
+<h3>ディメンションの日次スナップショット（Functional Data Engineering）</h3>
+
+<p>Beauchemin の主張は「パーティション（行ではなく）が状態の最小単位である」ことに尽きる。<em>the partition (not the row) is the atomic unit of state; always overwrite whole partitions instead of UPDATE/DELETE/APPEND</em>。ディメンションについてはさらに直接的で、SCD2 の代わりに <em>append a full snapshot per run; trade cheap storage for clarity and reproducibility</em> と書く。毎日、ディメンション全体を <code>snapshot_date</code> パーティションに丸ごと書く。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>観点</th><th>SCD2</th><th>日次スナップショット</th></tr></thead>
+<tbody>
+<tr><td>as-of の書き方</td><td><code>event_at &gt;= valid_from AND event_at &lt; valid_to</code>（境界と NULL の扱いを毎回間違える）</td><td><code>snapshot_date = DATE(event_at)</code> の 1 述語</td></tr>
+<tr><td>冪等性</td><td>MERGE で既存行を UPDATE する。再実行すると <code>valid_to</code> の状態に依存する</td><td>パーティション単位の全置換。何度流しても同じ</td></tr>
+<tr><td>バックフィル</td><td>日次逐次。11 月を直すには 11/01 から 30 本を順番に流す</td><td>日ごとに独立。30 日ぶんを並列で流せる</td></tr>
+<tr><td>コードの本数</td><td>日次用と backfill 用で別ロジックになりがち</td><td>1 本</td></tr>
+<tr><td>行数</td><td>会員数 + 変化回数</td><td><strong>会員数 × 日数</strong></td></tr>
+<tr><td>時間精度</td><td>ソースの <code>updated_at</code> の精度そのまま（秒）</td><td><strong>日に丸まる</strong>。日の途中の変化は次のスナップショットまで見えない</td></tr>
+<tr><td>「その日の母集団」の問い</td><td>毎回 as-of 述語が要る</td><td><code>WHERE snapshot_date = '2026-06-20'</code> で終わる</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="aside modern">
+<p><strong>Zach Wilson「SCD-2 considered harmful」の核心は運用コストである。</strong> 彼が挙げるのは主に 3 つ。(1) バックフィルの直列性 —「To fix November 15th, you'd need to... Rerun November 1st... wait for it to finish... Rerun November 2nd...」。(2) クエリの複雑さ —「To get user data 'as of 3 months ago', you need... <code>WHERE valid_from &lt;= '2024-10-01' AND (valid_to &gt; '2024-10-01'...</code>」。(3) 日次用と backfill 用の 2 系統のコードを同期し続ける負担。代替は「all 30 days kick off in parallel... The whole month finishes in the time it takes to run one day」。</p>
+<p>ただし記事のコメント欄で Chris Gambill が反論している。人手で編集される業務データ（Salesforce / NetSuite）や、監査証跡が法的要件になる領域では、「誰がいつ何を変えたか」を行として残す SCD2 が必要で、日次スナップショットでは代替できない。Wilson はこれに答えていない。</p>
+</div>
+
+<h3>何が変わり、何が残るか</h3>
+
+<p>変わるのは<strong>実装手段</strong>だけである。「イベント時点の属性でファクトを集計する」という要求そのものは Kimball の時代から変わっていない。SCD2 も日次スナップショットも、その要求を満たすための 2 通りの物理設計にすぎない。残るのは「ファクトはロード時点で時点属性を確定する」という原則の方で、これはスナップショット方式でも同じ（<code>WHERE snapshot_date = DATE(sent_at)</code> をロード時に 1 回だけ書く）。</p>
+
+<h3>この題材での判断</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>エンティティ</th><th>行数</th><th>変化頻度</th><th>採る方式</th><th>理由</th></tr></thead>
+<tbody>
+<tr><td>会員</td><td>数百万</td><td>高（意欲・年収帯は月単位で動く）</td><td><strong>日次スナップショット <code>dim_member_daily</code></strong>。<code>dim_member</code>（Type2）は <code>member_key</code> の発行と変化の遅い属性に限定</td><td>(1) 数百万 × 変化頻度の Type2 は、<code>valid_from/to</code> の境界がソースの <code>updated_at</code> の精度に依存して壊れやすい (2) 「6/20 時点で <code>active</code> な会員は何人」という母集団の問いが多く、これはスナップショットの得意形 (3) 行数 300 万 × 365 日は BigQuery のパーティション + クラスタリングで吸収できる。クエリは常に 1〜2 パーティションに閉じる</td></tr>
+<tr><td>企業</td><td>数万</td><td>低（<code>employee_size_band</code> は年 1 回程度）</td><td><strong>SCD2</strong>（<code>name</code> は Type1 ＝ Type 6）</td><td>(1) 行の増加が問題にならない (2) 日次にすると「変化の無い日の行」が 99.9% を占め、<code>dim_company</code> を参照する全ファクトに日付結合を強いる (3) <code>name</code> の Type1 上書きは 1 テーブルに閉じている方が自然</td></tr>
+<tr><td>エージェント担当者・エージェンシー</td><td>数千 / 数十</td><td>中（移籍・ティア変更）</td><td><strong>SCD2</strong>（<code>dim_agent</code> と、その縮約 <code>dim_agency</code>）</td><td>成果報酬の帰属が移籍前後で変わる。1 件ごとの帰属が金額に直結するので、日に丸めず秒精度で持つ。縮約ディメンションは<strong>元と同じ SCD 型でなければならない</strong>（片方だけ Type1 にすると §7-a の食い違いが起きる）</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>会員について両方持つのは冗長に見えるが、役割が違う。<code>dim_member</code>（Type2）は<strong>ファクトが指すキーの発行元</strong>で、変化の遅い属性しか持たないので版は増えない。<code>dim_member_daily</code> は<strong>母集団と時点属性の参照先</strong>で、こちらは日次で全件を持つ。速く変わる <code>annual_income_band</code> / <code>job_change_intent</code> は正典どおり <code>dim_member_profile_mini</code>（Type 4）に逃がしてあるので、<code>dim_member</code> の版が増えるのは <code>current_company_id</code> のような転職イベントだけである。</p>
+
+<h2>5. BigQuery + dbt での実装</h2>
+
+<h3>as-of join が何をしているか</h3>
+
+<svg id="dg-asof" viewBox="0 0 800 392" width="100%"
+     style="max-width:800px;height:auto;display:block"
+     xmlns="http://www.w3.org/2000/svg"
+     role="img" aria-labelledby="dg-asof-t dg-asof-d">
+  <title id="dg-asof-t">as-of join：イベント時刻でディメンションの版を選ぶ</title>
+  <desc id="dg-asof-d">M001 の 3 つの時点版が時間軸に並び、その下のイベント 3 件が真上の版へ解決される。R001 は 6/14 以前の版、S001 と P001 は 6/15 から 7/31 の版に当たり、8/1 以降の最新版に落ちるイベントは無い。</desc>
+  <style>
+    #dg-asof{
+      --paper:#fbfbfa; --ink:#22262e; --muted:#5b6472; --soft:#828b9a;
+      --rule:rgba(34,38,46,.14); --accent:#c8571d; --tint:rgba(200,87,29,.10);
+      --sans:system-ui,-apple-system,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+      --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,monospace;
+    }
+    @media (prefers-color-scheme:dark){
+      #dg-asof{--paper:#1a1d23;--ink:#e9ecf1;--muted:#a6afbd;--soft:#7f8898;
+            --rule:rgba(233,236,241,.18);--accent:#f0894f;--tint:rgba(240,137,79,.14);}
+    }
+    :root[data-theme="dark"] #dg-asof{--paper:#1a1d23;--ink:#e9ecf1;--muted:#a6afbd;--soft:#7f8898;
+            --rule:rgba(233,236,241,.18);--accent:#f0894f;--tint:rgba(240,137,79,.14);}
+    :root[data-theme="light"] #dg-asof{--paper:#fbfbfa;--ink:#22262e;--muted:#5b6472;--soft:#828b9a;
+            --rule:rgba(34,38,46,.14);--accent:#c8571d;--tint:rgba(200,87,29,.10);}
+    #dg-asof .bg{fill:var(--paper)}
+    #dg-asof .box{fill:var(--paper);stroke:var(--ink);stroke-width:1}
+    #dg-asof .box-soft{fill:var(--paper);stroke:var(--rule);stroke-width:1}
+    #dg-asof .box-focal{fill:var(--tint);stroke:var(--accent);stroke-width:1.4}
+    #dg-asof .name{fill:var(--ink);font:600 14px var(--sans)}
+    #dg-asof .sub{fill:var(--muted);font:400 11px var(--mono)}
+    #dg-asof .lead{fill:none;stroke:var(--muted);stroke-width:1.4;marker-end:url(#dg-asof-a)}
+    #dg-asof .lead-focal{fill:none;stroke:var(--accent);stroke-width:1.8;marker-end:url(#dg-asof-af)}
+    #dg-asof .mk{fill:var(--muted)} #dg-asof .mkf{fill:var(--accent)}
+  </style>
+  <defs>
+    <marker id="dg-asof-a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <path class="mk" d="M0,0 L9,3.5 L0,7 Z"/></marker>
+    <marker id="dg-asof-af" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <path class="mkf" d="M0,0 L9,3.5 L0,7 Z"/></marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="800" height="392"/>
+
+  <text class="sub" x="48" y="68">M001 の版（snap_members）</text>
+
+  <rect class="box-soft" x="96" y="84" width="200" height="76" rx="6"/>
+  <rect class="box-focal" x="300" y="84" width="256" height="76" rx="6"/>
+  <rect class="box-soft" x="560" y="84" width="192" height="76" rx="6"/>
+
+  <text class="name" x="196" y="110" text-anchor="middle">M001 v1</text>
+  <text class="sub"  x="196" y="128" text-anchor="middle">〜 2026-06-14</text>
+  <text class="sub"  x="196" y="146" text-anchor="middle">C002 / 400_600 / passive</text>
+
+  <text class="name" x="428" y="110" text-anchor="middle">M001 v2</text>
+  <text class="sub"  x="428" y="128" text-anchor="middle">2026-06-15 〜 07-31</text>
+  <text class="sub"  x="428" y="146" text-anchor="middle">C002 / 600_800 / active</text>
+
+  <text class="name" x="656" y="110" text-anchor="middle">M001 v3</text>
+  <text class="sub"  x="656" y="128" text-anchor="middle">2026-08-01 〜 現行</text>
+  <text class="sub"  x="656" y="146" text-anchor="middle">C001 / 600_800 / active</text>
+
+  <path class="lead"       d="M196,248 V160"/>
+  <path class="lead-focal" d="M368,248 V160"/>
+  <path class="lead-focal" d="M488,248 V160"/>
+
+  <rect class="box"       x="144" y="248" width="104" height="64" rx="6"/>
+  <rect class="box-focal" x="316" y="248" width="104" height="64" rx="6"/>
+  <rect class="box-focal" x="436" y="248" width="104" height="64" rx="6"/>
+
+  <text class="name" x="196" y="270" text-anchor="middle">R001</text>
+  <text class="sub"  x="196" y="288" text-anchor="middle">2026-03-10</text>
+  <text class="sub"  x="196" y="304" text-anchor="middle">投稿</text>
+
+  <text class="name" x="368" y="270" text-anchor="middle">S001</text>
+  <text class="sub"  x="368" y="288" text-anchor="middle">2026-06-20</text>
+  <text class="sub"  x="368" y="304" text-anchor="middle">スカウト送信</text>
+
+  <text class="name" x="488" y="270" text-anchor="middle">P001</text>
+  <text class="sub"  x="488" y="288" text-anchor="middle">2026-06-23</text>
+  <text class="sub"  x="488" y="304" text-anchor="middle">応募</text>
+
+  <text class="sub" x="48" y="340">時間</text>
+  <path class="lead" d="M96,336 H744"/>
+
+  <text class="sub" x="48" y="364">太線 ＝ as-of の解決先。S001 と P001 は最新版 v3 ではなく v2 に当たる</text>
+  <text class="sub" x="48" y="382">v1 から v2 は annual_income_band / job_change_intent の変化 ＝ dim_member の行は増えない</text>
+</svg>
+
+<h3>(a) dbt snapshot で <code>snap_companies</code> → <code>dim_company</code> を組む</h3>
+
+<p>スナップショットは<strong>ソースの生の形のまま</strong>取る。加工は下流のモデルでやる（snapshot に SELECT を書くと、後からロジックを直したときに過去の版を作り直せなくなる）。</p>
+
+<pre><code># snapshots/snap_companies.yml
+snapshots:
+  - name: snap_companies
+    relation: source('src_careervoice', 'companies')
+    config:
+      schema: snapshots
+      unique_key: company_id
+      strategy: timestamp
+      updated_at: updated_at
+      dbt_valid_to_current: "cast('9999-12-31' as timestamp)"
+
+  - name: snap_members
+    relation: source('src_careervoice', 'members')
+    config:
+      schema: snapshots
+      unique_key: member_id
+      strategy: timestamp
+      updated_at: updated_at
+      dbt_valid_to_current: "cast('9999-12-31' as timestamp)"
+</code></pre>
+
+<p><code>dbt_valid_to_current</code> を指定すると現行行の <code>dbt_valid_to</code> が NULL ではなく <code>9999-12-31</code> になる（§2-c）。既に NULL で運用しているスナップショットには <code>COALESCE</code> を挟む。<code>strategy: timestamp</code> は <code>updated_at</code> の前進で変化を検知する。<code>companies</code> / <code>members</code> はどちらも CDC で <code>updated_at</code> が入るのでこれで足りる。<code>updated_at</code> 相当の列が無いソースだけ <code>strategy: check</code> + <code>check_cols</code> にする。</p>
+
+<pre><code>-- models/marts/dim_company.sql
+{{ config(materialized='table', cluster_by=['company_id']) }}
+
+with versions as (
+
+    select
+        company_id,
+        industry_code,
+        employee_size_band,
+        listing_status,
+        hq_prefecture_code,
+        parent_company_id,
+        founded_year,
+        corporate_number,
+        dbt_valid_from as valid_from,
+        coalesce(dbt_valid_to, timestamp '9999-12-31') as valid_to
+    from {{ ref('snap_companies') }}
+
+),
+
+-- name は Type1: 最新の社名を全ての版へ配る（Design Tip #15 の 2+3+1）
+current_name as (
+
+    select company_id, name
+    from {{ ref('snap_companies') }}
+    qualify row_number() over (
+        partition by company_id order by dbt_valid_from desc
+    ) = 1
+
+)
+
+select
+    {{ dbt_utils.generate_surrogate_key(['v.company_id', 'v.valid_from']) }} as company_key,
+    v.company_id,
+    v.corporate_number,
+    n.name,
+    i.name       as industry,
+    i.sector_code as sector,
+    v.employee_size_band,
+    v.listing_status,
+    p.name       as hq_prefecture,
+    v.parent_company_id,
+    v.founded_year,
+    v.valid_from,
+    v.valid_to,
+    v.valid_to = timestamp '9999-12-31' as is_current
+from versions as v
+inner join current_name as n on n.company_id = v.company_id
+left join {{ ref('stg_careervoice__industries') }}   as i on i.industry_code = v.industry_code
+left join {{ ref('stg_careervoice__prefectures') }}  as p on p.prefecture_code = v.hq_prefecture_code
+</code></pre>
+
+<p><code>company_key</code> の生成方法（<code>FARM_FINGERPRINT</code> か <code>generate_surrogate_key</code> か）は 03 回の判断に従う。この回に必要なのは「1 つの版に 1 つの <code>company_key</code> がある」ことだけである。</p>
+
+<pre><code># models/marts/schema.yml（抜粋）
+models:
+  - name: dim_company
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [company_id, valid_from]
+      # 版の区間が重なっていない / 隙間が無いことの確認
+      - dbt_utils.expression_is_true:
+          expression: "valid_from &lt; valid_to"
+    columns:
+      - name: company_key
+        tests: [unique, not_null]
+      - name: valid_to
+        tests: [not_null]
+      - name: is_current
+        tests:
+          - not_null
+</code></pre>
+
+<div class="aside kimball">
+<p>正典の <code>dim_company</code> は <code>name</code> を Type1 のみで持つ。Design Tip #15 の完全な Type 6 は「当時の社名」と「現在の社名」を<strong>両方</strong>列として持つ形だが、CareerVoice では社名を集計軸にしないので現在値だけにした。企業の同一性は <code>company_id</code> と <code>corporate_number</code> が担保する。監査で「当時のレポートの社名」を再現する要求が出たら Type 6 に格上げする（§7-c）。</p>
+</div>
+
+<h3>(b) as-of join で <code>fct_scout</code> の <code>member_key</code> を解決する</h3>
+
+<p>まず <code>dim_member</code> を作る。<code>snap_members</code> は <code>members</code> の<strong>どの列が変わっても</strong>版を切るので、<code>dim_member</code> の属性だけを見ると同じ内容の版が連続する。これを畳まないと <code>member_key</code> が意味なく増える。</p>
+
+<pre><code>-- models/marts/dim_member.sql
+{{ config(materialized='table', cluster_by=['member_id']) }}
+
+with versions as (
+
+    select
+        member_id,
+        birth_year,
+        gender,
+        prefecture_code,
+        current_company_id,
+        current_job_category_code,
+        registered_at,
+        dbt_valid_from as valid_from,
+        coalesce(dbt_valid_to, timestamp '9999-12-31') as valid_to
+    from {{ ref('snap_members') }}
+    where deleted_at is null
+
+),
+
+-- dim_member の属性が実際に変わった版だけにフラグを立てる
+flagged as (
+
+    select
+        *,
+        case
+            when to_json_string(struct(
+                     birth_year, gender, prefecture_code,
+                     current_company_id, current_job_category_code))
+                 = lag(to_json_string(struct(
+                     birth_year, gender, prefecture_code,
+                     current_company_id, current_job_category_code)))
+                   over (partition by member_id order by valid_from)
+            then 0 else 1
+        end as is_change
+    from versions
+
+),
+
+collapsed as (
+
+    select
+        *,
+        sum(is_change) over (
+            partition by member_id order by valid_from
+            rows between unbounded preceding and current row
+        ) as version_no
+    from flagged
+
+)
+
+select
+    {{ dbt_utils.generate_surrogate_key(['member_id', 'min(valid_from)']) }} as member_key,
+    member_id,
+    any_value(birth_year)                as birth_year,
+    any_value(gender)                    as gender,
+    any_value(prefecture_code)           as prefecture_code,
+    any_value(current_company_id)        as current_company_id,
+    any_value(current_job_category_code) as current_job_category,
+    date(any_value(registered_at), 'Asia/Tokyo') as registered_date,
+    min(valid_from) as valid_from,
+    max(valid_to)   as valid_to,
+    max(valid_to) = timestamp '9999-12-31' as is_current
+from collapsed
+group by member_id, version_no
+</code></pre>
+
+<p><code>M001</code> の結果。<code>snap_members</code> は 3 版だが、<code>dim_member</code> は <strong>2 行</strong>になる。</p>
+
+<div class="table-wrap">
+<table>
+<caption style="text-align:left;color:var(--muted);font-size:.85rem;padding-bottom:6px;"><code>snap_members</code> の <code>M001</code>（3 版）</caption>
+<thead><tr><th><code>dbt_valid_from</code></th><th><code>dbt_valid_to</code></th><th><code>current_company_id</code></th><th><code>annual_income_band</code></th><th><code>job_change_intent</code></th></tr></thead>
+<tbody>
+<tr><td>2026-01-05 00:00:00</td><td>2026-06-15 09:12:00</td><td>C002</td><td>400_600</td><td>passive</td></tr>
+<tr><td>2026-06-15 09:12:00</td><td>2026-08-01 00:00:00</td><td>C002</td><td>600_800</td><td>active</td></tr>
+<tr><td>2026-08-01 00:00:00</td><td>9999-12-31 00:00:00</td><td>C001</td><td>600_800</td><td>active</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="table-wrap">
+<table>
+<caption style="text-align:left;color:var(--muted);font-size:.85rem;padding-bottom:6px;"><code>dim_member</code> の <code>M001</code>（畳んだ後、2 行）</caption>
+<thead><tr><th><code>member_key</code></th><th><code>member_id</code></th><th><code>current_company_id</code></th><th><code>valid_from</code></th><th><code>valid_to</code></th><th><code>is_current</code></th></tr></thead>
+<tbody>
+<tr><td>(v1)</td><td>M001</td><td>C002</td><td>2026-01-05 00:00:00</td><td>2026-08-01 00:00:00</td><td>false</td></tr>
+<tr><td>(v2)</td><td>M001</td><td>C001</td><td>2026-08-01 00:00:00</td><td>9999-12-31 00:00:00</td><td>true</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><code>(v1)</code> / <code>(v2)</code> は実際にはハッシュ値である（03 回）。ここで重要なのは <strong>6/15 の変化が <code>dim_member</code> の行を増やしていない</strong>こと。増やすのは <code>current_company_id</code> が動いた 8/1 だけである。6/15 の変化は Type 4 の <code>dim_member_profile_mini</code> 側で表現される。</p>
+
+<p>この 2 本を <code>sent_at</code> で解決する。</p>
+
+<pre><code>-- models/marts/fct_scout.sql
+{{ config(
+    materialized = 'table',
+    partition_by = {'field': 'sent_date', 'data_type': 'date'},
+    cluster_by   = ['member_key', 'scout_sender_key']
+) }}
+
+with scouts as (
+
+    select * from {{ ref('stg_careervoice__scouts') }}
+
+),
+
+-- Type 4 の割り当て履歴は snap_members から取る（mini 自体は 15 行の静的表）
+profile_versions as (
+
+    select
+        member_id,
+        annual_income_band,
+        job_change_intent,
+        dbt_valid_from as valid_from,
+        coalesce(dbt_valid_to, timestamp '9999-12-31') as valid_to
+    from {{ ref('snap_members') }}
+
+)
+
+select
+    cast(format_date('%Y%m%d', date(s.sent_at, 'Asia/Tokyo')) as int64) as sent_date_key,
+    date(s.sent_at, 'Asia/Tokyo') as sent_date,
+
+    dm.member_key,                    -- 未解決なら NULL。未知行（-1 / '-1'）へ寄せる（Design Tip #43, 03 回）
+    pm.member_profile_mini_key,
+    ss.scout_sender_key,              -- dim_scout_sender も同じ半開区間で解決する
+    jp.job_posting_key,
+
+    s.scout_id,                       -- 退化ディメンション
+    s.template_id,
+    1 as scout_count
+
+from scouts as s
+
+-- as-of join その1: 会員の版（Type 2）
+left join {{ ref('dim_member') }} as dm
+    on  dm.member_id = s.member_id
+    and s.sent_at   &gt;= dm.valid_from
+    and s.sent_at   &lt;  dm.valid_to
+
+-- as-of join その2: ミニディメンションの割り当て（Type 4）
+left join profile_versions as pv
+    on  pv.member_id = s.member_id
+    and s.sent_at   &gt;= pv.valid_from
+    and s.sent_at   &lt;  pv.valid_to
+left join {{ ref('dim_member_profile_mini') }} as pm
+    on  pm.annual_income_band = pv.annual_income_band
+    and pm.job_change_intent  = pv.job_change_intent
+
+left join {{ ref('dim_scout_sender') }} as ss
+    on  ss.sender_type = s.sender_type
+    and ss.sender_id   = coalesce(s.sender_company_id, s.sender_agent_id)
+    and s.sent_at     &gt;= ss.valid_from
+    and s.sent_at     &lt;  ss.valid_to
+
+left join {{ ref('dim_job_posting') }} as jp
+    on jp.job_posting_id = s.job_posting_id
+</code></pre>
+
+<p><code>S001</code>（<code>C001</code> → <code>M001</code>、2026-06-20 11:30 送信）の解決結果。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>解決方法</th><th><code>member_key</code></th><th>その版の <code>current_company_id</code></th><th><code>member_profile_mini_key</code></th><th>読み取られる事実</th></tr></thead>
+<tbody>
+<tr><td><strong>as-of（正しい）</strong></td><td>(v1)</td><td><strong>C002</strong>（ネクスト技研 在籍）</td><td>(600_800, active)</td><td><code>C001</code> が、他社在籍で転職意欲 <code>active</code> の会員へ送ったスカウト</td></tr>
+<tr><td><code>is_current</code> で結合（誤り）</td><td>(v2)</td><td><strong>C001</strong>（アオゾラ商事 在籍）</td><td>(600_800, active)</td><td><code>C001</code> が自社の社員へ送ったスカウト</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><code>P001</code>（2026-06-23 応募）も同じ版 <code>(v1)</code> に当たる。一方 <code>R001</code>（2026-03-10 投稿）は <code>snap_members</code> の第 1 版の時期だが、<code>dim_member</code> 上では同じ <code>(v1)</code>、ミニディメンションの割り当てだけが <code>(400_600, passive)</code> と異なる。なお <code>fct_review</code> は正典の匿名性の判断により <code>member_key</code> を持たず、投稿時点の属性は <code>dim_review_attributes</code>（ジャンク）に落ちる。as-of 解決の対象が違うだけで、<strong>ロード時点で確定する</strong>という原則は同じである。</p>
+
+<h3>(c) 日次スナップショット版 — <code>dim_member_daily</code></h3>
+
+<pre><code>-- models/marts/dim_member_daily.sql
+{{ config(
+    materialized         = 'incremental',
+    incremental_strategy = 'insert_overwrite',
+    partition_by = {'field': 'snapshot_date', 'data_type': 'date'},
+    cluster_by   = ['member_id'],
+    require_partition_filter = true
+) }}
+
+with days as (
+
+    select full_date as snapshot_date
+    from {{ ref('dim_date') }}
+    where full_date between date '2026-01-01' and current_date('Asia/Tokyo')
+    {% if is_incremental() %}
+      and full_date &gt;= date_sub(current_date('Asia/Tokyo'), interval 3 day)
+    {% endif %}
+
+),
+
+versions as (
+
+    select
+        member_id,
+        current_company_id,
+        current_job_category_code,
+        annual_income_band,
+        job_change_intent,
+        dbt_valid_from as valid_from,
+        coalesce(dbt_valid_to, timestamp '9999-12-31') as valid_to
+    from {{ ref('snap_members') }}
+    where deleted_at is null
+
+)
+
+select
+    d.snapshot_date,
+    v.member_id,
+    dm.member_key,
+    pm.member_profile_mini_key,
+    v.current_company_id,
+    v.current_job_category_code,
+    v.annual_income_band,
+    v.job_change_intent
+from days as d
+inner join versions as v
+    -- 「その日の終わり（翌 00:00 JST）時点で有効だった版」に固定する
+    on  v.valid_from &lt;  timestamp_add(timestamp(d.snapshot_date, 'Asia/Tokyo'), interval 1 day)
+    and v.valid_to   &gt;= timestamp_add(timestamp(d.snapshot_date, 'Asia/Tokyo'), interval 1 day)
+left join {{ ref('dim_member') }} as dm
+    on  dm.member_id  = v.member_id
+    and dm.valid_from &lt;= v.valid_from
+    and dm.valid_to   &gt;  v.valid_from
+left join {{ ref('dim_member_profile_mini') }} as pm
+    on  pm.annual_income_band = v.annual_income_band
+    and pm.job_change_intent  = v.job_change_intent
+</code></pre>
+
+<p>この表を使うと as-of join は述語 1 本になる。</p>
+
+<pre><code>select
+    s.scout_id,
+    md.member_key,
+    md.member_profile_mini_key
+from {{ ref('stg_careervoice__scouts') }} as s
+inner join {{ ref('dim_member_daily') }} as md
+    on  md.member_id     = s.member_id
+    and md.snapshot_date = date(s.sent_at, 'Asia/Tokyo')
+where md.snapshot_date between date '2026-06-01' and date '2026-06-30'  -- require_partition_filter
+</code></pre>
+
+<div class="table-wrap">
+<table>
+<caption style="text-align:left;color:var(--muted);font-size:.85rem;padding-bottom:6px;"><code>dim_member_daily</code> の <code>M001</code>（抜粋）</caption>
+<thead><tr><th><code>snapshot_date</code></th><th><code>member_key</code></th><th><code>current_company_id</code></th><th><code>annual_income_band</code></th><th><code>job_change_intent</code></th></tr></thead>
+<tbody>
+<tr><td>2026-06-14</td><td>(v1)</td><td>C002</td><td>400_600</td><td>passive</td></tr>
+<tr><td><strong>2026-06-15</strong></td><td>(v1)</td><td>C002</td><td>600_800</td><td>active</td></tr>
+<tr><td><strong>2026-06-20</strong></td><td>(v1)</td><td>C002</td><td>600_800</td><td>active</td></tr>
+<tr><td>2026-06-23</td><td>(v1)</td><td>C002</td><td>600_800</td><td>active</td></tr>
+<tr><td>2026-08-01</td><td>(v2)</td><td>C001</td><td>600_800</td><td>active</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>丸めの副作用が 1 か所ある。変化は 6/15 09:12 に起きたが、この表では 6/15 の行が<strong>丸ごと</strong>変化後の値になる。6/15 08:00 に送られたスカウトは <code>active</code> として解決され、実際には <code>passive</code> だった。日精度で足りる分析（母集団、意欲別のファネル）なら許容できる。秒精度が要る分析（変化の直後 1 時間の反応を見る）には SCD2 側を使う。</p>
+
+<div class="aside modern">
+<p><strong>スナップショットは「変化しなかった日」も書く。</strong> 会員 300 万人なら 1 日 300 万行、1 年で約 11 億行になる。これが成立するのは (1) パーティションが <code>snapshot_date</code> で切れていてクエリが 1〜2 パーティションに閉じる (2) 列指向で、同じ値が続く列は圧縮が効く (3) <code>require_partition_filter: true</code> が全走査を禁じる、の 3 つが揃うから。BigQuery で <code>require_partition_filter</code> を外したままこの設計にすると、1 クエリで年間全走査が起きる。</p>
+</div>
+
+<h3>(d) 「現在値で見たい」ときは自然キーで再結合する</h3>
+
+<p>ファクトが指しているのはイベント時点の版である。現在値で切りたい要求は、同じ <code>dim_company</code> をもう一度、<code>company_id</code>（durable な自然キー）で結んで満たす。ファクトに二重 FK を持たせる Type 7 は採らない。</p>
+
+<pre><code>select
+    at_review.employee_size_band as size_band_at_review,   -- 投稿当時の規模
+    now.employee_size_band       as size_band_current,     -- 現在の規模
+    count(*)                        as review_count,
+    sum(f.overall_score)            as sum_overall_score,
+    safe_divide(sum(f.overall_score), count(*)) as avg_overall_score
+from {{ ref('fct_review') }} as f
+inner join {{ ref('dim_company') }} as at_review
+    on at_review.company_key = f.company_key
+inner join {{ ref('dim_company') }} as now
+    on  now.company_id = at_review.company_id
+    and now.is_current
+group by 1, 2
+order by 1, 2
+</code></pre>
+
+<div class="table-wrap">
+<table>
+<caption style="text-align:left;color:var(--muted);font-size:.85rem;padding-bottom:6px;"><code>C002</code> のクチコミがどこに載るか（<code>R001</code> = 2026-03-10 投稿、<code>C002</code> は 2026-05-01 に規模帯が変化）</caption>
+<thead><tr><th>切り口</th><th>行</th><th>意味</th></tr></thead>
+<tbody>
+<tr><td><code>size_band_at_review</code></td><td><code>50_299</code></td><td>「50〜299 人の会社に対するクチコミの平均は 3.5」— 投稿当時の実感</td></tr>
+<tr><td><code>size_band_current</code></td><td><code>300_999</code></td><td>「いま 300〜999 人の会社が過去に受けたクチコミの平均は 3.5」— 現在の企業群での比較</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>どちらも正しく、問いが違う。Type 1 だけの設計は前者を、Type 2 だけの設計は後者を答えられない。この 2 段結合で両方を返せるのが、正典が「ファクトはイベント時点の <code>company_key</code>、現在値は <code>company_id</code> で再結合」と固定した理由である。</p>
+
+<h2>6. 判断基準</h2>
+
+<p>行数 × 変化頻度 × 必要な時間精度の 3 軸で決める。上から順に条件に当てはめ、最初に当たった行を採る。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>行数</th><th>変化頻度</th><th>必要な時間精度</th><th>選択</th><th>CareerVoice</th></tr></thead>
+<tbody>
+<tr><td>任意</td><td>変化しない（定義上）</td><td>—</td><td><strong>Type 0</strong></td><td><code>dim_date</code>、<code>dim_channel</code>、<code>dim_contract_plan</code>、<code>dim_moderation_reason</code></td></tr>
+<tr><td>任意</td><td>変化は誤りの訂正だけ／履歴を追わないと決めた属性</td><td>不要</td><td><strong>Type 1</strong></td><td><code>dim_company.name</code>、<code>dim_job_category</code>、<code>dim_job_posting</code></td></tr>
+<tr><td>〜数万</td><td>年単位</td><td>秒</td><td><strong>Type 2</strong></td><td><code>dim_company</code>、<code>dim_scout_sender</code></td></tr>
+<tr><td>〜数千</td><td>月単位</td><td>秒（金額に直結）</td><td><strong>Type 2</strong></td><td><code>dim_agent</code>（移籍）、<code>dim_agency</code>（縮約。元と同じ型に揃える）</td></tr>
+<tr><td>数百万以上</td><td>月単位以上</td><td>日でよい</td><td><strong>日次スナップショット</strong></td><td><code>dim_member_daily</code></td></tr>
+<tr><td>数百万以上</td><td>高頻度、かつ属性の<strong>組合せ数が小さい</strong>（数十〜数千）</td><td>イベント時刻</td><td><strong>Type 4 ミニディメンション</strong></td><td><code>dim_member_profile_mini</code>（5 × 3 = 15 行）</td></tr>
+<tr><td>数百万以上</td><td>高頻度、組合せ数が大きい（連続値・自由記述）</td><td>イベント時刻</td><td><strong>ファクトの属性にする</strong>（退化 or メジャー）</td><td><code>fct_placement.annual_income</code>（帯ではなく実額）</td></tr>
+<tr><td>—</td><td>—</td><td>版と現在値の両方が要る</td><td><strong>版 → 自然キー → <code>is_current</code> 行</strong>（Type 6/7 の効果）</td><td><code>dim_company</code> の 2 段結合（§5-d）</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>この題材で採らなかった 2 つと、採る条件</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>技法</th><th>採らない理由</th><th>採ることになる条件</th></tr></thead>
+<tbody>
+<tr><td>Type 3</td><td>「1 世代前」で足りる属性が無い。<code>employee_size_band</code> は 2 段階以上動きうる</td><td>組織改編で「旧体制 / 新体制」の 2 通りだけを並べて見たい、と業務側が明示したとき</td></tr>
+<tr><td>Type 5（Type 4 + Type1 アウトリガー）</td><td><code>dim_member</code> から現在のプロファイルへ直行する分析要求が今は無い。列を増やすと <code>dim_member</code> の Type1 更新が毎日走る</td><td>ファクトを経由せず「現在 <code>active</code> の会員一覧」を BI から直に引きたくなったとき。ただし <code>dim_member_daily</code> の最新パーティションで代替できる</td></tr>
+<tr><td>Type 7（ファクトに二重 FK）</td><td>全ファクトに <code>*_id</code> 列を追加する変更コストに対し、現在値での分析要求が少ない</td><td>2 段結合のコストが実測で問題になったとき。BigQuery では <code>dim_company</code> が数万行なのでまず起きない</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>7. 演習</h2>
+
+<h3>(a) 担当者の移籍と成果報酬の帰属</h3>
+
+<p>エージェント担当者 <code>AG01</code>（佐藤）が、エージェンシー <code>A01</code>（キャリアブリッジ、<code>gold</code>）から <code>A02</code>（ワークリンク、<code>standard</code>）へ移籍した。移籍前に <code>AG01</code> が成立させた <code>fct_placement</code> の <code>fee_amount</code> は、どちらのエージェンシーに計上されるべきか。<code>fct_placement</code> は <code>agency_key</code> と <code>agent_key</code> の両方を持つことに注意する。</p>
+
+<details>
+<summary>解答例</summary>
+<p><strong>既定は「移籍前の <code>A01</code>」。</strong> <code>placements.agency_id</code> はソースが持っている「契約したエージェンシー」なので、移籍しても過去の行の値は <code>A01</code> のままである。<code>agency_key</code> はそれを <code>hired_at</code> 時点で <code>dim_agency</code> の版へ as-of 解決するだけで、正しい答えが出る。<code>agent_key</code>（<code>scouts.sender_agent_id</code> 経由、無ければ <code>-1</code>）も <code>hired_at</code> 時点の <code>dim_agent</code> の版を指し、そこには平坦化された <code>agency_name</code> = キャリアブリッジ、<code>agency_tier</code> = <code>gold</code> が入っている。<strong>2 つの経路が同じ答えを返す</strong>のが正しい状態。</p>
+<p><strong>ここが崩れるのは、片方だけ Type1 にしたとき。</strong> <code>dim_agent</code> を Type1 にすると <code>agent_key</code> は変わらないまま <code>agency_name</code> / <code>agency_tier</code> だけが <code>A02</code> / <code>standard</code> に上書きされる。すると同じ <code>fct_placement</code> の 1 行から、<code>agency_key</code> 経由では <code>A01</code>、<code>agent_key</code> 経由では <code>A02</code> という 2 つの答えが出る。<strong>縮約ディメンションは元のディメンションと同じ SCD 型に揃えなければならない</strong>、というのがこの演習の結論である。</p>
+<p>その上で「どちらのエージェンシーに計上すべきか」は業務ルールで決まる。判断基準の表の行の使い分けは次のとおり。</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>業務上の問い</th><th>正しい帰属</th><th>適用する行</th></tr></thead>
+<tbody>
+<tr><td>成果報酬の請求先はどこか（会計）</td><td><code>A01</code>（契約したのは移籍前のエージェンシー）</td><td>「〜数千 × 月単位 × 秒 → Type 2」。既定の as-of 解決がそのまま答え</td></tr>
+<tr><td>いまワークリンクにいる担当者は累計いくら決めたか（人事評価）</td><td><code>A02</code></td><td>「版と現在値の両方が要る → 自然キー再結合」。<code>agent_id</code> で <code>dim_agent</code> の <code>is_current</code> 行へ再結合する（§5-d と同じ 2 段結合）</td></tr>
+<tr><td><code>A01</code> が <code>A02</code> に吸収合併された</td><td><code>A02</code>（過去分も遡って移す）</td><td>これは移籍ではなく法人格の承継。<code>dim_agent</code> / <code>dim_agency</code> の SCD ではなく、エージェンシーの承継関係を別に持つ問題（企業側の <code>br_company_hierarchy</code> と同型、06 回）</td></tr>
+</tbody>
+</table>
+</div>
+<p>設計としては <strong>as-of 解決を既定にしておく</strong>のが安全。後から「現在の所属で見たい」は再結合で足せるが、Type1 で上書きしてしまうと請求先を復元できない。</p>
+</details>
+
+<h3>(b) <code>M001</code> の <code>dim_member</code> は何行になるか</h3>
+
+<p><code>M001</code> は 2026-06-15 09:12 に <code>job_change_intent</code> が <code>passive</code> → <code>active</code>、<code>annual_income_band</code> が <code>400_600</code> → <code>600_800</code> に変わり、2026-08-01 00:00 に <code>C001</code> へ入社して <code>current_company_id</code> が <code>C002</code> → <code>C001</code> になった。<code>dim_member</code> は何行になり、各行の <code>valid_from</code> / <code>valid_to</code> はどうなるか。</p>
+
+<details>
+<summary>解答例</summary>
+<p><strong>2 行。</strong></p>
+<div class="table-wrap">
+<table>
+<thead><tr><th><code>member_key</code></th><th><code>current_company_id</code></th><th><code>valid_from</code></th><th><code>valid_to</code></th><th><code>is_current</code></th></tr></thead>
+<tbody>
+<tr><td>(v1)</td><td>C002</td><td>2026-01-05 00:00:00（登録時点）</td><td>2026-08-01 00:00:00</td><td>false</td></tr>
+<tr><td>(v2)</td><td>C001</td><td>2026-08-01 00:00:00</td><td>9999-12-31 00:00:00</td><td>true</td></tr>
+</tbody>
+</table>
+</div>
+<p>6/15 の変化は <code>annual_income_band</code> と <code>job_change_intent</code> だけで、この 2 列は正典で <code>dim_member_profile_mini</code>（Type 4）に切り出してある。<code>dim_member</code> の属性は 1 つも動いていないので版は増えない。<code>snap_members</code> には 3 版できるので、§5-b の <code>flagged</code> / <code>collapsed</code> CTE で連続する同値の版を畳む必要がある。</p>
+<p>畳まないと何が壊れるか。<code>dim_member</code> が 3 行になり、<code>fct_scout</code> の <code>member_key</code> の distinct 数が「会員の実質的な状態数」とずれる。<code>COUNT(DISTINCT member_key)</code> を会員数の近似に使っている集計（<code>agg_*</code>）が水増しされる。<code>member_id</code> で数え直せば直るが、そもそも <code>member_key</code> は「区別すべき状態が変わったところ」で切るべきものである。</p>
+<p>参考: <code>S001</code>（6/20）と <code>P001</code>（6/23）はどちらも <code>(v1)</code> に当たる。属性の違いは <code>member_profile_mini_key</code> = <code>(600_800, active)</code> 側で表現される。</p>
+</details>
+
+<h3>(c) <code>dim_company.name</code> を Type1 にして困る分析はあるか</h3>
+
+<p>正典では <code>dim_company.name</code> は Type1（現在の社名で全版を上書き）である。この判断で困る分析があるか。あるなら、それは Type1 の問題か別の問題か。</p>
+
+<details>
+<summary>解答例</summary>
+<p><strong>通常の分析では困らない。</strong> 企業の同一性は <code>company_id</code> が担保し、社名は表示用ラベルである。「旧社名で GROUP BY したい」という問いは存在しない。判断基準の表の「変化は誤りの訂正だけ／履歴を追わないと決めた属性 → Type 1」の行がそのまま当てはまる。</p>
+<p><strong>困るのは 2 つの場面。</strong></p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>場面</th><th>何が起きるか</th><th>Type1 の問題か</th></tr></thead>
+<tbody>
+<tr><td>監査・突合。2026-03 に配信したレポートや公開したクチコミページと、いま同じ SQL を流した結果を突き合わせる</td><td>社名が変わっていて一致しない。「当時のレポートに載っていた社名」を DWH から復元できない</td><td><strong>Type1 の問題。</strong> 再現性が要件なら Type 6 に格上げする（<code>name</code> を版ごとに残し、<code>current_name</code> を Type1 で併置。Design Tip #15 の完全形）</td></tr>
+<tr><td>社名変更が<strong>合併</strong>を伴う。<code>corporate_number</code> も変わる</td><td>旧法人に対する <code>R001</code> のようなクチコミが、新法人の評価に混ざる</td><td><strong>Type1 の問題ではない。</strong> 別法人なのに <code>company_id</code> を使い回したことが原因。<code>corporate_number</code> の変化を検知したら新しい <code>company_id</code> を発行し、承継関係は <code>br_company_hierarchy</code> で表す（06 回）</td></tr>
+</tbody>
+</table>
+</div>
+<p>後者は SCD の型をいくら変えても直らない。「同一性をどのキーで判定するか」の問題であり、SCD はその前提の上に乗る技法だからである。</p>
+</details>
+
+<h2>8. 参考: 手元の基盤ではどうか</h2>
+
+<div class="aside">
+<ul>
+<li><code>news_pipeline</code> の <code>summaries</code> は <code>/recalculate</code> でスコアを<strong>上書き</strong>する。これは Type 1 である。<code>scoring_version</code> で「どの採点ロジック版か」は分かるが、「ある記事が 0.72 から 0.61 に下がったのはいつか」は残らない。プロンプトを変えた前後で通知ランキングがどう動いたかを検証できない。</li>
+<li>この回の基準を当てると、行数は数千、変化頻度は再採点のたび、必要な時間精度は日 —「数百万以上」に当たらないので Type 2 も現実的だが、<code>summaries</code> には <code>updated_at</code> 相当の列が無い（日時列は <code>raw_articles</code> 側にしかない）。<code>strategy: timestamp</code> が使えず <code>strategy: check</code> + <code>check_cols</code> になる、という制約がそのまま設計を決める。</li>
+<li><code>dbt_logs_analysis</code> には SCD の対象になるディメンションが 1 つも無い。<code>mart_url_performance</code> も <code>mart_error_analysis</code> もファクトの集約で、<code>url_path</code> や HTTP ステータスは Type 0 の世界である。属性を持つマスタが無い基盤では、この回の論点そのものが発生しない。</li>
+<li><strong>試せる種:</strong> <code>snapshots/snap_summaries.yml</code> を <code>strategy: check</code>, <code>check_cols: ['importance_score', 'relevance_score']</code> で置き、<code>/recalculate</code> の前後で <code>dbt_valid_from</code> がどう切れるかを見る。<code>check</code> 戦略が「実行間隔より短い変化を取りこぼす」ことも同時に確認できる。</li>
+</ul>
+</div>
+
+<h2>参照文献</h2>
+
+<ul class="ref">
+<li>Kimball &amp; Ross, <em>The Data Warehouse Toolkit, 3rd ed.</em> ch.5 — <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/data-warehouse-dw-toolkit/">kimballgroup.com</a></li>
+<li>Kimball, <em>Slowly Changing Dimensions</em>（Type 1）— <a href="https://www.kimballgroup.com/2008/08/slowly-changing-dimensions/">kimballgroup.com/2008/08</a></li>
+<li>Kimball, <em>Slowly Changing Dimensions, Part 2</em>（Type 2 / 3、surrogate key pipeline）— <a href="https://www.kimballgroup.com/2008/09/slowly-changing-dimensions-part-2/">kimballgroup.com/2008/09</a></li>
+<li>Ross, <em>Design Tip #15: Combining SCD Techniques</em>（Type 6 = 2+3+1）— <a href="https://www.kimballgroup.com/wp-content/uploads/2012/05/DT15CombiningSCD.pdf">PDF</a></li>
+<li>Ross, <em>Design Tip #152: Slowly Changing Dimension Types 0, 4, 5, 6 and 7</em> — <a href="https://www.kimballgroup.com/2013/02/design-tip-152-slowly-changing-dimension-types-0-4-5-6-7/">kimballgroup.com/2013/02</a></li>
+<li>Kimball, <em>Design Tip #43: Dealing With Nulls In The Dimensional Model</em> — <a href="https://www.kimballgroup.com/2003/02/design-tip-43-dealing-with-nulls-in-the-dimensional-model/">kimballgroup.com/2003/02</a></li>
+<li>Ross, <em>Design Tip #127: Creating and Managing Mini-Dimensions</em> — <a href="https://www.kimballgroup.com/2010/09/design-tip-127-creating-and-managing-mini-dimensions/">kimballgroup.com/2010/09</a></li>
+<li>Beauchemin, <em>Functional Data Engineering</em>（解説）— <a href="https://www.ssp.sh/brain/functional-data-engineering/">ssp.sh/brain/functional-data-engineering</a> ／ <a href="https://www.ssp.sh/brain/snapshotting/">ssp.sh/brain/snapshotting</a></li>
+<li>Zach Wilson, <em>SCD-2 considered harmful! Part 2</em> — <a href="https://blog.dataexpert.io/p/stop-using-slowly-changing-dimensions">blog.dataexpert.io</a></li>
+<li>dbt, <em>Snapshots</em> — <a href="https://docs.getdbt.com/docs/build/snapshots">docs.getdbt.com/docs/build/snapshots</a></li>
+<li>dbt, <em>BigQuery configurations</em>（<code>insert_overwrite</code>, <code>partition_by</code>, <code>require_partition_filter</code>）— <a href="https://docs.getdbt.com/reference/resource-configs/bigquery-configs">docs.getdbt.com</a></li>
+<li>Google Cloud, <em>パーティション分割テーブルの概要</em> — <a href="https://cloud.google.com/bigquery/docs/partitioned-tables">cloud.google.com/bigquery</a></li>
+</ul>
+
+</body>
+</html>
