@@ -67,3 +67,27 @@
 - 08: complete（ラウンド2 N-1〜N-6 を grep で確認: 創作引用 0 件、URL 全て references 内。Ruling: 再々レビュー省略）
 - 全11本 完了。次: 横断レビュー（一貫性）→ 修正ウェーブ（03 §5(e) audit_key の 10 回への整合を含む）→ Playwright 目視 → publish --dry-run
 - 横断レビュー起動（ダイジェスト review/_digest.md を自動生成して渡した）。全11本 <title> 形式一致、check_svg 全て 0 errors を確認済み
+
+## 一時中断（2026-09-08 夜、ユーザー指示）
+
+**状態**: 全11本の執筆・個別レビュー・修正が完了。横断レビューは起動直後に停止（成果物なし。`review/cross_review.md` は未作成）。
+
+**再開手順**（次のセッションで）:
+1. `docs/data_mart_modeling/progress.md`（このファイル）と `canon/plan.md` を読む
+2. 横断レビューを再起動: 横断レビュー用のプロンプトは本ファイル末尾「横断レビューの依頼文」を再利用。入力は `canon/domain.md` / `canon/style.md` / `canon/plan.md` / `review/_digest.md`（自動抽出ダイジェスト。HTML を変えたら `_digest.md` を再生成する — 生成スクリプトは git log `横断レビュー用ダイジェストを追加` のコミット時の Bash 履歴には残っていないため、必要なら同等の抽出を書き直す: 各 HTML の p.meta / h2 / 正典外モデル名 / 「NN 回」参照 / サンプル ID / 規約キーワード出現数）
+3. 横断レビューの指摘 + 既知の TODO を1つの修正ウェーブ（1エージェント）で処理:
+   - **既知 TODO**: `html/03_dimensions.html` §5(e) の `audit_key()` 下書き定義を 10 回の正本（引数=値、`quality_flag` は `ok`/`estimated`/`suspect`、`loaded_at`=`run_started_at`、`source_system`=`'src_careervoice'`）に揃える。または「下書き。正本は 10 回」と明記して差分を注記
+4. 修正後に `python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py html/*.html` を全本 0 errors に
+5. Playwright でライト/ダーク両方をレンダリングして目視（news-digest SKILL.md 手順7のスクリプトを `digest.html` → 各 HTML に読み替え）
+6. `cd news_pipeline && uv run python scripts/digest/publish.py --html ../docs/data_mart_modeling/html/NN_*.html --title "<title の文字列>" --dry-run` を11本分。**公開（--dry-run なし）はユーザーの指示があるまで実行しない**。公開単位（1本ずつ／一括）も未確認
+7. 公開後は family-share の URL を `progress.md` に記録
+
+**モデル**: 執筆・レビューとも opus。レート制限に2回当たった（session limit）。同時実行は 5 本程度に抑える
+
+**横断レビューの依頼文**（再利用用）:
+- 00 の全11回一覧が各 `<title>` と一致するか
+- 「NN 回で扱う」参照の参照先が実際にその論点を扱っているか
+- 裁定済み規約（正典 §4・§6）: SCD2 SK は INT64 FARM_FINGERPRINT で 5 本／未知値 -1（STRING は '-1'）／fct_review は member_key を持たない／M001 の dim_member は 2 行／agency_key と agent_key の持ち方／DATE パーティション列／テスト where は各テストの config か dbt_project.yml data_tests 配下／audit_key() は 10 回が正本／agg_* は audit_key なし／dim_audit.quality_flag の値域
+- サンプル ID の事実（S003, C002 5/1, M001 6/15・8/1, P001, K001）の回間一致
+- 正典外モデル名（`review/_digest.md` 末尾）が「演習内提案／対案／他プロジェクト例／手元基盤の実名」と明示されているか
+- p.meta・参照文献節・.table-wrap の有無
