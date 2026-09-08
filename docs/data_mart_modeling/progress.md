@@ -28,3 +28,5 @@
 - 01 再レビュー: 15件 ADDRESSED、新規 Important 2（N1 agency_key の -1 の意味づけ / N2 縮約ディメンションの定義）+ 軽微4 → 修正ラウンド 3/3 送付
 - 00: complete（再レビュー APPROVE、12/12 addressed）
 - 01: complete（修正ラウンド3 N1〜N6 反映をオーケストレータが grep で確認: -1 文言 / 縮約ディメンション定義 / DT#164 参照 / moderation_rounds 定義 / audit_key コメント。Ruling: 再々レビューは省略 — 6件とも文言修正で SQL 不変のため — 誤りなら横断レビューで検出）
+- 02 再レビュー: 14件 ADDRESSED、新規 Important 2（S003 未反映 / パーティション列でないキーで絞るクエリ例）→ 修正ラウンド 2/3 送付
+- 05 レビュー REVISE（critical=1 important=7 minor=8。C-1 は dim_member の版数の前提ズレ＝正典裁定と整合させる）→ 修正ラウンド 1/3 送付
