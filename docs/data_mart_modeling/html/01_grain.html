@@ -85,10 +85,12 @@
 
 <ul>
 <li><strong>全行に <code>review_count = 1</code> を置く</strong>: <code>SUM(review_count)</code> = 4。真値は 1。<code>R001</code> が「4件のクチコミ」として企業ページの評価件数に出る。</li>
-<li><strong>遷移行を <code>review_count = 0</code> にする</strong>: 件数は 1 に戻るが、二重計上が消えたわけではない。<code>overall_score</code> はクチコミ粒度の値なので4行すべてに複製されており、<code>AVG(overall_score)</code> は<strong>行数＝遷移回数で重み付けされる</strong>。差し戻しの多いクチコミほど企業平均を強く引っ張る、という業務上まったく正当化できない重み付けが入る。しかも <code>R001</code> 単独では平均が 3.5 のまま正しく見えるので、<strong>壊れていることに気付けない</strong>。件数の 1→4 と違い、この歪みはテストでも目視でも表面化しない。</li>
+<li><strong>遷移行を <code>review_count = 0</code> にする</strong>: 件数は 1 に戻るが、二重計上が消えたわけではない。<code>overall_score</code> はクチコミ粒度の値なので4行すべてに複製されており、<code>AVG(overall_score)</code> は<strong>行数＝遷移回数で重み付けされる</strong>。差し戻しの多いクチコミほど企業平均を強く引っ張る、という業務上まったく正当化できない重み付けが入る。</li>
 </ul>
 
-<p>正しくは、投稿は <code>fct_review</code>（1行 = 投稿された1クチコミ、トランザクション）、審査ライフサイクルは <code>fct_review_moderation</code>（1行 = 1クチコミの審査ライフサイクル、累積スナップショット、<code>moderation_rounds</code> = 2 ＝ 投稿者に差し戻された往復を1として数えた回数であって、<code>screening</code> を通過した回数ではない）。両者は <code>review_id</code>（退化ディメンション）で繋がるが、同じ表には入らない。</p>
+<p>後者の厄介さは、<code>R001</code> 単独では平均が 3.5 のまま正しく見えることにある。<strong>壊れていても気付けない。</strong>件数の 1→4 と違い、この歪みはテストでも目視でも表面化しない。</p>
+
+<p>正しくは、投稿は <code>fct_review</code>（1行 = 投稿された1クチコミ、トランザクション）、審査ライフサイクルは <code>fct_review_moderation</code>（1行 = 1クチコミの審査ライフサイクル、累積スナップショット、<code>moderation_rounds</code> = 2 ＝ 審査担当者が判定を下した回数（03-11 の差し戻しと 03-12 の公開）であって、<code>screening</code> を通過した回数ではない）。両者は <code>review_id</code>（退化ディメンション）で繋がるが、同じ表には入らない。</p>
 
 <h3>(b) <code>fct_scout</code> と <code>fct_scout_funnel</code> を1表にする</h3>
 
@@ -271,8 +273,9 @@ models:
       1行 = 1応募の1選考ステージ遷移（`selection_events` の1イベント）。
       粒度キー: `event_id`。`audit_key` は行の由来（バッチ・品質フラグ）を指す
       外部キーであって粒度キーではない。全ファクト共通、DT#164、10回で扱う。
-      エージェント関与は解像度の違う2本で持つ: `agency_key`（縮約ディメンション、
-      紹介経由でも決まる）と `agent_key`（スカウト経由でのみ担当者まで決まる）。
+      エージェント関与は解像度の違う2本で持つ: `agency_key`（縮約ディメンション。
+      求人がエージェント経由なら紹介経由でも決まる）と
+      `agent_key`（スカウト経由でのみ担当者まで決まる）。
       入れないもの: 応募そのもの（`applications.applied_at`）、
       応募単位の所要日数（`fct_application_pipeline` に置く）。
     data_tests:
@@ -288,7 +291,9 @@ models:
             compare_model: ref('stg_careervoice__selection_events')
     columns:
       - name: agency_key
-        description: "エージェンシー。-1 = エージェント関与なし。"
+        description: >
+          エージェンシー。-1 = エージェンシーを特定できない
+          （直接応募、企業スカウト、および直接掲載求人へのエージェント紹介）。
         data_tests:
           - not_null   # COALESCE(..., -1) が効いているか（DT#43、NULL 外部キー禁止）
       - name: agent_key
@@ -415,7 +420,8 @@ SELECT
     COALESCE(dcat.job_category_key, -1) AS job_category_key,
     COALESCE(dch.channel_key, -1) AS channel_key,
 
-    -- エージェンシー。-1 = エージェント関与なし
+    -- エージェンシー。-1 = エージェンシーを特定できない
+    --   （直接応募、企業スカウト、および直接掲載求人へのエージェント紹介）
     -- 求人がエージェント経由（job_postings.agency_id）か、スカウト送信者の所属で決まる
     COALESCE(dag.agency_key, -1) AS agency_key,
 
@@ -423,7 +429,9 @@ SELECT
     -- スカウト経由（scouts.sender_agent_id）でのみ個人まで一意に決まる
     COALESCE(da.agent_key, -1) AS agent_key,
 
-    -- 監査ディメンション（DT#164）。全ファクト共通。値の生成は10回で定義するマクロに委ねる
+    -- 監査ディメンション（DT#164）。全ファクト共通。
+    -- {{ audit_key() }} は10回で定義するマクロ。それまでは -1（dim_audit の未知行）を
+    -- 置いても粒度の議論は変わらない
     {{ audit_key() }} AS audit_key,
 
     -- 粒度に忠実な唯一のメジャー
@@ -469,9 +477,11 @@ LEFT JOIN {{ ref('dim_channel') }} AS dch
 
 <p><strong>解像度の違う2本の FK を並べる。</strong><code>agent_key</code>（担当者）はスカウト経由でしか決まらない。<code>source_channel = 'agent_referral'</code> のような紹介経由は <code>scouts</code> に行が無いからだ。</p>
 
-<p>一方 <code>agency_key</code> は <code>job_postings.agency_id</code>（またはスカウト送信者の所属）から決まるので、紹介経由でも失われない。</p>
+<p>一方 <code>agency_key</code> は <code>job_postings.agency_id</code>（またはスカウト送信者の所属）から決まるので、<strong>求人がエージェント経由なら紹介経由でも失われない</strong>。逆に、直接掲載求人へのエージェント紹介はどちらの手がかりも無く <code>-1</code> に落ちる——解像度を1段落としても、関与の有無そのものを常に復元できるわけではない。</p>
 
-<p><code>dim_agency</code> は <code>dim_agent</code> の<strong>縮約（shrunken/rollup）ディメンション</strong>（DWT ch.4）で、属性が <code>dim_agent</code> の完全な部分集合になっている——つまりコンフォームド。だから「担当者別」と「エージェンシー別」を同じ <code>agency_tier</code> で drill across できる。</p>
+<p><code>dim_agency</code> は <code>dim_agent</code> の<strong>縮約（shrunken/rollup）ディメンション</strong>（DWT ch.4）。<code>agency_name</code> / <code>agency_tier</code> を <code>dim_agent</code> と<strong>同一の名前・同一の値</strong>で共有する（<code>dim_agency</code> 固有の <code>contract_start_date</code> は、エージェンシー粒度でしか意味を持たない属性）。</p>
+
+<p>共有部分がコンフォームドである限り drill across は成立する。だから「担当者別」と「エージェンシー別」を同じ <code>agency_tier</code> で並べられる。</p>
 
 <p>ここで <code>dim_agent</code> を <code>agency_id</code> で結んで済ませたくなるが、1エージェンシーに複数担当者がいるので<strong>一対多になり粒度が崩れる</strong>。<strong>解像度が足りないときに粗い側のディメンションを別 FK として足すのが正解で、細かい側のディメンションを粗いキーで結ぶのは誤り</strong>。前者は行数を変えず、後者は変える。</p>
 
@@ -650,7 +660,7 @@ GROUP BY view_date_key, company_key
 <h2>参照文献</h2>
 
 <ul class="ref">
-<li>Ralph Kimball, Margy Ross, <em>The Data Warehouse Toolkit</em>, 3rd ed. (2013) ch.2–3 — <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/data-warehouse-dw-toolkit/">kimballgroup.com</a></li>
+<li>Ralph Kimball, Margy Ross, <em>The Data Warehouse Toolkit</em>, 3rd ed. (2013) ch.2–4 — <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/data-warehouse-dw-toolkit/">kimballgroup.com</a></li>
 <li>Ralph Kimball, <em>Declaring the Grain</em> (2003) — <a href="https://www.kimballgroup.com/2003/03/declaring-the-grain/">kimballgroup.com/2003/03/declaring-the-grain/</a></li>
 <li>Ralph Kimball, <em>The Matrix</em> (1999) — <a href="https://www.kimballgroup.com/1999/12/the-matrix/">kimballgroup.com/1999/12/the-matrix/</a></li>
 <li>Design Tip #3, <em>Focus On Business Process, Not Business Departments!</em> — <a href="https://decisionworks.com/2000/01/design-tip-3-focus-on-business-process-not-business-departments/">decisionworks.com</a></li>
@@ -658,6 +668,7 @@ GROUP BY view_date_key, company_key
 <li>Design Tip #179, <em>Key Tenets of the Kimball Method</em> — <a href="https://www.kimballgroup.com/2015/11/design-tip-179-key-tenets-of-kimball-method/">kimballgroup.com</a></li>
 <li>Design Tip #43, <em>Dealing With Nulls In The Dimensional Model</em> — <a href="https://www.kimballgroup.com/2003/02/design-tip-43-dealing-with-nulls-in-the-dimensional-model/">kimballgroup.com</a></li>
 <li>Design Tip #5, <em>Surrogate Keys For The Time Dimension</em> — <a href="https://www.kimballgroup.com/wp-content/uploads/2012/05/DT5SurrogateKeys.pdf">kimballgroup.com (PDF)</a></li>
+<li>Design Tip #164, <em>Have You Built Your Audit Dimension Yet</em> — <a href="https://www.kimballgroup.com/2014/03/design-tip-164-built-your-audit-dimension/">kimballgroup.com</a>（10回で扱う）</li>
 <li>Joe Reis, <em>Practical Data Modeling</em> Ch.14 <em>The Levels of Data Modeling</em> — <a href="https://practicaldatamodeling.substack.com/p/ch-14-the-levels-of-data-modeling">practicaldatamodeling.substack.com</a></li>
 </ul>
 
