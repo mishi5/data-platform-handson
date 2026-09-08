@@ -34,3 +34,6 @@
 - 02: complete（修正ラウンド2: N-1/N-2 反映を grep で確認。n-3 は執筆者の理由（直積で水増し）を妥当として parked、n-5 は 05 回へ送付）
 - batch3 dispatch: 08, 09 の執筆エージェント（opus）起動。先行回で確定した規約（audit_key / DATE パーティション列 / as-of 半開区間 / 引用の創作禁止）を補足として渡した。10 は次の空きで起動
 - 03 レビュー REVISE（critical=1 important=5 minor=11）→ 修正ラウンド 1/3 送付。Ruling: SK は SCD2 の 5 ディメンション（agency 含む）、dim_member_daily はミニの代替でなく併存
+- 04 修正ラウンド1 完了（14件 FIXED）→ 再レビュー起動
+- 05 修正ラウンド1 完了（16件 FIXED）。Ruling: `dim_company.corporate_number`（Type0）を正典に追加（法人番号は不変の実体キーとして遅延到着ディメンションの照合に使える）→ 再レビュー起動
+- 06 レビュー REVISE（critical=2 important=4 minor=7）→ 修正ラウンド 1/3 送付。05 再レビュー起動

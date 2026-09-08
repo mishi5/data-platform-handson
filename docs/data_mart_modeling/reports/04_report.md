@@ -57,3 +57,24 @@ python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py docs/data_mart_modelin
 - DWT 3rd ed. の ch.1 / ch.4 は書籍本体を参照できないため、同じ内容を要約した Kimball Group 公式の *Kimball Dimensional Modeling Techniques*（正典 references.md に「Techniques」として収載）から引用した。章番号での参照は `p.meta` と §3 に残してある。
 - `metrics.yml`（MetricFlow）の YAML は dbt docs の spec に照らして書いたが、実際に `dbt parse` で検証していない。手元に Semantic Layer を有効化した dbt プロジェクトが無いため。
 - 図は1枚のみ（ブリーフ指定どおり）。§5 の「原子 → 日次 agg → 月次 → 企業グループ」の流れも図にしたくなったが、表と SQL で足りるため描いていない。
+
+---
+
+## 修正ラウンド1（レビュー `review/04_review.md` 対応）
+
+- **C1**: §7(b) の SQL コメントを「`QUALIFY` は `GROUP BY` / `HAVING` の後に評価されるので、同じ SELECT では非グループ列 `snapshot_date_key` を参照できない」に訂正（評価順の記述が正反対だった）。
+- **C2**: §4 の MetricFlow YAML 2ブロックを dbt v1.12+ の latest spec に統一（`models: - name: X` 配下の `semantic_model:` + `columns:` の `entity:` / `dimension:` + モデル直下の `metrics:`、ratio はトップレベル `metrics:` で `numerator:` / `denominator:`）。`docs.getdbt.com/docs/build/latest-metrics-spec` を WebFetch して before/after を確認。`columns:` は `semantic_model:` の子ではなくモデル直下（docs の記載に合わせ、レビュー案の入れ子から1段上げた）。§4 導入にも spec の位置づけを1段落追加。
+- **I1**: `agg_company_rating_daily` のモデル SQL に `submitted_date AS rating_date` と `partition_by={'field':'rating_date','data_type':'date'}` / `cluster_by=['company_key']` を追加、`GROUP BY` にも追加。schema.yml に `rating_date`（`not_null`）を追加。
+- **I2**: 企業グループ再集約を、子孫側は全 SCD2 版のブリッジで結合し、祖先側は `dim_company` へ `is_current` で結んで `anc.company_id` でグループ化する形に変更。ブリッジの展開前提と「足し上げの単位は企業という実体であって SCD2 の版ではない」旨を3段落で明記。
+- **I3**: DWT 章番号を修正。§1 h3 → ch.1–2、§3 表「加法・半加法・非加法の分類」→ ch.2、§5 h3「集約ファクト」→ ch.2。`p.meta` を「ch.1–2（加法・半加法・非加法）, ch.4（定期スナップショットと半加法残高）」に更新。§3 表の「定期スナップショット（DWT ch.4）」は据え置き。
+- **I4**: §1 分類表で `scout_quota` を `monthly_fee` と同じ「加法（時間で足すと期間付与枠・期間売上）」行へ移し、`scouts_remaining` を半加法の行に単独で残した。§2(b) 本文に「`SUM(scout_quota) = 600` と `SUM(scouts_sent) = 160` は加法なフローとして意味がある。壊れているのは 440 だけ」を追加。
+- **I5**: 2本目の `scouts_sent` を `contract_scouts_sent`（label「契約枠の消化数」）にリネーム。メトリクス名の一意性と「数え方も分母も違うなら名前を分ける」の1段落を §4 に追加。
+- **M5-1**: 3文超の段落7つを分割（§2a, §2c, §5 期末値, §6 末尾, §7a, §7b, §7c）。§4 の導入段落も分割時に4文になったため2段落へ。
+- **M5-2**: `SAFE_DIVIDE` の説明を「素の集計では発火しない（0 件の日に行が立たないため `review_count >= 1`）。効くのは後段で 0 件月を `LEFT JOIN` で埋めたとき」に置換。
+- **M5-3**: §6 の行ラベル「在籍フラグ」→「状態フラグ」。
+- **M5-4**: DT#77 の引用を原文どおりに（"While you can roll up…" / "…must change to accommodate new data."）。
+- **M5-5**: パーティション列でのフィルタに統一。月次再集約は `a.rating_date BETWEEN DATE '2026-03-01' AND DATE '2026-03-31'`、期末値・期中平均は `month_date`、§7(b) は `f.snapshot_date`。期末値 SQL の出力列も `scouts_remaining AS scouts_remaining_month_end` にして本文と揃えた。
+- **M5-6**: §2(c) を正典サンプル `S003`(6/18)・`S001`(6/20)・`S002`(6/25) に接地。3件だけなら日次ユニークの合計と実ユニークが一致すること、`M001` が 6/22 にも受け取った瞬間に 4 vs 3 で壊れること、膨らみが「会員あたりの受信日数 d 倍」であることを表と本文で示す形に組み替えた。HLL の窓も 6/18〜6/25 に合わせた。数値例は 6 vs 2 から 4 vs 3 に変わっている（正典サンプルに接地した結果、差は小さくなったが一般式 `N × d` を併記した）。
+- **M5-7**: 図の右パネル上段を `sum 3.5 / 5.0 / 25.0` と `count 1 / 1 / 10` の2行に分割（ハイフンが減算に読めた）。左パネルも `avg 3.5 / 5.0 / 2.5` / `count は捨てる` にして構造を対称にした。`check_svg.py` 再実行で `0 errors, 0 warnings`。
+
+未対応: なし（Critical 2 / Important 5 / Minor 7 すべて反映）。

@@ -84,3 +84,38 @@ $ python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py docs/data_mart_model
 2. **`dim_member_daily` が正典未収載**（提案 1）。採否が決まるまで、この回だけが持つテーブル名になる。
 3. **DWT 3rd ed. ch.5 は書籍のため本文を直接参照できていない。** SCD Type 0〜7 の定義は Design Tip #152 と SCD Part 1–2（いずれも Kimball Group 公式）から取り、章番号は `p.meta` と参照文献での参照に留めた。
 4. **`M001` の `registered_at`** を独自に置いた（提案 3）。
+
+---
+
+# 修正ラウンド 1（レビュー `review/05_review.md` への対応）
+
+`check_svg.py` 再実行: **0 errors, 0 warnings**。4 文以上の段落は 18 → 4（残る 4 件は aside / `<details>` の太字リード文が 1 文として数えられているもの）。
+
+| ID | 対応 |
+|---|---|
+| C-1 | §2(b) の「6/15 以降の版」を「送信当時の版（`current_company_id`=`C002`、`[2026-01-05, 2026-08-01)`）」に、§2(c) の「6/15〜7/31 の版」を「`dim_member` の `[2026-01-05, 2026-08-01)` の版」に差し替え。さらに §2(b) に `member_key`（`dim_member`、`[01-05, 08-01)`）と `member_profile_mini_key`（Type 4 割当、`[06-15 09:12, 08-01)`）の**切れ目が違う** 2 本を並べた表を追加し、「`dim_member` に 6/15 始まりの版は存在しない／§7-b で改めて問う」と明示した |
+| I-1 | surrogate key pipeline の合成引用を削除し、SCD Part 2 を WebFetch で再確認したうえで原文 2 文（`With a dimension undergoing Type 2 processing, ... This assures that the correct dimension profiles are associated with fact table activity` ／ `The extract, transform and load (ETL) process for aligning ... is called the surrogate key pipeline`）に分けて引き直した |
+| I-2 | Chris Gambill のコメントを WebFetch で再確認。「SCD2 が必要」という要約を撤回し、原文の `Those records flip after the fact, and auditors expect an immutable trail tied to who changed what and when` と `So the choice isn't "SCD2 vs datestamps." It's immutable facts at the base, with snapshots or SCD2 as views that match the model and the risk` を引いて「結論は CDC / イベントログを基盤に置くこと」に訂正。あわせて「CareerVoice は Datastream（CDC）で複製済みなので基盤の不変ログは既にある」を 1 段落追加 |
+| I-3 | `dim_member` の出力を正典 §4 どおりに。`prefecture_code` の生出力をやめ、`stg_careervoice__prefectures` を結んで `prefecture` / `region` を出す形にした（変化検知は `prefecture_code` のまま） |
+| I-4 | `fct_scout` の `member_key` / `member_profile_mini_key` / `scout_sender_key` / `job_posting_key` と `dim_member_daily` の 2 キーを `COALESCE(..., -1)` に。あわせて「未達だけでなく as-of が当たらなかった場合も `-1`。区間の穴を NULL で流すと `relationships` テストが素通りする。STRING キーなら `'-1'`」の段落を追加 |
+| I-5 | `schema.yml` のコメントを「各版の区間が空でないことだけを見る」に訂正し、重なり／隙間を検出する singular test `tests/assert_dim_company_no_gap_or_overlap.sql`（`LEAD(valid_from) != valid_to`）を追加。§2-c で引いた Kimball の規約をそのままテストにした形である旨と、`relationships` テストでは検出できない旨を本文に書いた |
+| I-6 | 図の帯ラベルを `M001 v1/v2/v3` → **`snap v1/v2/v3`** に変更（`snap_members` の版であることを記号レベルで分離）。脚注も「最新版 snap v3 ではなく snap v2 に当たる」「`snap v1→v2` は Type 4 側の変化。`dim_member` 上では snap v1・v2 が同じ `(v1)` に畳まれる」に書き換え。`<desc>` も更新。ノード数・accent は不変（6 / 1 系統）。`check_svg.py` 0 errors, 0 warnings |
+| I-7 | §5-a に「スナップショットは実行を始めた日より前の履歴を作れない」以下 3 段落を追加（初回実行が 2026-07 なら第 1 版の `dbt_valid_from` は 7 月になる／Datastream の CDC ログがあるうちに初期版を投入する／実行間隔より短い変化の取りこぼしは `timestamp` でも `check` でも起きる／後から遡って作り直せるのは日次スナップショット方式だけ、という §4 の裏付け） |
+| M-1 | `fct_scout` に `{{ audit_key() }} as audit_key` を追加（「監査ディメンションの解決マクロ。10 回で定義する」と注記）。`dim_member_daily` はディメンションなので付けない |
+| M-2 | 4 文以上の段落を 18 → 4 に削減。Wilson の 3 点とスナップショットが成立する 3 条件は `<ul>` に開き、§5-c の丸めの副作用・§7-a の解答・§5-b の畳み込みの帰結など 10 か所を分割した |
+| M-3 | 引用 3 か所を原文に戻した。Type 0 =「the dimension attribute value never changes, so facts are always grouped by this original value」／Type 7 = 末尾の `in the type 2 dimension to present current attribute values` まで／§2-a の集約 =「must be taken offline at the moment of the overwrite and must be recomputed before being brought back online」。いずれも WebFetch で逐語確認済み |
+| M-4 | §1「Type 0〜7 と CareerVoice での適用」の Type 2 セルに `dim_agency` を追加 |
+| M-5 | `dim_company` の `versions` CTE と SELECT から `corporate_number` を削除（裁定どおり出力から外す）。§5-a の aside と §7-c は「ソース側の `corporate_number`（法人番号）」と書き換えて論旨を維持。正典への追加提案は下記 |
+| M-6 | 「`dbt_valid_to_current` と、この YAML 形式のスナップショット定義自体が dbt Core 1.9 以降。1.8 以下はブロック形式で `COALESCE` 側が吸収する」を括弧書きで追加 |
+| M-7 | `fct_scout` の `profile_versions` CTE に `where deleted_at is null` を追加（`dim_member` / `dim_member_daily` と揃えた） |
+| M-8 | 「この組合せを『perhaps we should ...』と呼んだ」→「原文の `As a student recently suggested, perhaps we should refer to this as Type 6 (2+3+1)` を——受講生の提案として——書き留めている」に訂正 |
+
+## 修正ラウンド 1 で新たに出た正典への変更提案
+
+**提案 4（軽微・要判断）: `dim_company` に `corporate_number` を足すか**
+
+裁定に従い出力から外した。ただし §5-a の aside と §7-c の解答は「社名変更が合併を伴うか（＝別法人か）」の判定に法人番号を使っており、いま本文は「ソース側の `corporate_number`」と書いてソース参照に逃がしている。合併の検知を DWH 側でテストしたい（`dim_company` の同じ `company_id` で `corporate_number` が変わる行を落とす）なら、`domain.md` §4 の `dim_company` の属性に `corporate_number` を足す必要がある。06 回の `br_company_hierarchy`（承継関係）とも接するので、そちらの判断とあわせて決めるのがよい。
+
+## 未対応・持ち越し
+
+無し。Critical 1 件・Important 7 件・Minor 8 件すべてに本文で対応した（M-5 のみ、裁定どおり本文から削除したうえで提案 4 として残した）。

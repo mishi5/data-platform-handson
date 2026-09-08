@@ -41,7 +41,7 @@
 <body>
 
 <h1>加法性と派生指標</h1>
-<p class="meta">データマート設計 04 ／ 参照: DWT ch.1, ch.4（加法・半加法・非加法）, Design Tip #77 ／ 再解釈: MetricFlow（ratio metric）</p>
+<p class="meta">データマート設計 04 ／ 参照: DWT ch.1–2（加法・半加法・非加法）, ch.4（定期スナップショットと半加法残高）, Design Tip #77 ／ 再解釈: MetricFlow（ratio metric）</p>
 
 <h2>1. この回が決めること</h2>
 
@@ -49,7 +49,7 @@
 
 <p>結論は固定判断としてシリーズ全体に効く。<strong>率・平均・ユニーク数はマートに持たず、分子・分母・和・件数を持つ</strong>。半加法メジャー（残高・在庫）は「どの軸で足せないか」をモデル側で宣言する。</p>
 
-<h3>メジャーの3分類（DWT ch.4）</h3>
+<h3>メジャーの3分類（DWT ch.1–2）</h3>
 
 <div class="table-wrap">
 <table>
@@ -83,8 +83,8 @@
 <tr><td><code>review_count</code></td><td><code>fct_review</code></td><td>加法</td><td>そのまま</td></tr>
 <tr><td><code>score_*</code>（8軸）, <code>overall_score</code></td><td><code>fct_review</code></td><td>非加法（平均のみ意味がある）</td><td>原子は素の値。集約では <code>sum_score_*</code> + <code>review_count</code></td></tr>
 <tr><td><code>avg_overall_score</code></td><td>—</td><td>非加法</td><td><strong>持たない</strong>（§2a）</td></tr>
-<tr><td><code>scouts_remaining</code>, <code>scout_quota</code></td><td><code>fct_contract_monthly</code></td><td>半加法（企業 ○ / 時間 ✗）</td><td>月次の値のまま。時間方向は期末値（§5）</td></tr>
-<tr><td><code>monthly_fee</code></td><td><code>fct_contract_monthly</code></td><td>加法（時間で足すと期間売上）</td><td>そのまま</td></tr>
+<tr><td><code>scouts_remaining</code></td><td><code>fct_contract_monthly</code></td><td>半加法（企業 ○ / 時間 ✗）</td><td>月次の値のまま。時間方向は期末値（§5）</td></tr>
+<tr><td><code>scout_quota</code>, <code>monthly_fee</code></td><td><code>fct_contract_monthly</code></td><td>加法（時間で足すと期間付与枠・期間売上）</td><td>そのまま。<strong>残高（<code>scouts_remaining</code>）と同じ行に置かない</strong></td></tr>
 <tr><td><code>is_active</code></td><td><code>fct_contract_monthly</code></td><td>半加法</td><td>時間で足すと「延べ稼働月数」という<strong>別のメジャー</strong>になる</td></tr>
 <tr><td><code>is_open</code></td><td><code>fct_job_posting_daily</code></td><td>半加法（求人 ○ / 時間 ✗）</td><td>時間で足すと「延べ掲載日数」（§7b）</td></tr>
 <tr><td><code>application_count_cum</code>, <code>scout_count_cum</code></td><td><code>fct_job_posting_daily</code></td><td>半加法（累積値は時間で足せない）</td><td>同日内は求人をまたいで足せる</td></tr>
@@ -119,7 +119,9 @@
 <li>正しい平均: <code>33.5 / 12 = 2.79</code></li>
 </ul>
 
-<p><strong>0.88 ポイントずれる。</strong>ずれの向きは常に「件数の少ない日を過大評価する側」。3/12 に炎上して 10 件の低評価が入ったのに、レポートは 3.67 という良い値を返す。この表が四半期に上がるとさらに 1 段平均され、ずれは累積する。</p>
+<p><strong>0.88 ポイントずれる。</strong>ずれの向きは常に「件数の少ない日を過大評価する側」。3/12 に炎上して 10 件の低評価が入ったのに、レポートは 3.67 という良い値を返す。</p>
+
+<p>この表が四半期に上がると、月次の 3.67 がさらにもう1段平均される。ずれは粒度を上げるたびに累積する。</p>
 
 <h3>(b) 半加法を足す — <code>scouts_remaining</code> を四半期で <code>SUM</code></h3>
 
@@ -135,20 +137,37 @@
 </table>
 </div>
 
-<p><code>SUM(scouts_sent) = 160</code> は正しい（1〜3月に送った総数）。<code>SUM(scouts_remaining) = 440</code> は<strong>存在しない枠</strong>で、上限まで積んでも <code>200 × 3 = 600</code> にしかならない量を「残枠」として報告している。実在するのは 3月末の 120 だけ。</p>
+<p>3列のうち2列は足してよい。<code>SUM(scouts_sent) = 160</code> は「1〜3月に送った総数」、<code>SUM(scout_quota) = 600</code> は「1〜3月に付与された総枠」で、どちらも加法な<strong>フロー</strong>の量。</p>
+
+<p>壊れているのは <code>SUM(scouts_remaining) = 440</code> だけ。これは<strong>存在しない枠</strong>で、上限まで積んでも <code>200 × 3 = 600</code> にしかならない量を「残枠」として報告している。実在するのは 3月末の 120 だけ。</p>
 
 <p>企業軸では足せる。<code>C001</code> と <code>C003</code> の同月の残枠を足した「グループ全体の残枠」は意味がある。<strong>足せない軸が時間だけ</strong>、というのが半加法の定義そのもの。</p>
 
 <h3>(c) ユニーク数を足す — 日次の <code>COUNT(DISTINCT member_key)</code></h3>
 
-<p><code>fct_scout</code> から「日次のスカウト受信ユニーク会員数」を集約表に焼き、週次レポートがそれを <code>SUM</code> する。<code>M001</code> と <code>M003</code> が 6/20・6/21・6/22 の各日にスカウトを受けたとする。</p>
+<p><code>fct_scout</code> から「日次のスカウト受信ユニーク会員数」を集約表に焼き、週次レポートがそれを <code>SUM</code> する。6月第4週の正典サンプルは <code>S003</code>（<code>AG02</code> → <code>M002</code>、6/18）、<code>S001</code>（<code>C001</code> → <code>M001</code>、6/20）、<code>S002</code>（<code>AG01</code> → <code>M003</code>、6/25）の3件。</p>
+
+<p>この3件だけなら日次ユニークは 1 / 1 / 1 で、足しても 3 で正しい値と一致する。<strong>会員が日をまたいで重複していないから</strong>にすぎない。<code>M001</code> が <code>S001</code>（6/20）に加えて 6/22 にもスカウトを受けた瞬間に壊れる。</p>
+
+<div class="table-wrap">
+<table>
+<tr><th><code>sent_date</code></th><th>受信会員</th><th>日次のユニーク会員数</th></tr>
+<tr><td>2026-06-18</td><td><code>M002</code></td><td>1</td></tr>
+<tr><td>2026-06-20</td><td><code>M001</code></td><td>1</td></tr>
+<tr><td>2026-06-22</td><td><code>M001</code></td><td>1</td></tr>
+<tr><td>2026-06-25</td><td><code>M003</code></td><td>1</td></tr>
+<tr><td><strong><code>SUM</code></strong></td><td>—</td><td><strong>4</strong></td></tr>
+</table>
+</div>
 
 <ul>
-<li>日次のユニーク数: 2 / 2 / 2 → 週次に足すと <strong>6</strong></li>
-<li>3日間の実ユニーク数: <strong>2</strong>（<code>M001</code>, <code>M003</code>）</li>
+<li>日次ユニークの合計: <strong>4</strong></li>
+<li>週の実ユニーク数: <strong>3</strong>（<code>M001</code>, <code>M002</code>, <code>M003</code>）</li>
 </ul>
 
-<p><strong>3倍の過大計上。</strong>(a) と違うのは、和と件数に分解しても直らないこと。ユニーク数は加法な構成要素を持たないので、<strong>集計済みの数値からは復元できない</strong>。原子ファクトを残すか、集約可能なスケッチ（HyperLogLog）を持つかの二択になる。</p>
+<p>膨らみ方は会員1人あたりの受信日数に比例する。会員 N 人が平均 d 日受け取れば合計は <code>N × d</code>、つまり <strong>d 倍</strong>になる。日次を月次に上げれば d は 10 を超える。</p>
+
+<p>(a) と違うのは、和と件数に分解しても直らないこと。ユニーク数は加法な構成要素を持たないので、<strong>集計済みの数値からは復元できない</strong>。原子ファクトを残すか、集約可能なスケッチ（HyperLogLog）を持つかの二択になる。</p>
 
 <svg id="dg-avg" viewBox="0 0 800 392" width="100%"
      style="max-width:800px;height:auto;display:block"
@@ -209,8 +228,8 @@
 
   <rect class="box-soft" x="64" y="88" width="272" height="64" rx="6"/>
   <text class="name" x="200" y="110" text-anchor="middle">日次に平均を持つ</text>
-  <text class="sub" x="200" y="128" text-anchor="middle">avg_overall_score</text>
-  <text class="sub" x="200" y="144" text-anchor="middle">3.5 / 5.0 / 2.5</text>
+  <text class="sub" x="200" y="128" text-anchor="middle">avg 3.5 / 5.0 / 2.5</text>
+  <text class="sub" x="200" y="144" text-anchor="middle">count は捨てる</text>
 
   <rect class="box-soft" x="64" y="184" width="272" height="64" rx="6"/>
   <text class="name" x="200" y="206" text-anchor="middle">月次で AVG し直す</text>
@@ -224,8 +243,8 @@
 
   <rect class="box-soft" x="464" y="88" width="272" height="64" rx="6"/>
   <text class="name" x="600" y="110" text-anchor="middle">日次に和と件数を持つ</text>
-  <text class="sub" x="600" y="128" text-anchor="middle">sum_overall_score / review_count</text>
-  <text class="sub" x="600" y="144" text-anchor="middle">3.5 / 5.0 / 25.0 - 1 / 1 / 10</text>
+  <text class="sub" x="600" y="128" text-anchor="middle">sum 3.5 / 5.0 / 25.0</text>
+  <text class="sub" x="600" y="144" text-anchor="middle">count 1 / 1 / 10</text>
 
   <rect class="box-soft" x="464" y="184" width="272" height="64" rx="6"/>
   <text class="name" x="600" y="206" text-anchor="middle">月次で SUM / SUM</text>
@@ -246,7 +265,7 @@
 <table>
 <tr><th>技法</th><th>定義</th><th>使う条件</th></tr>
 <tr>
-  <td>加法・半加法・非加法の分類（DWT ch.4）</td>
+  <td>加法・半加法・非加法の分類（DWT ch.2）</td>
   <td>ファクトの数値メジャーは3種に分かれる。全軸で足せる／一部の軸だけ足せる／どの軸でも足せない</td>
   <td>ファクト設計のたびに全メジャーへ適用する。粒度宣言（01回）の直後の作業</td>
 </tr>
@@ -286,8 +305,8 @@
 
 <div class="aside kimball">
 <p><strong>Design Tip #77（Margy Ross, 2006）</strong></p>
-<p>&ldquo;you can roll up detailed data in unpredictable ways, the converse is not true &ndash; you can't magically explode summary data into its underlying components.&rdquo;</p>
-<p>&ldquo;Summary data naturally pre-supposes the typical business questions. When the business requirements change, as they inevitably will, then both the data model and ETL system must change.&rdquo;</p>
+<p>&ldquo;While you can roll up detailed data in unpredictable ways, the converse is not true &ndash; you can&rsquo;t magically explode summary data into its underlying components.&rdquo;</p>
+<p>&ldquo;Summary data naturally pre-supposes the typical business questions. When the business requirements change, as they inevitably will, then both the data model and ETL system must change to accommodate new data.&rdquo;</p>
 <p>加法性の議論は突き詰めると DT#77 に落ちる。<strong>集約表は原子ファクトの代替ではなく高速化の手段</strong>で、原子が残っている限り「持つ形を間違えた」は後から直せる。中央値やユニーク数を集約表に焼き、原子を捨てた瞬間に直せなくなる。</p>
 </div>
 
@@ -295,28 +314,35 @@
 
 <h2>4. 現代の再解釈 — MetricFlow の ratio metric</h2>
 
-<p>dbt Semantic Layer（MetricFlow）は、この回の判断をテーブルの外側で表現する道具。メトリクスを YAML で宣言し、クエリのたびに「その粒度で分子と分母を集計してから割る」SQL を生成する。ratio metric は <code>numerator</code> / <code>denominator</code> を metric 名で受け取るので、<strong>率そのものを列として持つ場所がどこにも無い</strong>。</p>
+<p>dbt Semantic Layer（MetricFlow）は、この回の判断をテーブルの外側で表現する道具。メトリクスを YAML で宣言すると、クエリのたびに「その粒度で分子と分母を集計してから割る」SQL が生成される。ratio metric は <code>numerator</code> / <code>denominator</code> を metric 名で受け取るので、<strong>率そのものを列として持つ場所がどこにも無い</strong>。</p>
 
-<pre><code># models/marts/schema.yml（dbt v1.12+ の spec）
-semantic_models:
-  - name: scout_funnel
+<p>YAML は dbt v1.12 以降の spec で書く。セマンティックモデルは <code>models:</code> の中に入り、entity と dimension は <code>columns:</code> で宣言する（旧 spec のトップレベル <code>semantic_models:</code> と <code>measures:</code> は置き換えられた）。</p>
+
+<pre><code># models/marts/_marts__models.yml — dbt v1.12+ の spec
+# セマンティックモデルはモデル定義の中に入り、entity / dimension は columns で宣言する
+models:
+  - name: fct_scout_funnel
     description: "1行 = 1スカウトの送信→開封→返信→応募"
-    model: ref('fct_scout_funnel')
-    defaults:
+    semantic_model:
+      enabled: true
       agg_time_dimension: sent_date
-    primary_entity: scout
-    entities:
-      - name: member
-        type: foreign
-        expr: member_key
-      - name: scout_sender
-        type: foreign
-        expr: scout_sender_key
-    dimensions:
+    columns:
+      - name: scout_id
+        entity:
+          type: primary
+          name: scout
+      - name: member_key
+        entity:
+          type: foreign
+          name: member
+      - name: scout_sender_key
+        entity:
+          type: foreign
+          name: scout_sender
       - name: sent_date
-        type: time
-        type_params:
-          time_granularity: day
+        granularity: day
+        dimension:
+          type: time
     metrics:
       - name: scouts_sent
         label: スカウト送信数
@@ -329,6 +355,7 @@ semantic_models:
         agg: sum
         expr: is_replied
 
+# 複数モデルにまたがる metric（ratio を含む）はトップレベルの metrics に置く
 metrics:
   - name: reply_rate
     label: スカウト返信率
@@ -338,19 +365,29 @@ metrics:
     denominator: scouts_sent
 </code></pre>
 
+<p>メトリクス名はプロジェクト内で一意。<code>fct_scout_funnel</code> 由来の <code>scouts_sent</code>（送ったスカウトの本数）と <code>fct_contract_monthly</code> 由来の <code>contract_scouts_sent</code>（契約枠の消化数）は<strong>数え方も分母も違う指標</strong>なので、名前を分ける。§6 の「名前を分ける」がそのままメトリクス層の制約になっている。</p>
+
 <p>半加法も宣言できる。<code>non_additive_dimension</code> は「このメジャーはこの時間ディメンションでは集約するな」という指定で、<code>window_choice: max</code> が期末値、<code>min</code> が期首値にあたる。Kimball が運用ルールとして書いていた「残高は期末値で潰す」が、そのままメタデータになった。</p>
 
-<pre><code>semantic_models:
-  - name: contract_monthly
-    model: ref('fct_contract_monthly')
-    defaults:
+<pre><code>models:
+  - name: fct_contract_monthly
+    description: "1行 = 1契約 × 1月"
+    semantic_model:
+      enabled: true
       agg_time_dimension: month_date
-    primary_entity: contract
-    dimensions:
+    columns:
+      - name: contract_id
+        entity:
+          type: primary
+          name: contract
+      - name: company_key
+        entity:
+          type: foreign
+          name: company
       - name: month_date
-        type: time
-        type_params:
-          time_granularity: month
+        granularity: month
+        dimension:
+          type: time
     metrics:
       - name: scouts_remaining
         label: スカウト残枠（期末）
@@ -360,8 +397,8 @@ metrics:
         non_additive_dimension:
           name: month_date
           window_choice: max      # 期間内の最終月の値だけを採る
-      - name: scouts_sent
-        label: スカウト送信数
+      - name: contract_scouts_sent
+        label: 契約枠の消化数
         type: simple
         agg: sum
         expr: scouts_sent         # こちらは素直に加法
@@ -373,16 +410,20 @@ metrics:
 <li><strong>残る:</strong> 「率と平均をテーブルに焼かない」という判断そのもの。MetricFlow は分子分母が列として存在することを前提にしており、<code>fct_scout_funnel</code> に <code>is_replied</code> が無ければ ratio metric は定義できない。物理設計の要求は変わらない</li>
 <li><strong>変わる:</strong> 割り算のロジックの置き場所。かつては BI ツール／ダッシュボードごとに散っていた「SUM してから割る」が、リポジトリ内の1定義に集まる。「返信率」の定義が2つに割れる事故（03回の conformed の話と同じ構図）が減る</li>
 <li><strong>変わる:</strong> 半加法の宣言が実行可能になった。テーブルのコメントや Wiki に書いてあった「時間で足すな」が、集計エンジンが従う指定になる</li>
-<li><strong>変わらない危険:</strong> Semantic Layer を通らない経路（アドホック SQL、直接 BigQuery を叩く BI、Reverse ETL）が1本でもあるなら、<code>metrics.yml</code> は守ってくれない。<strong>テーブル側で和と件数を持つ規律は依然として必要</strong>で、Semantic Layer はその上の層</li>
+<li><strong>変わらない危険:</strong> Semantic Layer を通らない経路（アドホック SQL、直接 BigQuery を叩く BI、Reverse ETL）が1本でもあるなら、メトリクス定義は守ってくれない。<strong>テーブル側で和と件数を持つ規律は依然として必要</strong>で、Semantic Layer はその上の層</li>
 </ul>
 </div>
 
 <h2>5. BigQuery + dbt での実装</h2>
 
-<h3>集約ファクト（DWT ch.4 の aggregate fact table）: 平均を持たず和と件数を持つ</h3>
+<h3>集約ファクト（DWT ch.2 の aggregate fact table）: 平均を持たず和と件数を持つ</h3>
 
 <pre><code>-- models/marts/agg_company_rating_daily.sql
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table',
+    partition_by={'field': 'rating_date', 'data_type': 'date'},
+    cluster_by=['company_key']
+) }}
 
 WITH review AS (
     SELECT * FROM {{ ref('fct_review') }}
@@ -390,6 +431,7 @@ WITH review AS (
 
 SELECT
     submitted_date_key AS date_key,
+    submitted_date     AS rating_date,
     company_key,
     COUNT(*) AS review_count,
     SUM(score_compensation)   AS sum_score_compensation,
@@ -402,7 +444,7 @@ SELECT
     SUM(score_eval_fairness)  AS sum_score_eval_fairness,
     SUM(overall_score)        AS sum_overall_score
 FROM review
-GROUP BY date_key, company_key
+GROUP BY date_key, rating_date, company_key
 </code></pre>
 
 <p>この表には <code>avg_</code> で始まる列が1つも無い。<code>review_count</code> と <code>sum_*</code> だけが並ぶ。列名の規約を「集約表に <code>avg_</code>・<code>rate_</code>・<code>pct_</code>・<code>unique_</code> を出さない」とすると、レビューで機械的に弾ける。</p>
@@ -418,6 +460,9 @@ models:
           combination_of_columns: [date_key, company_key]
     columns:
       - name: date_key
+        data_tests: [not_null]
+      - name: rating_date
+        description: "パーティション列。date_key と同じ日を DATE で持つ"
         data_tests: [not_null]
       - name: company_key
         data_tests: [not_null]
@@ -443,29 +488,39 @@ models:
 FROM {{ ref('agg_company_rating_daily') }} AS a
 JOIN {{ ref('dim_date') }} AS d
     ON a.date_key = d.date_key
-WHERE d.year = 2026 AND d.month = 3
+-- 絞り込みはパーティション列（rating_date）で。date_key で書くと全パーティションを読む
+WHERE a.rating_date BETWEEN DATE '2026-03-01' AND DATE '2026-03-31'
 GROUP BY d.year, d.month, a.company_key
 </code></pre>
 
-<p><code>C002</code> の3日分に対して <code>33.5 / 12 = 2.79</code>。<code>SAFE_DIVIDE</code> にしておくと、その企業のその月にクチコミが 0 件でも（分母 0 でも）エラーではなく <code>NULL</code> が返る。</p>
+<p><code>C002</code> の3日分に対して <code>33.5 / 12 = 2.79</code>。<code>SAFE_DIVIDE</code> は素の集計では発火しない（この表は 0 件の日に行を立てないので <code>review_count &gt;= 1</code> が保証される）。効くのは後段で <code>dim_date</code> 側から 0 件月を <code>LEFT JOIN</code> で埋めたときで、分母 0 をエラーではなく <code>NULL</code> にして通す保険。</p>
 
 <h3>企業グループへ再集約する（<code>br_company_hierarchy</code> 経由）</h3>
 
 <pre><code>SELECT
-    b.ancestor_company_key,
+    anc.company_id AS group_company_id,    -- SCD2 版ではなく自然キーで束ねる
     d.year,
     SUM(a.review_count)      AS review_count,
     SAFE_DIVIDE(SUM(a.sum_overall_score), SUM(a.review_count)) AS avg_overall_score
 FROM {{ ref('agg_company_rating_daily') }} AS a
 JOIN {{ ref('br_company_hierarchy') }} AS b
-    ON a.company_key = b.descendant_company_key
+    ON a.company_key = b.descendant_company_key   -- 子孫側は全 SCD2 版を持つ
+JOIN {{ ref('dim_company') }} AS anc
+    ON b.ancestor_company_key = anc.company_key
+   AND anc.is_current                             -- 祖先側は現行版だけ
 JOIN {{ ref('dim_date') }} AS d
     ON a.date_key = d.date_key
-WHERE d.year = 2026
-GROUP BY b.ancestor_company_key, d.year
+WHERE a.rating_date BETWEEN DATE '2026-01-01' AND DATE '2026-12-31'
+GROUP BY group_company_id, d.year
 </code></pre>
 
-<p><code>C001</code>（アオゾラ商事）を <code>ancestor</code> とする行には、自分自身（<code>depth = 0</code>）と子会社 <code>C003</code>（ヒノデ物流、<code>depth = 1</code>）が入る。<strong>集計式が月次のときと1文字も変わらない</strong>のが、和と件数で持つことの実利。もし日次に平均を持っていたら、時間方向とグループ方向で別々の重み付けロジックを書くことになり、片方を必ず間違える。</p>
+<p><code>C001</code>（アオゾラ商事）を <code>ancestor</code> とする行には、自分自身（<code>depth = 0</code>）と子会社 <code>C003</code>（ヒノデ物流、<code>depth = 1</code>）が入る。<strong>集計式（<code>SUM</code> と <code>SAFE_DIVIDE</code>）が月次のときと1文字も変わらない</strong>のが、和と件数で持つことの実利。</p>
+
+<p>ただしキーの扱いには前提が要る。<code>agg_company_rating_daily.company_key</code> は投稿時点の SCD2 版なので、<code>br_company_hierarchy</code> の子孫側は <strong><code>dim_company</code> の全 SCD2 版に展開して作る</strong>（<code>br_member_desired_job_category</code> と同じ理由）。現行版のキーしか持たないブリッジだと、<code>C002</code> のように年内に属性が変わった企業の投稿が結合で静かに落ちる。</p>
+
+<p>祖先側は逆に <code>is_current</code> の1版に絞り、<code>company_id</code>（自然キー）でグループ化する。そうしないと「2026年の <code>C002</code> グループ」が 5/1 の属性変化を境に2行へ割れる。<strong>足し上げの単位は企業という実体であって、SCD2 の版ではない。</strong></p>
+
+<p>もし日次に平均を持っていたら、時間方向とグループ方向で別々の重み付けロジックを書くことになり、片方を必ず間違える。</p>
 
 <h3>半加法を期末値で潰す</h3>
 
@@ -473,24 +528,26 @@ GROUP BY b.ancestor_company_key, d.year
 SELECT
     company_key,
     contract_id,
-    month_date_key,
-    scouts_remaining
+    month_date,
+    scouts_remaining AS scouts_remaining_month_end
 FROM {{ ref('fct_contract_monthly') }}
-WHERE month_date_key BETWEEN 20260101 AND 20260301
+WHERE month_date BETWEEN DATE '2026-01-01' AND DATE '2026-03-01'   -- パーティション列で絞る
 QUALIFY ROW_NUMBER() OVER (
     PARTITION BY contract_id
-    ORDER BY month_date_key DESC
+    ORDER BY month_date DESC
 ) = 1
 </code></pre>
 
-<p><code>K001</code> について <code>scouts_remaining = 120</code>（3月の行）が返る。<code>SUM</code> の 440 ではない。期中平均が欲しいなら同じ窓で <code>AVG(scouts_remaining)</code>（= <code>440 / 3 = 146.67</code>）。<strong>どちらを「残枠」と呼ぶかは指標定義であって、SQL の都合ではない。</strong>決めて名前を分ける。</p>
+<p><code>K001</code> について <code>scouts_remaining = 120</code>（3月の行）が返る。<code>SUM</code> の 440 ではない。期中平均が欲しいなら同じ窓で <code>AVG(scouts_remaining)</code>（= <code>440 / 3 = 146.67</code>）。</p>
+
+<p><strong>どちらを「残枠」と呼ぶかは指標定義であって、SQL の都合ではない。</strong>決めて名前を分ける（<code>scouts_remaining_month_end</code> と <code>avg_scouts_remaining</code>）。</p>
 
 <pre><code>SELECT
     contract_id,
     AVG(scouts_remaining) AS avg_scouts_remaining,   -- 期中平均残枠
     SUM(scouts_sent)      AS scouts_sent             -- こちらは素直に加法
 FROM {{ ref('fct_contract_monthly') }}
-WHERE month_date_key BETWEEN 20260101 AND 20260301
+WHERE month_date BETWEEN DATE '2026-01-01' AND DATE '2026-03-01'
 GROUP BY contract_id
 </code></pre>
 
@@ -571,7 +628,7 @@ FROM daily
   <td>期末値 = <code>QUALIFY ROW_NUMBER() ... ORDER BY 期 DESC = 1</code>／期中平均 = <code>AVG</code></td>
 </tr>
 <tr>
-  <td>在籍フラグ（<code>is_open</code>, <code>is_active</code>）</td>
+  <td>状態フラグ（<code>is_open</code>, <code>is_active</code>）</td>
   <td>半加法（時間 ✗）</td>
   <td>0/1 のまま</td>
   <td>時点数 = 期末行の <code>SUM</code>／延べ日数 = 期間の <code>SUM</code>。<strong>名前を分ける</strong></td>
@@ -597,7 +654,9 @@ FROM daily
 </table>
 </div>
 
-<p>運用の落とし所を1つ。<strong>集約表の列名から <code>avg_</code> / <code>rate_</code> / <code>pct_</code> / <code>median_</code> / <code>unique_</code> を禁止する</strong>。分類の議論は設計時にしかできないが、列名の検査は CI でできる。例外を作るのは「終端テーブル」だと宣言した <code>agg_company_entity</code> だけ。</p>
+<p>運用の落とし所を1つ。<strong>集約表の列名から <code>avg_</code> / <code>rate_</code> / <code>pct_</code> / <code>median_</code> / <code>unique_</code> を禁止する</strong>。分類の議論は設計時にしかできないが、列名の検査は CI でできる。</p>
+
+<p>例外を作るのは「終端テーブル」だと宣言した <code>agg_company_entity</code> だけ。</p>
 
 <h2>7. 演習</h2>
 
@@ -605,7 +664,9 @@ FROM daily
 
 <details>
 <summary>解答例</summary>
-<p><strong>何も新しく持たない。</strong><code>fct_review</code>（1行 = 1クチコミ）を残しておくことが答え。<code>agg_company_rating_daily</code> の <code>sum_overall_score</code> と <code>review_count</code> からは中央値を復元できない（和と件数は分布の情報を持たない）。判断基準表の「中央値・p95 → 分解不能 → 持たない」の行。</p>
+<p><strong>何も新しく持たない。</strong><code>fct_review</code>（1行 = 1クチコミ）を残しておくことが答え。<code>agg_company_rating_daily</code> の <code>sum_overall_score</code> と <code>review_count</code> からは中央値を復元できない（和と件数は分布の情報を持たない）。</p>
+
+<p>判断基準表の「中央値・p95 → 分解不能 → 持たない」の行にあたる。</p>
 <pre><code>SELECT
     r.company_key,
     d.year,
@@ -622,7 +683,9 @@ GROUP BY r.company_key, d.year
 
 <details>
 <summary>解答例</summary>
-<p><code>SUM(is_open)</code> は<strong>延べ掲載日数（posting-days）</strong>。求人 <code>J001</code>（<code>C001</code> のデータエンジニア、2026-04-01 掲載、4月中は <code>open</code>）なら 4月の <code>SUM(is_open) = 30</code>。これは「30 件の求人」ではない。1件の求人 × 30 日。</p>
+<p><code>SUM(is_open)</code> は<strong>延べ掲載日数（posting-days）</strong>。求人 <code>J001</code>（<code>C001</code> のデータエンジニア、2026-04-01 掲載、4月中は <code>open</code>）なら 4月の <code>SUM(is_open) = 30</code>。</p>
+
+<p>これは「30 件の求人」ではなく、1件の求人 × 30 日。</p>
 <p>延べ日数それ自体は意味のあるメジャー（掲載枠の消化量、掲載単価の分母）なので、間違いなのは値ではなく<strong>名前</strong>。<code>open_posting_days</code> のように別名にすれば加法なメジャーとして扱える。</p>
 <pre><code>-- 月末時点の掲載数: 足せない軸（日）を先に潰してから、足せる軸（求人）で足す
 WITH month_end AS (
@@ -634,8 +697,10 @@ WITH month_end AS (
     FROM {{ ref('fct_job_posting_daily') }} AS f
     JOIN {{ ref('dim_date') }} AS d
         ON f.snapshot_date_key = d.date_key
-    WHERE d.year = 2026 AND d.month = 4
-    -- QUALIFY は集約の前に評価されるので、GROUP BY は外側の SELECT に置く
+    -- パーティション列（snapshot_date）で絞る。dim_date は年月のラベル取得だけに使う
+    WHERE f.snapshot_date BETWEEN DATE '2026-04-01' AND DATE '2026-04-30' 
+    -- QUALIFY は GROUP BY / HAVING の後に評価される。同じ SELECT に GROUP BY を置くと
+    -- snapshot_date_key（非グループ列）を QUALIFY で参照できないので、絞り込みを CTE に分ける
     QUALIFY f.snapshot_date_key = MAX(f.snapshot_date_key) OVER (PARTITION BY d.year, d.month)
 )
 
@@ -654,7 +719,9 @@ GROUP BY company_key, year, month
 
 <details>
 <summary>解答例</summary>
-<p>分子分母は<strong>同じ行から出す</strong>のが原則。<code>fct_scout_funnel</code>（1行 = 1スカウトの送信→開封→返信→応募）は <code>scout_sender_key</code> を FK に持ち、<code>is_replied</code> を 0/1 で持つので、分母 = 行数、分子 = <code>SUM(is_replied)</code> で足りる。集約表を作るなら粒度は <code>sent_date_key × scout_sender_key</code>、列は「送信件数」と「返信件数」の2つだけ。<strong>率の列は作らない。</strong></p>
+<p>分子分母は<strong>同じ行から出す</strong>のが原則。<code>fct_scout_funnel</code>（1行 = 1スカウトの送信→開封→返信→応募）は <code>scout_sender_key</code> を FK に持ち、<code>is_replied</code> を 0/1 で持つので、分母 = 行数、分子 = <code>SUM(is_replied)</code> で足りる。</p>
+
+<p>集約表を作るなら粒度は <code>sent_date_key × scout_sender_key</code>、列は「送信件数」と「返信件数」の2つだけ。<strong>率の列は作らない。</strong></p>
 <pre><code>SELECT
     s.sender_type,
     COUNT(*)                                  AS scouts_sent,
