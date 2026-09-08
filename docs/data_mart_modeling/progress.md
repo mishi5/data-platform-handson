@@ -93,3 +93,8 @@
 - p.meta・参照文献節・.table-wrap の有無
 - 22:20 再開。横断レビュー起動。Playwright でライト/ダーク全11本レンダリング（横スクロール無し）、図7枚をコンタクトシートで目視 → 破綻なし（review/shots/）
 - 横断レビュー REVISE（critical=3 important=4 minor=7）。Ruling: C1 は 01 が正（R001 は差し戻し1回・3遷移）→ 正典 §5 に固定、10 を直す／C2 は 01 の定義（判定回数=2）が正 → 00 を直す／C3 は 07 が正（star 正本に require_partition_filter を付けない）→ 10 を直し、materialization は incremental+insert_overwrite に統一（正典に明記）／I1 STRING キーは '-1' に機械置換／I4 は data_tests: に統一（正典に明記）／M1〜M7 も同じ修正ウェーブで処理（M3 = 03 audit_key 下書きの整合）
+- 横断修正ウェーブ完了（14件 FIXED）。check_svg 全本 0 errors、data_tests: 統一、10 の require_partition_filter 除去、03 audit_key 整合を grep で確認。Ruling: 横断再レビューは省略（局所修正のみ・grep 検証済み）
+- publish.py --dry-run 11本すべて rc=0（新規アップロード・タイトル重複なし・Slack なし）。**公開はユーザー指示待ち**
+
+## Rulings（一覧・公開前に確認用）
+progress.md 内の `Ruling:` 行を参照。主要なもの: dim_agency 追加 / dim_member_daily 追加 / SCD2 SK は INT64 FARM_FINGERPRINT で 5 本 / M001 の dim_member は 2 行 / R001 差し戻し1回 / fct_scout は incremental+insert_overwrite・star 側に require_partition_filter なし / audit_key() は 10 回が正本 / agg_* は audit_key なし / 再々レビューは局所修正のみの場合 grep 検証で省略
