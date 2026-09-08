@@ -521,8 +521,9 @@ models:
   #   Cannot query over table ... without a filter that can be used for
   #   partition elimination
   # を返し、テストは「落ちる」のではなく「走らない」。generic テストの
-  # where は config: の下にネストする。直近3日だけを検査する形を
-  # 10 回で規約化する
+  # where は config: の下にネストする。モデル側の config に +where を
+  # 書いても generic test には伝播しないので、必ず各テストに書く。
+  # 直近3日だけを検査するこの形を 10 回で規約化する
   - name: dim_member_daily
     tests:
       - dbt_utils.unique_combination_of_columns:

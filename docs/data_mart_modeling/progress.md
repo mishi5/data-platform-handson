@@ -51,3 +51,5 @@
 - 09 執筆完了（DONE_WITH_CONCERNS）。Ruling: references に dbt incremental-strategy / microbatch を追加、fct_scout の物理設計（partition sent_date / cluster scout_sender_key, member_key）を正典に明記、検証用一時表は正典外で可、ブリーフの dbt.partition_range は実在しないため置換を是認 → レビュー起動
 - 2026-09-08 09:45 頃 2度目のレート制限（resets 14:00）。20:41 再開。状態: 06 ラウンド2 完了（HTML/report とも）、03 ラウンド2 は着手直後（3行差分・report 未追記）、07 再レビュー REVISE（新規 Critical 1: モデル単位 +where は効かない / Important 1 / Minor 3）、08・09 レビュー未着手、10 は HTML 完成・report 無し
 - 06: complete（ラウンド2 N-1 を grep で確認: ref('dim_member') 参照・dim_member_with_desired・svg 0 errors。Ruling: 再々レビュー省略）
+- 20:45 再開バッチ: 03 ラウンド2 再開（resume）/ 07 ラウンド2（resume）/ 08・09・10 レビュー（fresh）を起動
+- 03: complete（ラウンド2: テスト config.where / 想定規模 / +where 非伝播の注記 を grep で確認。Ruling: 再々レビュー省略）

@@ -107,3 +107,33 @@ n/a（この回に図は無い。ブリーフ「図: なし（技法一覧・置
 - モデル SQL ブロックの末尾セミコロン = 0（機械チェック）
 - 本文の `dim_*` / `fct_*` / `stg_*` / `snap_*` を `canon/domain.md` と再突合 → 非収録は `snap_members` / `stg_careervoice__scouts`（命名規約適合）と `stg_product`（dbt 記事の引用内）の3件のみ
 - 本文の URL 13 本すべて `canon/references.md` に存在
+
+---
+
+## 修正ラウンド2（再レビュー `review/03_rereview.md` への対応）
+
+再レビューは初回 17 件を **ADDRESSED 17 / NOT ADDRESSED 0** と判定。以下は修正差分の中で新たに生じた 6 件への対応。
+
+| ID | 対応 |
+|---|---|
+| 新 Critical-1 | ラウンド1で追加した `dim_member_daily` のテストが、正典 §4 の `require_partition_filter=true` の下では実行自体を拒否される（`Cannot query over table … without a filter that can be used for partition elimination`）ことを見落としていた。**各テストの `config:` に `where: "snapshot_date >= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 3 DAY)"` を付けた**（dbt 公式ドキュメント `reference/resource-configs/where` を WebFetch で確認。generic テストでは `where` を `config:` 配下にネストする）。あわせて (a) モデル側 `config` の `+where` は generic test に伝播しないため必ず各テストに書くこと、(b) 直近3日だけを検査するこの形を **10 回で規約化**すること、をコメントで明記。テスト対象も `not_null` / `relationships` に加えて正典の自然キー `(snapshot_date, member_id)` の `dbt_utils.unique_combination_of_columns` を追加した（3本とも同じ `where`）。さらに締めの段落に「テストは物理設計に従属する。直近3日だけの検査は全期間を諦めたのではなく、全期間の整合は `dim_member_daily` を作る側のモデルで担保する分担だ（09回・10回）」を追加し、この回の「`-1` 行はテストの前提条件」という結論とパーティション設計を接続した |
+| 新 Important-1 | §2(a) 冒頭の「（正典はデータ量を定めていない）」を削除。`canon/domain.md` §5 末尾に想定規模（会員 300 万、`page_views` 日次 2,000 万行 ほか）が追加されているため、「以下、規模は**正典 §5 の想定規模**（会員 300 万人、`page_views` 日次 2,000 万行）を使う。断定ではなく前提で、この回の判断のいくつかはこの桁に乗っている」に置き換えた。列名も `fct_page_view` → 正典 §5 の表記に合わせて `page_views` にした |
+| 新 Minor-a | §5 判断表で `dim_agency` が SCD2 行と縮約行の2箇所に対象として並び「6本目がある」と読めた点を修正。縮約行の対象欄を「同上（<code>dim_agency</code>）。この行の主眼は『なぜ `dim_agent` と別に置くか』」に変更し、結び先に正典どおり `fct_placement` の主軸も追加した |
+| 新 Minor-b | §2(c) の「3本目は絞り込みを1つ足しただけで**1本目と同じ結果に戻る**」を「**`INNER JOIN` と同じ挙動に戻る**（1本目を 2026 年で絞ったものと一致する）」に訂正。1本目は全年・3本目は 2026 年のみで結果集合は一致しないため |
+| 新 Minor-c | 本文で名指ししていた FDE を `p.meta` の再解釈欄（`FDE / スナップショット (Beauchemin 2018)`）と参照文献（`https://www.ssp.sh/brain/snapshotting/`、`canon/references.md` 収録の URL）に追加。正典 §4 の `dim_member_daily` の備考が「FDE 方式の代替」である以上、削るより載せるほうが後続の回と揃うため |
+| 新 Minor-d | §4 の「**正典はどちらか一方を選ばず両方を置く**」を「**正典は両方を定義しており、どちらを主経路にするかは 05回で決める**」に緩めた。正典 §4 の備考は「FDE 方式の代替（05回）」であり、この回で確定させると 05回の比較の余地を潰すため。整合条件（`dim_member_daily.member_profile_mini_key` がミニ側と一致）はそのまま残した |
+
+### 正典への変更提案の更新
+
+- ラウンド1 の提案 8（§4 散文の SCD2 が4本）・9（ミニは組合せ 15 通り ＋ 既定行 = 16 行）・10（想定規模を §5 に）は、**いずれも正典に反映済み**であることを確認した（§4 散文・§4 備考・§5 末尾）。未処理の提案は残っていない。
+
+### 検証（ラウンド2 修正後に実行）
+
+- `python3 ~/.claude/skills/svg-diagram/scripts/check_svg.py html/03_dimensions.html` → **`0 errors, 1 warnings`**（warning は `<svg>` 不在＝ブリーフ「図: なし」どおり）
+- タグ対応 0 エラー / 未閉タグ 0 / `<pre><code>` 内の生の山括弧 0（`snapshot_date &gt;= …` の 3 箇所を含めエスケープ済み）/ バッククォート残り 0
+- 4文以上の `<p>` = 0（`<pre>` 除外・機械カウント）
+- `<h2>` 9本 ／ 表 12 個すべて `.table-wrap` 包み ／ SVG 0 個
+- モデル SQL ブロックの末尾セミコロン = 0
+- 本文の URL 14 本すべて `canon/references.md` に存在（FDE の追加分を含む）
+- 本文の `dim_*` / `fct_*` / `stg_*` / `snap_*` を `canon/domain.md` と再突合 → 非収録は `snap_members` / `stg_careervoice__scouts`（命名規約適合）と `stg_product`（dbt 記事の引用内）の3件のみ
+- 「正典はデータ量を定めていない」の残存 = 0

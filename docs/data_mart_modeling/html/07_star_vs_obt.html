@@ -54,7 +54,7 @@
 <tr><th>論点</th><th>決定</th></tr>
 <tr><td>正本はどれか</td><td><strong>star が正本</strong>。<code>fct_scout_funnel</code> + <code>dim_member</code> / <code>dim_scout_sender</code> / <code>dim_job_posting</code> をマートの中心に置く</td></tr>
 <tr><td>OBT の位置づけ</td><td><strong>配布物</strong>。star の下流に <code>materialized='table'</code> の <code>obt_scout_funnel</code> を置き、BI と逆 ETL はここだけを見る</td></tr>
-<tr><td>OBT を正本にする条件</td><td>利用者が自分 1 人・行数が 1 億未満・ディメンション属性の Type1 上書きが起きない、の 3 つが同時に成り立つときだけ</td></tr>
+<tr><td>OBT を正本にする条件</td><td>§6 の判断基準表の 1 行目に当たるときだけ（単発の分析・PoC・star をまだ持っていない・1000 万行未満）。閾値の定義は 6 節に一本化する</td></tr>
 <tr><td>雪片化</td><td>しない（正典の固定判断）。OBT の議論は star ↔ OBT の 2 極で行い、snowflake は比較対象としてのみ扱う</td></tr>
 <tr><td>パーティション</td><td>star 側も OBT 側も同じ <code>sent_date</code>（DATE）に張る。OBT だけ <code>require_partition_filter=true</code></td></tr>
 </table>
@@ -451,14 +451,33 @@ SELECT sender_type, COUNT(*) FROM marts.obt_scout_funnel GROUP BY sender_type;
 
 <p>第 1 に、この OBT を参照する下流モデルも必ず <code>sent_date</code> で絞る必要がある。第 2 に、<strong>生成 SQL にパーティション列の述語が入らない dbt テストが落ちる</strong>。上の <code>schema.yml</code> では <code>unique</code> と <code>relationships</code> がこれに当たり、そのままでは通らない。</p>
 
-<p>テスト単位ではなくモデル単位で <code>where</code> を掛けると、テストを足すたびに書き漏らす事故が無くなる。</p>
+<p>落ちるテストそれぞれの <code>config:</code> に <code>where</code> を書いて、直近パーティションに限定する。</p>
 
-<pre><code>models:
-  - name: obt_scout_funnel
-    config:
-      # このモデルのテストは全て直近パーティションに限定する
+<pre><code>    columns:
+      - name: scout_id
+        tests:
+          - unique:
+              config:
+                where: "sent_date &gt;= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 7 DAY)"
+      - name: scout_sender_key
+        tests:
+          - relationships:
+              to: ref('dim_scout_sender')
+              field: scout_sender_key
+              config:
+                where: "sent_date &gt;= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 7 DAY)"
+</code></pre>
+
+<p><strong>モデル単位でまとめて掛ける方法は dbt に無い。</strong><code>where</code> はデータテストの config なので、モデルの <code>config:</code> に書いても、そのモデルに付いた generic test には伝播しない。テスト単位に書くか、<code>dbt_project.yml</code> の <code>data_tests:</code> 配下でディレクトリ単位に掛けるかの二択である。</p>
+
+<pre><code># dbt_project.yml — ディレクトリ単位でまとめる場合
+data_tests:
+  careervoice:
+    marts:
       +where: "sent_date &gt;= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 7 DAY)"
 </code></pre>
+
+<p>ただしこちらは配下のテスト全部に効くので、<code>sent_date</code> を持たない <code>dim_member</code> や <code>fct_review</code> のテストまで壊す。<code>+</code> 前置が使えるのは <code>dbt_project.yml</code> だけで、プロパティ yml の <code>config:</code> では使わない。</p>
 
 <p><code>not_null</code> は生成 SQL が <code>where sent_date is null</code> のようにパーティション列そのものへの述語になるので、<code>unique</code> / <code>relationships</code> とは挙動が違う可能性がある。実際に <code>dbt test</code> を回して、どのテストが落ちるかを自分の環境で確かめる。</p>
 
@@ -516,11 +535,11 @@ bq query --use_legacy_sql=false --dry_run \
 <tr><td>5</td><td>BI ツール</td><td>日次以上</td><td>問わない</td><td><strong>star のまま + 集約を配布</strong></td><td>全行の再生成が毎日走る</td></tr>
 <tr><td>6</td><td>アナリスト（SQL を書く・少人数）</td><td>月数回以下</td><td>1 億未満</td><td><strong>star + OBT を配布</strong></td><td>OBT はビューではなくテーブル。再生成は日次で足りる</td></tr>
 <tr><td>7</td><td>複数ファクトの横断（返信率 × 入社率）</td><td>問わない</td><td>問わない</td><td><strong>star のまま</strong></td><td>OBT ではコンフォームドディメンションが失われ、横断（drill across）ができない</td></tr>
-<tr><td>8</td><td>自分（SQL を書く・star が既にある）</td><td>問わない</td><td>問わない</td><td><strong>star のまま</strong></td><td>結合を間違えない利用者に OBT を配る意味がない。維持コストだけが増える</td></tr>
+<tr><td>8</td><td>自分（SQL を書く）</td><td>問わない</td><td>問わない</td><td><strong>star のまま</strong></td><td>結合を間違えない利用者に OBT を配る意味がない。維持コストだけが増える。star をまだ持っていなくても、1 行目の規模を超えるなら先に star を作ってから判断する</td></tr>
 </table>
 </div>
 
-<p>読み方: 上から順に当てはめ、最初に一致した行を採る。行は<strong>具体的なものから一般的なものへ</strong>並べてあり、1 行目は「star をまだ持っていないとき何を作るか」、8 行目は「star が既にあるとき OBT を足すか」で問いが違う。</p>
+<p>読み方: 上から順に当てはめ、最初に一致した行を採る。行は<strong>具体的なものから一般的なものへ</strong>並べてあり、1 行目は「小さく始めるとき何を作るか」、8 行目はそこから漏れた全ての場合を受ける。</p>
 
 <p>「OBT のみ」に落ちるのは 1 行目だけで、それ以外は star が必ず存在する。</p>
 
@@ -583,10 +602,9 @@ GROUP BY m_now.region;</code></pre>
 <h2>8. 参考: 手元の基盤ではどうか</h2>
 
 <div class="aside">
-<p><code>mart_url_performance</code> は上流に star を持たない OBT で、§6 の表の 1 行目（単発の分析・star をまだ持っていない・1000 万行未満）に当たる。この判断は正しい。</p>
-<p><code>mart_url_performance_incremental</code> は <code>date</code> に <code>partition_by</code> を持つ（<code>cluster_by</code> は無い）。それでも増分実行のたびに上流 <code>stg_access_logs</code>（<code>logs_database.access</code> の view・パーティション無し）が全スキャンされる。増分境界 <code>DATE(request_timestamp) &gt; (SELECT MAX(date) FROM {{ this }})</code> は §4 で挙げた「サブクエリによる動的式」そのもので、上流をパーティション化してもこの形のままではプルーニングが効かない。</p>
-<p>生テーブルを日付でパーティション化し、境界を一度変数に取って定数リテラルとして渡す形に書き換え、§5(d) の dry-run を書き換え前後で 2 本比べるのが、この回をそのまま試せる最小のチュートリアルになる。</p>
-<p><code>news_pipeline</code> の <code>summaries</code> はスコアを再採点で上書きする（Type1）。記事本文と要約を 1 表に非正規化していたら、<code>/recalculate</code> のたびに §2(a) と同じ全行書き換えが起きていた。</p>
+<p><code>mart_url_performance</code> は <code>url_path</code> × <code>date</code> 粒度の集約マートで、OBT ではない（ファクト 1 行に属性を付けた表ではない）。上流に star を持たない形は §6 の表の 1 行目に当たり、この規模では正しい。</p>
+<p><code>mart_url_performance_incremental</code> は <code>date</code> に <code>partition_by</code> を持つ（<code>cluster_by</code> は無い）。それでも増分境界 <code>DATE(request_timestamp) &gt; (SELECT MAX(date) FROM {{ this }})</code> が §4 の「サブクエリによる動的式」そのもので、上流 <code>stg_access_logs</code>（view）は毎回全スキャンされる。境界を変数に取って定数リテラルで渡す形に書き換え、§5(d) の dry-run を前後で比べるのが最小のチュートリアル。</p>
+<p><code>news_pipeline</code> の <code>summaries</code> はスコアを再採点で上書きする（Type1）ので、本文と要約を 1 表に非正規化していたら <code>/recalculate</code> のたびに §2(a) と同じ全行書き換えが起きていた。</p>
 </div>
 
 <h2>参照文献</h2>
