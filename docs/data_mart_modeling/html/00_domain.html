@@ -47,27 +47,11 @@
 <div class="aside">
 <strong>この資料で使う題材</strong><br>
 <strong>CareerVoice</strong> は、社員・元社員が在籍/退職した企業を8軸で採点するクチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントのスカウト・応募選考までを1つで扱う架空のサービス。収益源は、クチコミの閲覧権限・求人の掲載プラン月額・スカウト枠の契約・入社時の成果報酬の4種類あり、それぞれ別のビジネスプロセスから発生する。
-<div class="table-wrap">
-<table>
-<thead><tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr></thead>
-<tbody>
-<tr><td><code>C001</code></td><td>企業</td><td>アオゾラ商事。商社、従業員規模 <code>ge1000</code>、上場、親会社なし</td></tr>
-<tr><td><code>C002</code></td><td>企業</td><td>ネクスト技研。IT、<code>50_299</code>、非上場。<strong>2026-05-01 に従業員規模が <code>300_999</code> へ変化</strong></td></tr>
-<tr><td><code>C003</code></td><td>企業</td><td>ヒノデ物流。物流、<code>300_999</code>、非上場。<strong>親会社が <code>C001</code></strong>（<code>companies</code> の自己参照の例）</td></tr>
-<tr><td><code>M001</code></td><td>会員</td><td>1991年生・東京・現職 <code>C002</code>。<strong>2026-06-15 に転職意欲が <code>passive</code> → <code>active</code>、年収帯が <code>400_600</code> → <code>600_800</code> へ変化</strong>。2026-08-01 に <code>C001</code> へ入社</td></tr>
-<tr><td><code>M002</code></td><td>会員</td><td>1985年生・大阪・現職 <code>C001</code>、年収帯 <code>800_1000</code>、転職意欲 <code>none</code></td></tr>
-<tr><td><code>A01</code></td><td>転職エージェント会社</td><td>キャリアブリッジ（<code>tier</code> = <code>gold</code>）</td></tr>
-<tr><td><code>J002</code></td><td>求人</td><td><code>C002</code> のバックエンド職。<strong><code>A01</code> 経由</strong>で掲載（<code>job_postings.agency_id</code> が埋まる）</td></tr>
-<tr><td><code>R001</code></td><td>クチコミ</td><td><code>M001</code> → <code>C002</code>。2026-03-10 投稿、03-11 に <code>low_quality</code> で差し戻し1回、2026-03-12 公開</td></tr>
-<tr><td><code>R002</code></td><td>クチコミ</td><td><code>M002</code> → <code>C001</code>。2026-04-02 投稿、<code>defamation</code> で却下</td></tr>
-<tr><td><code>S001</code></td><td>スカウト</td><td><code>C001</code>（企業として送信）→ <code>M001</code>。2026-06-20 送信、06-21 開封、06-22 返信</td></tr>
-</tbody>
-</table>
-</div>
+サンプル ID は接頭辞で種類が分かる（<code>M</code>=会員、<code>C</code>=企業、<code>R</code>=クチコミ、<code>J</code>=求人、<code>S</code>=スカウト、<code>P</code>=応募、<code>K</code>=契約、<code>A</code>／<code>AG</code>=エージェント会社／担当者）。<code>M001</code> や <code>C002</code> が具体的に何を指すかは、§3 末尾の<strong>「サンプルデータ（シリーズ全体で使う ID）」</strong>に全件まとめてある。この定義はシリーズ11本で共通に使う。<br>
 <strong>主なテーブル</strong>: ソース側（<code>src_careervoice</code>）は 17 表で、<code>members</code>（会員マスタ）/ <code>companies</code>（企業マスタ）/ <code>agencies</code>・<code>agents</code>（エージェント会社と担当者）/ <code>reviews</code>・<code>review_moderation_events</code>（クチコミと審査ログ）/ <code>job_postings</code>（求人）/ <code>scouts</code>（スカウト送信と開封・返信）/ <code>applications</code>・<code>selection_events</code>・<code>placements</code>（応募・選考・入社）/ <code>contracts</code>（企業の契約）/ <code>page_views</code>（閲覧ログ）/ <code>job_categories</code>・<code>industries</code>・<code>prefectures</code>（参照マスタ）/ <code>member_desired_job_categories</code>（会員の希望職種、1会員に最大3件）。列定義は §3 に全て挙げる。分析側で作るテーブルは <code>dim_*</code>（切り口）・<code>fct_*</code>（測定値）・<code>agg_*</code>（集約）・<code>stg_*</code>（ソースを整えた層）の命名で、一覧は §4 のバスマトリクスにある。
 </div>
 
-<p>このシリーズは DMBOK シリーズ（総論）と扱う範囲を分ける。総論はガバナンス・品質・メタデータ・組織まで含む「データマネジメント全体」を扱うが、こちらは<strong>マートを1本作るときにその場で下す判断</strong>だけを扱う。粒度をどこに置くか、履歴をどう持つか、星形スキーマ（star）に分けるか結合済みの1枚（One Big Table）にするか — 手を動かす直前に必ず迷う地点を、Kimball の原典と現代の再解釈の両方から詰める。</p>
+<p>このシリーズは DMBOK シリーズ（総論）と扱う範囲を分ける。総論はガバナンス・品質・メタデータ・組織まで含む「データマネジメント全体」を扱うが、こちらは<strong>マートを1本作るときにその場で下す判断</strong>だけを扱う。粒度をどこに置くか、履歴をどう持つか、スタースキーマ（star。ファクトを中心にディメンションを放射状に置く形）に分けるか、結合済みの1枚（One Big Table）にするか — 手を動かす直前に必ず迷う地点を、Kimball の原典と現代の再解釈の両方から詰める。</p>
 
 <h2>1. このシリーズが扱うこと</h2>
 
@@ -93,7 +77,7 @@
 </div>
 
 <div class="aside kimball">
-<strong>Kimball（10 Rules, Rule #10）</strong>: 次元モデラーは常に「業務側の要求」と「ソースデータの現実」の間に立つ、と書かれている。要求だけを聞けば実装できないモデルになり、ソースだけを見ればレポートが作れないモデルになる。このシリーズのどの資料も「判断基準の表」で終わるのはそのためで、正解を1つ配るのではなく、状況→選択→理由の対応を置く。
+<strong>Kimball（10 Rules, Rule #10）</strong>: 設計者は常に「業務側の要求」と「ソースデータの現実」の間に立つ、と書かれている。要求だけを聞けば実装できないモデルになり、ソースだけを見ればレポートが作れないモデルになる。このシリーズのどの資料も「判断基準の表」で終わるのはそのためで、正解を1つ配るのではなく、状況→選択→理由の対応を置く。
 </div>
 
 <h2>2. 題材: CareerVoice</h2>
@@ -309,13 +293,47 @@
 <p><strong>つまり OLTP を素直に読むと「今」しか分からない</strong>。<code>C002</code> の <code>employee_size_band</code> が 2026-05-01 に <code>50_299</code> から <code>300_999</code> へ変わったとき、その前に投稿された <code>R001</code> を「当時の規模」で集計する手段はソース側に無い。</p>
 
 <div class="aside kimball">
-<strong>Kimball（Manifesto, 1997）</strong>: ER モデリングはトランザクション処理には適切で、そこでは最高のトランザクション性能とデータ整合性が得られる。しかしデータがエンドユーザーに届く前に、理解しやすさと性能の両方のために次元モデルへ変換しなければならない、と主張する。<br>
-Manifesto が次元モデルの強みとして挙げるのは5つ — 予測可能な枠組み、対称性（どのディメンションからでも等しく入れる）、優雅な拡張性（行や列を足すだけで既存クエリを壊さない）、緩やかに変化するディメンションやファクトレスファクトのような<strong>定型の対処法が揃っていること</strong>、そして集約を管理するユーティリティ群。このシリーズが扱うのは4つ目の「定型」の中身で、5つ目の集約は DM04『加法性と派生指標』と DM08『コンフォームドとドリルアクロス』で扱う。
+<strong>Kimball（Manifesto, 1997）</strong>: ER モデリングはトランザクション処理には適切で、そこでは最高のトランザクション性能とデータ整合性が得られる。しかしデータがエンドユーザーに届く前に、理解しやすさと性能の両方のためにディメンショナルモデルへ変換しなければならない、と主張する。<br>
+Manifesto がディメンショナルモデルの強みとして挙げるのは5つ — 予測可能な枠組み、対称性（どのディメンションからでも等しく入れる）、優雅な拡張性（行や列を足すだけで既存クエリを壊さない）、緩やかに変化するディメンションやファクトレスファクトのような<strong>定型の対処法が揃っていること</strong>、そして集約を管理するユーティリティ群。このシリーズが扱うのは4つ目の「定型」の中身で、5つ目の集約は DM04『加法性と派生指標』と DM08『コンフォームドとドリルアクロス』で扱う。
 </div>
+
+<h3>サンプルデータ（シリーズ全体で使う ID）</h3>
+
+<p>以降の説明と演習は、下記の固定サンプルだけを使う。ID の接頭辞は <code>M</code>=会員、<code>C</code>=企業、<code>R</code>=クチコミ、<code>J</code>=求人、<code>S</code>=スカウト、<code>P</code>=応募、<code>K</code>=契約、<code>A</code>=エージェント会社、<code>AG</code>=エージェント担当者を表す。日付は全て 2026 年、時刻は JST。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>ID</th><th>種類</th><th>内容と日付</th></tr></thead>
+<tbody>
+<tr><td><code>C001</code></td><td>企業</td><td>アオゾラ商事。<code>industry</code>=商社、<code>employee_size_band</code>=<code>ge1000</code>、<code>listed</code>、親会社なし</td></tr>
+<tr><td><code>C002</code></td><td>企業</td><td>ネクスト技研。IT、<code>50_299</code>、<code>unlisted</code>、親会社なし。<strong>2026-05-01 に <code>employee_size_band</code> が <code>300_999</code> へ変化</strong></td></tr>
+<tr><td><code>C003</code></td><td>企業</td><td>ヒノデ物流。物流、<code>300_999</code>、<code>unlisted</code>。<strong><code>parent_company_id</code> = <code>C001</code></strong></td></tr>
+<tr><td><code>M001</code></td><td>会員</td><td><code>registered_at</code>=2026-01-05、1991年生、東京、現職 <code>C002</code>、<code>annual_income_band</code>=<code>400_600</code>、<code>job_change_intent</code>=<code>passive</code>。<strong>2026-06-15 に <code>active</code>・<code>600_800</code> へ変化</strong>。2026-08-01 に <code>C001</code> へ入社</td></tr>
+<tr><td><code>M002</code></td><td>会員</td><td>1985年生、大阪、現職 <code>C001</code>、<code>800_1000</code>、<code>none</code>。希望職種 2 件（<code>ENG-BE</code>, <code>ENG-DATA</code>）</td></tr>
+<tr><td><code>M003</code></td><td>会員</td><td>1998年生、福岡、現職なし、<code>lt400</code>、<code>active</code></td></tr>
+<tr><td><code>A01</code> / <code>AG01</code></td><td>エージェント会社 / 担当者</td><td>キャリアブリッジ（<code>tier</code>=<code>gold</code>）/ 担当 佐藤</td></tr>
+<tr><td><code>A02</code> / <code>AG02</code></td><td>エージェント会社 / 担当者</td><td>ワークリンク（<code>standard</code>）/ 担当 鈴木</td></tr>
+<tr><td><code>ENG</code> 系</td><td>職種コード</td><td><code>ENG</code> → <code>ENG-BE</code> → <code>ENG-BE-JAVA</code>（level 3 まで）と、<code>ENG</code> → <code>ENG-DATA</code>（level 2 で終端）。<strong>枝ごとに深さが違う不揃い階層</strong>の題材</td></tr>
+<tr><td><code>J001</code></td><td>求人</td><td><code>C001</code> のデータエンジニア（<code>ENG-DATA</code>）。2026-04-01 掲載、企業の直接掲載</td></tr>
+<tr><td><code>J002</code></td><td>求人</td><td><code>C002</code> のバックエンド（<code>ENG-BE-JAVA</code>）。<code>A01</code> 経由</td></tr>
+<tr><td><code>R001</code></td><td>クチコミ</td><td><code>M001</code> → <code>C002</code>。2026-03-10 投稿、<code>former</code>/<code>fulltime</code>/<code>1_3</code>、<code>overall_score</code>=3.5。<strong>03-11 に <code>low_quality</code> で差し戻し</strong>（<code>screening</code> → <code>submitted</code>）、2026-03-12 公開。<code>review_moderation_events</code> は 3 行（<code>submitted→screening</code> 3/10、<code>screening→submitted</code> 3/11、<code>submitted→published</code> 3/12）で <code>moderation_rounds</code>=2（審査担当者が判定を下した数）</td></tr>
+<tr><td><code>R002</code></td><td>クチコミ</td><td><code>M002</code> → <code>C001</code>。2026-04-02 投稿、<code>defamation</code> で却下</td></tr>
+<tr><td><code>S001</code></td><td>スカウト</td><td><code>C001</code>（<code>sender_type</code>=<code>company</code>）→ <code>M001</code>、求人 <code>J001</code>。2026-06-20 送信、06-21 開封、06-22 に <code>interested</code> で返信</td></tr>
+<tr><td><code>S002</code></td><td>スカウト</td><td><code>AG01</code>（<code>agent</code>）→ <code>M003</code>、求人 <code>J002</code>。2026-06-25 送信、未開封</td></tr>
+<tr><td><code>S003</code></td><td>スカウト</td><td><code>AG02</code>（<code>agent</code>）→ <code>M002</code>、求人 <code>J001</code>。2026-06-18 送信、未開封。宛先が希望職種 2 件の会員なので、多値の関係を仲介するブリッジテーブルでの二重計上の題材になる</td></tr>
+<tr><td><code>P001</code></td><td>応募</td><td><code>M001</code> → <code>J001</code>、<code>source_channel</code>=<code>scout_company</code>。2026-06-23 応募 → 07-01 書類 → 07-08 一次 → 07-15 最終 → 07-20 内定 → 07-22 承諾 → 08-01 入社</td></tr>
+<tr><td><code>K001</code></td><td>契約</td><td><code>C001</code> の <code>premium</code> プラン（スカウト枠 200/月、月額 300,000円）。2026-01-01 開始</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><strong>想定規模</strong>（コストや物理設計を論じるときの前提であって、断定ではない）: 会員 300 万、企業 5 万、エージェント担当者 2 千、クチコミ累計 500 万、<code>page_views</code> 日次 2,000 万行、スカウト日次 10 万件、応募日次 5 千件。</p>
+
+<p><code>M001</code> が 6/15 に属性変化 → 6/20 に <code>S001</code> を受信 → 6/23 に <code>P001</code> で応募、という並びが DM05『履歴を持つ：SCD とスナップショット』の時点結合（イベント時点の版に結ぶ結合）の核になる。</p>
 
 <h2>4. ビジネスプロセスの棚卸し</h2>
 
-<p>次元モデルの行は<strong>ビジネスプロセス</strong>であって部門ではない（DT#3）。CareerVoice の場合、「マーケ部のマート」「エージェント事業部のマート」を作ると、スカウトも応募も両方に複製されて数字が食い違う。</p>
+<p>ディメンショナルモデルの行は<strong>ビジネスプロセス</strong>であって部門ではない（DT#3）。CareerVoice の場合、「マーケ部のマート」「エージェント事業部のマート」を作ると、スカウトも応募も両方に複製されて数字が食い違う。</p>
 
 <div class="aside kimball">
 <strong>Kimball（Design Tip #3）</strong>: 「データマートは部門で定義される」は業界で最も広く流布した誤りの一つだと断じている。マーケのマートにも受注が入り、セールスのマートにも受注が入れば、同じ情報が複数箇所に存在し、真実のバージョンが割れる。開発も保守もストレージも重複する。<br>
@@ -326,7 +344,7 @@ Manifesto が次元モデルの強みとして挙げるのは5つ — 予測可�
 
 <h3>バスマトリクス（予告）</h3>
 
-<p>行＝ビジネスプロセス、列＝共通ディメンション（コンフォームドディメンション。複数のファクトから同じ意味で参照される切り口）。この表の読み方と作り方は DM01『粒度を宣言する』で扱う。ここでは「これから11本でこの10行を埋めていく」という地図として置く。</p>
+<p>行＝ビジネスプロセス、列＝コンフォームドディメンション（複数のファクトで共有する同一定義のディメンション）。この表の読み方と作り方は DM01『粒度を宣言する』で扱う。ここでは「これから11本でこの10行を埋めていく」という地図として置く。</p>
 
 <div class="table-wrap">
 <table>
@@ -474,7 +492,7 @@ Reis はこの順を飛ばすと、部門ごとに「顧客」の定義が食い
 <div class="aside">
 <code>dbt_logs_analysis</code> はマートを<strong>データソース起点</strong>で切っている。<code>mart_url_performance</code> はプロセス名ではなくソーステーブル（アクセスログ）に対する集計軸の名前で、DT#3 の基準では行が「プロセス」ではなく「レポートの見出し」になっている状態にあたる。<br>
 <code>news_pipeline</code> は逆で、収集（<code>raw_articles</code>）・要約と採点（<code>summaries</code>）・通知（<code>notified_at</code>）・お気に入り（<code>favorites</code>）がそれぞれ別プロセスに対応する。<strong>アプリの処理境界がプロセス境界と一致していると、マートの行も自然に揃う。</strong><br>
-チュートリアルの種: アクセスログを「ページ表示」という1プロセスとして粒度宣言し直すと、DM01『粒度を宣言する』の粒度テストと、DM08『コンフォームドとドリルアクロス』の横断集計（ドリルアクロス）がそのまま試せる。
+チュートリアルの種: アクセスログを「ページ表示」という1プロセスとして粒度宣言し直すと、DM01『粒度を宣言する』の粒度テストと、DM08『コンフォームドとドリルアクロス』のドリルアクロス（複数のファクトを同じディメンションで並べる横断集計）がそのまま試せる。
 </div>
 
 <h2>参照文献</h2>

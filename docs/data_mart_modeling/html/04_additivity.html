@@ -43,11 +43,60 @@
 <h1>加法性と派生指標</h1>
 <p class="meta">データマート設計 04 ／ 参照: DWT ch.1–2（加法・半加法・非加法）, ch.4（定期スナップショットと半加法残高）, Design Tip #77 ／ 再解釈: MetricFlow（ratio metric）</p>
 
-<h2>1. この回が決めること</h2>
+<div class="aside">
+<p><strong>この資料で使う題材</strong></p>
 
-<p>決めるのは1つ。<strong>そのメジャーは再集約できるか</strong>。日次の行を月次に、企業の行を企業グループに足し上げたとき、同じ列に同じ意味が残るかどうかで、マートに持つ形が決まる。</p>
+<p><strong>CareerVoice</strong> は、社員・元社員による企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントからのスカウト・応募から入社までの選考を1つのプラットフォームで扱う架空のサービスである。収益はクチコミの閲覧権限・求人の掲載プラン月額・企業のスカウト枠契約・エージェント経由の入社時成果報酬の4つから生まれ、それぞれが別のビジネスプロセスとしてファクトテーブルになる。</p>
 
-<p>結論は固定判断としてシリーズ全体に効く。<strong>率・平均・ユニーク数はマートに持たず、分子・分母・和・件数を持つ</strong>。半加法メジャー（残高・在庫）は「どの軸で足せないか」をモデル側で宣言する。</p>
+<p>この資料の本文に出るサンプル ID は以下の13個で、値は全て 2026 年・JST。</p>
+
+<div class="table-wrap">
+<table>
+<tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr>
+<tr><td><code>C001</code></td><td>企業</td><td>アオゾラ商事（商社、従業員 1000人以上、上場、親会社なし）。企業グループの親であり、契約 <code>K001</code> の契約企業、求人 <code>J001</code> の掲載元、スカウト <code>S001</code> の送信主体</td></tr>
+<tr><td><code>C002</code></td><td>企業</td><td>ネクスト技研（IT、従業員 50〜299人、非上場）。2026-05-01 に従業員規模帯が 300〜999 人へ変わるため、履歴を残すディメンションでは版が2つになる。§2(a) と §5 のクチコミ集計の対象</td></tr>
+<tr><td><code>C003</code></td><td>企業</td><td>ヒノデ物流（物流、従業員 300〜999人、非上場）。親会社が <code>C001</code>。企業グループへ足し上げるときの子会社側</td></tr>
+<tr><td><code>M001</code></td><td>会員</td><td>1991年生・東京・現職 <code>C002</code>。2026-06-16 と 06-20 にスカウトを受け取る（§2(c) のユニーク数の例）</td></tr>
+<tr><td><code>M002</code></td><td>会員</td><td>1985年生・大阪・現職 <code>C001</code>。2026-06-18 にスカウト <code>S003</code> を受け取る</td></tr>
+<tr><td><code>M003</code></td><td>会員</td><td>1998年生・福岡・現職なし。2026-06-25 にスカウト <code>S002</code> を受け取る</td></tr>
+<tr><td><code>AG01</code></td><td>転職エージェントの担当者</td><td>佐藤（所属 キャリアブリッジ、<code>agency_tier</code> = <code>gold</code>）。<code>S002</code> の送信者で、§7(c) の返信率の例に出る</td></tr>
+<tr><td><code>AG02</code></td><td>転職エージェントの担当者</td><td>鈴木（所属 ワークリンク、<code>agency_tier</code> = <code>standard</code>）。<code>S003</code> の送信者</td></tr>
+<tr><td><code>J001</code></td><td>求人</td><td><code>C001</code> のデータエンジニア職。2026-04-01 掲載、エージェントを介さない直接掲載で、4月中は掲載中（<code>open</code>）</td></tr>
+<tr><td><code>K001</code></td><td>契約</td><td><code>C001</code> の <code>premium</code> 契約。スカウト枠 200件/月、月額 300,000円、2026-01-01 開始。§2(b) と §5 の残枠の例</td></tr>
+<tr><td><code>S001</code></td><td>スカウト</td><td><code>C001</code>（企業としての送信）→ <code>M001</code>、求人 <code>J001</code>。06-20 送信、06-21 開封、06-22 返信</td></tr>
+<tr><td><code>S002</code></td><td>スカウト</td><td><code>AG01</code>（エージェントとしての送信）→ <code>M003</code>。06-25 送信、未開封</td></tr>
+<tr><td><code>S003</code></td><td>スカウト</td><td><code>AG02</code>（エージェントとしての送信）→ <code>M002</code>。06-18 送信、未開封</td></tr>
+</table>
+</div>
+
+<p>この資料で使う主なテーブルは次のとおり。<code>fct_*</code> がファクト（数値を持つ明細）、<code>dim_*</code> がディメンション（切り口となる属性）、<code>agg_*</code> がファクトを事前に集計した集約表、<code>br_*</code> が多対多をつなぐブリッジ表を表す。</p>
+
+<div class="table-wrap">
+<table>
+<tr><th>テーブル</th><th>1行が表すもの</th></tr>
+<tr><td><code>fct_review</code></td><td>投稿された1クチコミ。8軸の <code>score_*</code> と <code>overall_score</code>（1.0〜5.0）を持つ</td></tr>
+<tr><td><code>fct_scout</code></td><td>送信された1スカウト</td></tr>
+<tr><td><code>fct_scout_funnel</code></td><td>1スカウトの送信→開封→返信→応募。反応があるたびに同じ行が更新される累積スナップショット</td></tr>
+<tr><td><code>fct_application_pipeline</code></td><td>1応募の応募→書類→面接→内定→入社。こちらも累積スナップショット</td></tr>
+<tr><td><code>fct_job_posting_daily</code></td><td>1求人 × 掲載中の1日。毎日行が立つ定期スナップショット</td></tr>
+<tr><td><code>fct_contract_monthly</code></td><td>1契約 × 1月。スカウト枠（<code>scout_quota</code>）・消化数（<code>scouts_sent</code>）・残枠（<code>scouts_remaining</code>）を持つ定期スナップショット</td></tr>
+<tr><td><code>fct_placement</code></td><td>エージェント経由の1入社。年収・料率・成果報酬額を持つ</td></tr>
+<tr><td><code>agg_company_rating_daily</code></td><td>1企業 × 1日。<code>fct_review</code> をクエリ性能のために集計したテーブル</td></tr>
+<tr><td><code>agg_company_entity</code></td><td>1企業。表示のために各種指標を並べた終端テーブル（さらに足し上げない前提）</td></tr>
+<tr><td><code>dim_company</code></td><td>企業。SCD2（属性が変わるたびに新しい行を足し、過去の版も残す方式）なので、1企業が複数行になりうる。現行の行は <code>is_current</code> が真</td></tr>
+<tr><td><code>dim_date</code></td><td>1日。<code>year</code>・<code>month</code>・<code>iso_week</code> などの日付ラベルを持つ</td></tr>
+<tr><td><code>dim_scout_sender</code></td><td>スカウトの送信主体（企業またはエージェント担当者）。こちらも SCD2</td></tr>
+<tr><td><code>br_company_hierarchy</code></td><td>企業グループの祖先と子孫の組。親会社への足し上げに使うブリッジ表</td></tr>
+<tr><td><code>br_member_desired_job_category</code></td><td>会員と希望職種（最大3件）の組。多値属性のブリッジ表</td></tr>
+</table>
+</div>
+</div>
+
+<h2>1. この資料で決めること</h2>
+
+<p>この資料で決めることは1つだけである。<strong>そのメジャーは再集約できるか</strong>を判定する。日次の行を月次に、企業の行を企業グループに足し上げたとき、同じ列に同じ意味が残るかどうかで、マートに持つ形が決まる。</p>
+
+<p>結論は<strong>率・平均・ユニーク数はマートに持たず、分子・分母・和・件数を持つ</strong>で、この題材の集約テーブル全てに適用する。半加法メジャー（残高・在庫）は「どの軸で足せないか」をモデル側で宣言する。</p>
 
 <h3>メジャーの3分類（DWT ch.1–2）</h3>
 
@@ -64,7 +113,7 @@
   <td>半加法（semi-additive）</td>
   <td>一部の軸では合計できるが、少なくとも1軸では合計が無意味。残高・在庫・枠残が典型で、足せないのはたいてい時間軸</td>
   <td>時間以外</td>
-  <td>値はそのまま。<strong>時間で足すなという宣言</strong>を付ける。時間方向は期末値か期中平均で潰す</td>
+  <td>値はそのまま。<strong>時間で足すなという宣言</strong>を付ける。時間方向は期末値か期中平均で1つの値にまとめる</td>
 </tr>
 <tr>
   <td>非加法（non-additive）</td>
@@ -96,9 +145,9 @@
 </table>
 </div>
 
-<p><code>agg_company_entity.avg_overall_score_90d</code> だけは平均を列で持つ。あれは1企業1行の<strong>終端の表示用</strong>で、さらに足し上げる前提が無いという別の型（08回）。再集約される集約表には平均を置かない、という本回の判断とは矛盾しない。</p>
+<p><code>agg_company_entity.avg_overall_score_90d</code> だけは平均を列で持つ。この列は1企業1行の<strong>終端の表示用</strong>であり、さらに足し上げる前提が無いという別の型にあたる（1企業1行へ集約した終端テーブルの設計は DM08『コンフォームドとドリルアクロス』で扱う）。再集約される集約表には平均を置かない、というこの資料の判断とは矛盾しない。</p>
 
-<h2>2. どこで壊れるか</h2>
+<h2>2. よくある失敗</h2>
 
 <h3>(a) 平均の平均 — <code>agg_company_rating_daily</code> に <code>avg_overall_score</code> を持つ</h3>
 
@@ -139,15 +188,15 @@
 
 <p>3列のうち2列は足してよい。<code>SUM(scouts_sent) = 160</code> は「1〜3月に送った総数」、<code>SUM(scout_quota) = 600</code> は「1〜3月に付与された総枠」で、どちらも加法な<strong>フロー</strong>の量。</p>
 
-<p>壊れているのは <code>SUM(scouts_remaining) = 440</code> だけ。これは<strong>存在しない枠</strong>で、上限まで積んでも <code>200 × 3 = 600</code> にしかならない量を「残枠」として報告している。実在するのは 3月末の 120 だけ。</p>
+<p>誤りなのは <code>SUM(scouts_remaining) = 440</code> だけである。この 440 は<strong>存在しない枠</strong>で、上限まで積んでも <code>200 × 3 = 600</code> にしかならない量を「残枠」として報告している。実在するのは 3月末の 120 だけ。</p>
 
 <p>企業軸では足せる。<code>C001</code> と <code>C003</code> の同月の残枠を足した「グループ全体の残枠」は意味がある。<strong>足せない軸が時間だけ</strong>、というのが半加法の定義そのもの。</p>
 
 <h3>(c) ユニーク数を足す — 日次の <code>COUNT(DISTINCT member_key)</code></h3>
 
-<p><code>fct_scout</code> から「日次のスカウト受信ユニーク会員数」を集約表に焼き、週次レポートがそれを <code>SUM</code> する。週は <code>dim_date.iso_week</code>（月曜始まり）で切る。ここで見るのは <strong>2026-06-15 〜 06-21 の ISO 週</strong>。</p>
+<p><code>fct_scout</code> から「日次のスカウト受信ユニーク会員数」を集約表に事前計算して保存し、週次レポートがその値を <code>SUM</code> する。週は <code>dim_date.iso_week</code>（月曜始まり）で切る。ここで見るのは <strong>2026-06-15 〜 06-21 の ISO 週</strong>。</p>
 
-<p>この週に入る正典サンプルは <code>S003</code>（<code>AG02</code> → <code>M002</code>、6/18）と <code>S001</code>（<code>C001</code> → <code>M001</code>、6/20）の2件。<code>S002</code>（<code>AG01</code> → <code>M003</code>、6/25）は翌 ISO 週なのでこの窓に入らない。<code>M001</code> が <code>S001</code> に加えて 6/16 にもスカウトを受けたとする（同じ会員が週内の複数日に受け取るのは普通に起きる）。</p>
+<p>この週に入るサンプルは <code>S003</code>（<code>AG02</code> → <code>M002</code>、6/18）と <code>S001</code>（<code>C001</code> → <code>M001</code>、6/20）の2件。<code>S002</code>（<code>AG01</code> → <code>M003</code>、6/25）は翌 ISO 週なのでこの窓に入らない。<code>M001</code> が <code>S001</code> に加えて 6/16 にもスカウトを受けたとする（同じ会員が週内の複数日に受け取るのは普通に起きる）。</p>
 
 <div class="table-wrap">
 <table>
@@ -166,7 +215,7 @@
 
 <p>膨らみ方は会員1人あたりの受信日数に比例する。会員 N 人が平均 d 日受け取れば合計は <code>N × d</code>、つまり <strong>d 倍</strong>になる。日次を月次に上げれば d は 10 を超える。</p>
 
-<p>(a) と違うのは、和と件数に分解しても直らないこと。ユニーク数は加法な構成要素を持たないので、<strong>集計済みの数値からは復元できない</strong>。原子ファクトを残すか、集約可能なスケッチ（HyperLogLog）を持つかの二択になる。</p>
+<p>(a) と違うのは、和と件数に分解しても直らないことである。ユニーク数は加法な構成要素を持たないので、<strong>集計済みの数値からは復元できない</strong>。原子ファクトを残すか、集約可能な概算用スケッチ（HyperLogLog。ユニーク数を近似する、足し合わせられる中間データ）を持つかの二択になる。</p>
 
 <svg id="dg-avg" viewBox="0 0 800 392" width="100%"
      style="max-width:800px;height:auto;display:block"
@@ -266,7 +315,7 @@
 <tr>
   <td>加法・半加法・非加法の分類（DWT ch.2）</td>
   <td>ファクトの数値メジャーは3種に分かれる。全軸で足せる／一部の軸だけ足せる／どの軸でも足せない</td>
-  <td>ファクト設計のたびに全メジャーへ適用する。粒度宣言（01回）の直後の作業</td>
+  <td>ファクト設計のたびに全メジャーへ適用する。1行が何を表すかを定める粒度宣言（DM01『粒度を宣言する』）の直後の作業</td>
 </tr>
 <tr>
   <td>非加法メジャーの分解</td>
@@ -275,18 +324,18 @@
 </tr>
 <tr>
   <td>定期スナップショット（DWT ch.4）</td>
-  <td>1行が「期間」を要約する。粒度は期間であってトランザクションではない。FK は密（活動が無くても行が立つ）</td>
+  <td>1行が「期間」を要約する。粒度は期間であってトランザクションではない。外部キーは密（活動が無くても行が立つ）</td>
   <td>残高・在庫・枠残。<code>fct_contract_monthly</code>, <code>fct_job_posting_daily</code></td>
 </tr>
 <tr>
   <td>残高の扱い</td>
-  <td>残高は時間以外の全軸で加法。時間方向は<strong>期末値</strong>か<strong>期中平均</strong>で潰す</td>
+  <td>残高は時間以外の全軸で加法。時間方向は<strong>期末値</strong>か<strong>期中平均</strong>で1つの値にまとめる</td>
   <td>半加法メジャーを期間集計するとき。どちらを出すかを指標定義として決めておく</td>
 </tr>
 <tr>
   <td>集約ファクト（aggregate fact table）</td>
   <td>原子ファクトの単純な数値ロールアップ。<strong>クエリ性能のためだけ</strong>に作り、原子ファクトと同時に BI へ公開する</td>
-  <td>「性能のため」なので、原子から出る答えと<strong>一致しなければならない</strong>。平均を焼くと一致しなくなる</td>
+  <td>「性能のため」なので、原子から出る答えと<strong>一致しなければならない</strong>。平均を事前計算して列に持つと一致しなくなる</td>
 </tr>
 <tr>
   <td>サマリーだけを持たない（DT#77）</td>
@@ -299,23 +348,23 @@
 <div class="aside kimball">
 <p><strong>DWT / Kimball Dimensional Modeling Techniques（加法性）</strong></p>
 <p>&ldquo;Semi-additive measures can be summed across some dimensions, but not all; balance amounts are common semi-additive facts because they are additive across all dimensions except time. Finally, some measures are completely non-additive, such as ratios. A good approach for non-additive facts is, where possible, to store the fully additive components of the non-additive measure and sum these components into the final answer set before calculating the final non-additive fact. This final calculation is often done in the BI layer or OLAP cube.&rdquo;</p>
-<p>本回の固定判断（<code>avg_*</code> を持たず <code>sum_*</code> + <code>count</code> を持つ）は、この一文をそのままテーブル設計規約にしたもの。</p>
+<p>この資料の判断（<code>avg_*</code> を持たず <code>sum_*</code> + <code>count</code> を持つ）は、この一文をそのままテーブル設計規約にしたものである。</p>
 </div>
 
 <div class="aside kimball">
 <p><strong>Design Tip #77（Margy Ross, 2006）</strong></p>
 <p>&ldquo;While you can roll up detailed data in unpredictable ways, the converse is not true &ndash; you can&rsquo;t magically explode summary data into its underlying components.&rdquo;</p>
 <p>&ldquo;Summary data naturally pre-supposes the typical business questions. When the business requirements change, as they inevitably will, then both the data model and ETL system must change to accommodate new data.&rdquo;</p>
-<p>加法性の議論は突き詰めると DT#77 に落ちる。<strong>集約表は原子ファクトの代替ではなく高速化の手段</strong>で、原子が残っている限り「持つ形を間違えた」は後から直せる。中央値やユニーク数を集約表に焼き、原子を捨てた瞬間に直せなくなる。</p>
+<p>加法性の議論は突き詰めると DT#77 に行き着く。<strong>集約表は原子ファクトの代替ではなく高速化の手段</strong>で、原子が残っている限り「持つ形を間違えた」は後から直せる。中央値やユニーク数を集約表に事前計算して保存し、原子を捨てた瞬間に直せなくなる。</p>
 </div>
 
-<p>パーセンタイルが再集約不可なのは、原典の定義から出る帰結。分位点は「値の分布」に対する関数で、分位点どうしの和にも平均にも分布の情報は残らない。日次 p95 を7日ぶん平均した数字は、週次 p95 とは別物であり、対応する定義が存在しない。</p>
+<p>パーセンタイルが再集約できないのは、原典の定義から出る帰結である。分位点は「値の分布」に対する関数で、分位点どうしの和にも平均にも分布の情報は残らない。日次 p95 を7日ぶん平均した数字は、週次 p95 とは別物であり、対応する定義が存在しない。</p>
 
 <h2>4. 現代の再解釈 — MetricFlow の ratio metric</h2>
 
-<p>dbt Semantic Layer（MetricFlow）は、この回の判断をテーブルの外側で表現する道具。メトリクスを YAML で宣言すると、クエリのたびに「その粒度で分子と分母を集計してから割る」SQL が生成される。ratio metric は <code>numerator</code> / <code>denominator</code> を metric 名で受け取るので、<strong>率そのものを列として持つ場所がどこにも無い</strong>。</p>
+<p>dbt Semantic Layer（MetricFlow）は、この資料の判断をテーブルの外側で表現する道具である。メトリクスを YAML で宣言すると、クエリのたびに「その粒度で分子と分母を集計してから割る」SQL が生成される。比率メトリクス（ratio metric）は <code>numerator</code>（分子）/ <code>denominator</code>（分母）をメトリクス名で受け取るので、<strong>率そのものを列として持つ場所がどこにも無い</strong>。</p>
 
-<p>YAML は dbt v1.12 以降の spec で書く。セマンティックモデルは <code>models:</code> の中に入り、entity と dimension は <code>columns:</code> で宣言する（旧 spec のトップレベル <code>semantic_models:</code> と <code>measures:</code> は置き換えられた）。</p>
+<p>YAML は dbt v1.12 以降の仕様で書く。セマンティックモデルは <code>models:</code> の中に入り、エンティティ（<code>entity</code>）とディメンション（<code>dimension</code>）は <code>columns:</code> で宣言する（旧仕様のトップレベルにあった <code>semantic_models:</code> と <code>measures:</code> は置き換えられた）。</p>
 
 <pre><code># models/marts/_marts__models.yml — dbt v1.12+ の spec
 # セマンティックモデルはモデル定義の中に入り、entity / dimension は columns で宣言する
@@ -364,13 +413,13 @@ metrics:
     denominator: scouts_sent
 </code></pre>
 
-<p>メトリクス名はプロジェクト内で一意。<code>fct_scout_funnel</code> 由来の <code>scouts_sent</code>（送ったスカウトの本数）と <code>fct_contract_monthly</code> 由来の <code>contract_scouts_sent</code>（契約枠の消化数）は<strong>数え方も分母も違う指標</strong>なので、名前を分ける。§6 の「名前を分ける」がそのままメトリクス層の制約になっている。</p>
+<p>メトリクス名はプロジェクト内で一意でなければならない。<code>fct_scout_funnel</code> 由来の <code>scouts_sent</code>（送ったスカウトの本数）と <code>fct_contract_monthly</code> 由来の <code>contract_scouts_sent</code>（契約枠の消化数）は<strong>数え方も分母も違う指標</strong>なので、名前を分ける。§6 の「名前を分ける」がそのままメトリクス層の制約になっている。</p>
 
-<p>粒度宣言（01回）と <code>entity</code> の宣言は一致していなければならない。<code>fct_contract_monthly</code> の粒度は 1契約 × 1月なので、<code>contract_id</code> は月数ぶん重複する。<code>type: primary</code> と書くと「この列が行を一意に識別する」という嘘の宣言になり、<code>contract</code> エンティティ経由の join で行が増幅する。</p>
+<p>粒度宣言（1行が何を表すかの宣言。DM01『粒度を宣言する』で扱う）と <code>entity</code> の宣言は一致していなければならない。<code>fct_contract_monthly</code> の粒度は 1契約 × 1月なので、<code>contract_id</code> は月数ぶん重複する。<code>type: primary</code> と書くと「この列が行を一意に識別する」という嘘の宣言になり、<code>contract</code> エンティティ経由の結合で行が増幅する。</p>
 
-<p>一意なのは <code>(contract_id, month_date)</code> の組。MetricFlow のエンティティは複合キーを取らないので、primary を宣言したいならモデル側に連結した代理列（<code>contract_month_id</code> のような1列）を足す。足さないなら <code>type: foreign</code> のままでよく、simple / ratio metric はそれで作れる。</p>
+<p>一意なのは <code>(contract_id, month_date)</code> の組である。MetricFlow のエンティティは複合キーを取らないので、primary を宣言したいならモデル側に連結した代理列（<code>contract_month_id</code> のような1列）を足す。足さないなら <code>type: foreign</code> のままでよく、simple / ratio metric はそれで作れる。</p>
 
-<p>半加法も宣言できる。<code>non_additive_dimension</code> は「このメジャーはこの時間ディメンションでは集約するな」という指定で、<code>window_agg: max</code> が期末値、<code>min</code> が期首値にあたる（旧 spec ではこのキーが <code>window_choice</code>）。Kimball が運用ルールとして書いていた「残高は期末値で潰す」が、そのままメタデータになった。</p>
+<p>半加法も宣言できる。<code>non_additive_dimension</code> は「このメジャーはこの時間ディメンションでは集約するな」という指定で、<code>window_agg: max</code> が期末値、<code>min</code> が期首値にあたる（旧 spec ではこのキーが <code>window_choice</code>）。Kimball が運用ルールとして書いていた「残高は期末の値だけを採る」が、そのままメタデータになった。</p>
 
 <pre><code>models:
   - name: fct_contract_monthly
@@ -411,10 +460,10 @@ metrics:
 <div class="aside modern">
 <p><strong>何が変わり、何が残るか</strong></p>
 <ul>
-<li><strong>残る:</strong> 「率と平均をテーブルに焼かない」という判断そのもの。MetricFlow は分子分母が列として存在することを前提にしており、<code>fct_scout_funnel</code> に <code>is_replied</code> が無ければ ratio metric は定義できない。物理設計の要求は変わらない</li>
-<li><strong>変わる:</strong> 割り算のロジックの置き場所。かつては BI ツール／ダッシュボードごとに散っていた「SUM してから割る」が、リポジトリ内の1定義に集まる。「返信率」の定義が2つに割れる事故（08回のコンフォームドの話と同じ構図）が減る</li>
+<li><strong>残る:</strong> 「率と平均をテーブルに事前計算して持たない」という判断そのものである。MetricFlow は分子分母が列として存在することを前提にしており、<code>fct_scout_funnel</code> に <code>is_replied</code> が無ければ比率メトリクスは定義できない。物理設計の要求は変わらない</li>
+<li><strong>変わる:</strong> 割り算のロジックの置き場所。かつては BI ツール／ダッシュボードごとに散っていた「SUM してから割る」が、リポジトリ内の1定義に集まる。「返信率」の定義が2つに割れる事故（複数のファクトで共有する同一定義のディメンション＝コンフォームドディメンションと同じ構図の問題で、DM08『コンフォームドとドリルアクロス』で扱う）が減る</li>
 <li><strong>変わる:</strong> 半加法の宣言が実行可能になった。テーブルのコメントや Wiki に書いてあった「時間で足すな」が、集計エンジンが従う指定になる</li>
-<li><strong>変わらない危険:</strong> Semantic Layer を通らない経路（アドホック SQL、直接 BigQuery を叩く BI、Reverse ETL）が1本でもあるなら、メトリクス定義は守ってくれない。<strong>テーブル側で和と件数を持つ規律は依然として必要</strong>で、Semantic Layer はその上の層</li>
+<li><strong>変わらない危険:</strong> Semantic Layer を通らない経路（アドホック SQL、直接 BigQuery を参照する BI、DWH から業務システムへ書き戻す Reverse ETL）が1本でもあるなら、メトリクス定義は守ってくれない。<strong>テーブル側で和と件数を持つ規律は依然として必要</strong>で、Semantic Layer はその上の層</li>
 </ul>
 </div>
 
@@ -501,7 +550,7 @@ GROUP BY d.year, d.month, c.company_id
 
 <p><code>C002</code> の3日分に対して <code>33.5 / 12 = 2.79</code>。<code>a.company_key</code> でグループ化しないのは、<code>C002</code> が 2026-05-01 に <code>employee_size_band</code> を変えて2版になるため。SCD2 版で束ねると年内の集計がその境で2行に割れる（<strong>足し上げの単位は企業という実体</strong>）。</p>
 
-<p><code>SAFE_DIVIDE</code> は素の集計では発火しない（この表は 0 件の日に行を立てないので <code>review_count &gt;= 1</code> が保証される）。効くのは後段で <code>dim_date</code> 側から 0 件月を <code>LEFT JOIN</code> で埋めたときで、分母 0 をエラーではなく <code>NULL</code> にして通す保険。</p>
+<p><code>SAFE_DIVIDE</code> は素の集計では出番が無い（この表は 0 件の日に行を立てないので <code>review_count &gt;= 1</code> が保証される）。有効になるのは後段で <code>dim_date</code> 側から 0 件月を <code>LEFT JOIN</code> で埋めたときで、分母 0 をエラーではなく <code>NULL</code> にして通す保険。</p>
 
 <h3>企業グループへ再集約する（<code>br_company_hierarchy</code> 経由）</h3>
 
@@ -524,13 +573,13 @@ GROUP BY group_company_id, d.year
 
 <p><code>C001</code>（アオゾラ商事）を <code>ancestor</code> とする行には、自分自身（<code>depth = 0</code>）と子会社 <code>C003</code>（ヒノデ物流、<code>depth = 1</code>）が入る。<strong>集計式（<code>SUM</code> と <code>SAFE_DIVIDE</code>）が月次のときと1文字も変わらない</strong>のが、和と件数で持つことの実利。</p>
 
-<p>ただしキーの扱いには前提が要る。<code>agg_company_rating_daily.company_key</code> は投稿時点の SCD2 版なので、<code>br_company_hierarchy</code> の子孫側は <strong><code>dim_company</code> の全 SCD2 版に展開して作る</strong>（<code>br_member_desired_job_category</code> と同じ理由）。現行版のキーしか持たないブリッジだと、<code>C002</code> のように年内に属性が変わった企業の投稿が結合で静かに落ちる。</p>
+<p>ただしキーの扱いには前提が要る。<code>agg_company_rating_daily.company_key</code> は投稿時点の SCD2 版なので、<code>br_company_hierarchy</code> の子孫側は <strong><code>dim_company</code> の全 SCD2 版に展開して作る</strong>（<code>br_member_desired_job_category</code> と同じ理由）。現行版のキーしか持たないブリッジだと、<code>C002</code> のように年内に属性が変わった企業の投稿が、結合で静かに除外される。</p>
 
-<p>祖先側も同じく全 SCD2 版で持ち、クエリ側で <code>anc.is_current</code> の1版に絞ってから <code>company_id</code>（自然キー）でグループ化する。この <code>is_current</code> が無いと、祖先 <code>C001</code> の版の数だけ同じ子孫行が複製されてファンアウトする。<strong>足し上げの単位は企業という実体であって、SCD2 の版ではない。</strong></p>
+<p>祖先側も同じく全 SCD2 版で持ち、クエリ側で <code>anc.is_current</code> の1版に絞ってから <code>company_id</code>（自然キー）でグループ化する。この <code>is_current</code> が無いと、祖先 <code>C001</code> の版の数だけ同じ子孫行が複製され、結合による行の増幅が起きる。<strong>足し上げの単位は企業という実体であって、SCD2 の版ではない。</strong></p>
 
 <p>もし日次に平均を持っていたら、時間方向とグループ方向で別々の重み付けロジックを書くことになり、片方を必ず間違える。</p>
 
-<h3>半加法を期末値で潰す</h3>
+<h3>半加法を期末値にまとめる</h3>
 
 <pre><code>-- 四半期末（3月）時点の残枠。QUALIFY で行を絞る
 SELECT
@@ -546,7 +595,7 @@ QUALIFY ROW_NUMBER() OVER (
 ) = 1
 </code></pre>
 
-<p><code>K001</code> について <code>scouts_remaining = 120</code>（3月の行）が返る。<code>SUM</code> の 440 ではない。期中平均が欲しいなら同じ窓で <code>AVG(scouts_remaining)</code>（= <code>440 / 3 = 146.67</code>）。</p>
+<p><code>K001</code> について <code>scouts_remaining = 120</code>（3月の行）が返る。<code>SUM</code> の 440 ではない。期中平均が欲しいなら同じ窓で <code>AVG(scouts_remaining)</code> を使う（= <code>440 / 3 = 146.67</code>）。</p>
 
 <p><strong>どちらを「残枠」と呼ぶかは指標定義であって、SQL の都合ではない。</strong>決めて名前を分ける（<code>scouts_remaining_month_end</code> と <code>avg_scouts_remaining</code>）。</p>
 
@@ -573,7 +622,7 @@ JOIN {{ ref('dim_date') }} AS d
 GROUP BY r.company_key, d.year
 </code></pre>
 
-<p>指針: <strong>パーセンタイルを集約表に列として焼くのは、その粒度でしか使わないと確定している場合だけ</strong>。焼いた <code>p50</code> は上位粒度へ持ち上げられないので、年次が要るなら年次でもう一度原子から計算する。<code>fct_review</code> は 1行 = 1クチコミなので、企業 × 年程度の集計ならスキャン量は問題にならない。</p>
+<p>指針: <strong>パーセンタイルを集約表に列として事前計算して保存するのは、その粒度でしか使わないと確定している場合だけである</strong>。事前計算した <code>p50</code> は上位粒度へ持ち上げられないので、年次が要るなら年次でもう一度原子から計算する。<code>fct_review</code> は 1行 = 1クチコミなので、企業 × 年程度の集計ならスキャン量は問題にならない。</p>
 
 <h3>ユニーク数はスケッチで持つ</h3>
 
@@ -594,9 +643,9 @@ FROM daily
 GROUP BY iso_week_start
 </code></pre>
 
-<p>§2(c) と同じ ISO 週（6/15〜6/21）を読むので、返るのは <code>weekly_unique_members = 2</code>。日次ユニークを足した 3 ではない。</p>
+<p>§2(c) と同じ ISO 週（6/15〜6/21）を読むので、返るのは <code>weekly_unique_members = 2</code> である。日次ユニークを足した 3 ではない。</p>
 
-<p><code>HLL_COUNT.INIT</code> が返す <code>BYTES</code> のスケッチは<strong>マージ可能</strong>で、これが「ユニーク数の加法な構成要素」にあたる。誤差は数 % 入るので、正確な値が要る監査系の数字には使わない。厳密さが要るなら原子ファクトから <code>COUNT(DISTINCT ...)</code> を都度回す。</p>
+<p><code>HLL_COUNT.INIT</code> が返す <code>BYTES</code> のスケッチは<strong>マージ可能</strong>で、これが「ユニーク数の加法な構成要素」にあたる。誤差は数 % 入るので、正確な値が要る監査系の数字には使わない。厳密さが要るなら原子ファクトから <code>COUNT(DISTINCT ...)</code> を都度実行する。</p>
 
 <h2>6. 判断基準</h2>
 
@@ -661,14 +710,14 @@ GROUP BY iso_week_start
   <td>1エンティティ1行の終端テーブル（<code>agg_company_entity</code>）</td>
   <td>—</td>
   <td>平均・率を持ってよい（再集約しない契約）</td>
-  <td>そのまま表示。<strong>この表を足し上げる分析を書かない</strong>のが条件（08回）</td>
+  <td>そのまま表示する。<strong>この表を足し上げる分析を書かない</strong>のが条件（終端テーブルの設計は DM08『コンフォームドとドリルアクロス』で扱う）</td>
 </tr>
 </table>
 </div>
 
-<p>運用の落とし所を1つ。<strong>集約表の列名から <code>avg_</code> / <code>rate_</code> / <code>pct_</code> / <code>median_</code> / <code>unique_</code> を禁止する</strong>。分類の議論は設計時にしかできないが、列名の検査は CI でできる。</p>
+<p>運用上の着地点を1つ挙げる。<strong>集約表の列名から <code>avg_</code> / <code>rate_</code> / <code>pct_</code> / <code>median_</code> / <code>unique_</code> を禁止する</strong>。分類の議論は設計時にしかできないが、列名の検査は CI でできる。</p>
 
-<p>例外を作るのは「終端テーブル」だと宣言した <code>agg_company_entity</code> だけ。</p>
+<p>例外を作るのは「終端テーブル」だと宣言した <code>agg_company_entity</code> だけである。</p>
 
 <h2>7. 演習</h2>
 
@@ -676,7 +725,7 @@ GROUP BY iso_week_start
 
 <details>
 <summary>解答例</summary>
-<p><strong>何も新しく持たない。</strong><code>fct_review</code>（1行 = 1クチコミ）を残しておくことが答え。<code>agg_company_rating_daily</code> の <code>sum_overall_score</code> と <code>review_count</code> からは中央値を復元できない（和と件数は分布の情報を持たない）。</p>
+<p><strong>何も新しく持たない。</strong><code>fct_review</code>（1行 = 1クチコミ）を残しておくことが答えになる。<code>agg_company_rating_daily</code> の <code>sum_overall_score</code> と <code>review_count</code> からは中央値を復元できない（和と件数は分布の情報を持たない）。</p>
 
 <p>判断基準表の「中央値・p95 → 分解不能 → 持たない」の行にあたる。</p>
 <pre><code>SELECT
@@ -688,17 +737,17 @@ JOIN {{ ref('dim_date') }} AS d
     ON r.submitted_date_key = d.date_key
 GROUP BY r.company_key, d.year
 </code></pre>
-<p>「毎朝ダッシュボードで見るので焼きたい」なら、<strong>企業 × 年の粒度で専用の集約表を作る</strong>。ただしその表の中央値は四半期にも全期間にも持ち上げられない、と明記する。粒度ごとに別テーブルが増えるのを避けたいなら、原子から都度計算する方を選ぶ（DT#77）。</p>
+<p>「毎朝ダッシュボードで見るので事前計算して保存したい」なら、<strong>企業 × 年の粒度で専用の集約表を作る</strong>。ただしその表の中央値は四半期にも全期間にも持ち上げられない、と明記する。粒度ごとに別テーブルが増えるのを避けたいなら、原子から都度計算する方を選ぶ（DT#77）。</p>
 </details>
 
 <h3>(b) <code>fct_job_posting_daily.is_open</code> を月で <code>SUM</code> したら何を意味するか。「月末時点の掲載数」はどう出すか</h3>
 
 <details>
 <summary>解答例</summary>
-<p><code>SUM(is_open)</code> は<strong>延べ掲載日数（posting-days）</strong>。求人 <code>J001</code>（<code>C001</code> のデータエンジニア、2026-04-01 掲載、4月中は <code>open</code>）なら 4月の <code>SUM(is_open) = 30</code>。</p>
+<p><code>SUM(is_open)</code> は<strong>延べ掲載日数（posting-days）</strong>にあたる。求人 <code>J001</code>（<code>C001</code> のデータエンジニア、2026-04-01 掲載、4月中は <code>open</code>）なら 4月の <code>SUM(is_open) = 30</code>。</p>
 
-<p>これは「30 件の求人」ではなく、1件の求人 × 30 日。</p>
-<p>延べ日数それ自体は意味のあるメジャー（掲載枠の消化量、掲載単価の分母）なので、間違いなのは値ではなく<strong>名前</strong>。<code>open_posting_days</code> のように別名にすれば加法なメジャーとして扱える。</p>
+<p>この 30 は「30 件の求人」ではなく、1件の求人 × 30 日を表す。</p>
+<p>延べ日数それ自体は意味のあるメジャー（掲載枠の消化量、掲載単価の分母）なので、間違いなのは値ではなく<strong>名前</strong>である。<code>open_posting_days</code> のように別名にすれば加法なメジャーとして扱える。</p>
 <pre><code>-- 月末時点の掲載数: 足せない軸（日）を先に潰してから、足せる軸（求人）で足す
 WITH month_end AS (
     SELECT
@@ -724,7 +773,7 @@ SELECT
 FROM month_end
 GROUP BY company_key, year, month
 </code></pre>
-<p><code>J001</code> だけなら <code>open_postings_month_end = 1</code>。<code>QUALIFY</code> で行を 4/30 に絞ってから求人をまたいで足す＝<strong>足せる軸（求人）でだけ足している</strong>。半加法の扱いは「足せない軸を先に潰す」で常に同じ形になる。</p>
+<p><code>J001</code> だけなら <code>open_postings_month_end = 1</code>。<code>QUALIFY</code> で行を 4/30 に絞ってから求人をまたいで足す＝<strong>足せる軸（求人）でだけ足している</strong>。半加法の扱いは「足せない軸を先に1つの値へまとめる」で常に同じ形になる。</p>
 </details>
 
 <h3>(c) 返信率を「スカウト送信主体別」に見るとき、分子分母をどの粒度で持つか</h3>
@@ -733,7 +782,7 @@ GROUP BY company_key, year, month
 <summary>解答例</summary>
 <p>分子分母は<strong>同じ行から出す</strong>のが原則。<code>fct_scout_funnel</code>（1行 = 1スカウトの送信→開封→返信→応募）は <code>scout_sender_key</code> を FK に持ち、<code>is_replied</code> を 0/1 で持つので、分母 = 行数、分子 = <code>SUM(is_replied)</code> で足りる。</p>
 
-<p>集約表を作るなら粒度は <code>sent_date_key × scout_sender_key</code>、列は「送信件数」と「返信件数」の2つだけ。<strong>率の列は作らない。</strong></p>
+<p>集約表を作るなら粒度は <code>sent_date_key × scout_sender_key</code>、列は「送信件数」と「返信件数」の2つだけにする。<strong>率の列は作らない。</strong></p>
 <pre><code>SELECT
     s.sender_type,
     COUNT(*)                                  AS scouts_sent,
@@ -744,12 +793,12 @@ JOIN {{ ref('dim_scout_sender') }} AS s
     ON f.scout_sender_key = s.scout_sender_key
 GROUP BY s.sender_type
 </code></pre>
-<p>注意点が2つ。</p>
+<p>注意点が2つある。</p>
 <ul>
 <li><strong>返信日ではなく送信日で数える。</strong>分子を <code>replied_date_key</code> 基準、分母を <code>sent_date_key</code> 基準にすると、月をまたいだ返信の分だけ率がずれる（月末に送ったスカウトの返信は翌月に入る）。累積スナップショットは送信の行が更新されていく形なので、両方を送信日で数えれば整合する。</li>
-<li><strong>送信主体別の率を平均しない。</strong><code>C001</code>（company）が 100 通送って 12 返信 = 12%、<code>AG01</code>（agent）が 50 通送って 12 返信 = 24%。この2つを平均すると 18% だが、全体の返信率は <code>24 / 150 = 16%</code>。§2a と同じ壊れ方が、時間軸ではなく送信主体軸で起きる。</li>
+<li><strong>送信主体別の率を平均しない。</strong><code>C001</code>（企業としての送信）が 100 通送って 12 返信 = 12%、<code>AG01</code>（エージェントとしての送信）が 50 通送って 12 返信 = 24%。この2つを平均すると 18% だが、全体の返信率は <code>24 / 150 = 16%</code> である。§2(a) と同じ誤りが、時間軸ではなく送信主体軸で起きる。</li>
 </ul>
-<p>なお <code>dim_scout_sender</code> は SCD2 なので、<code>scout_sender_key</code> は送信時点の版を指す。「エージェント <code>AG01</code> の <code>agency_tier</code> が <code>gold</code> だった期間の返信率」はそのまま出る。現在の tier で束ねたいなら <code>is_current</code> の行へ自然キーで再結合する（05回）。</p>
+<p>なお <code>dim_scout_sender</code> は SCD2 なので、<code>scout_sender_key</code> は送信時点の版を指す。「エージェント <code>AG01</code> の <code>agency_tier</code> が <code>gold</code> だった期間の返信率」はそのまま出る。現在の階級（<code>agency_tier</code>）で束ねたいなら <code>is_current</code> の行へ自然キーで再結合する（属性の版をどう持ち、どの版に結ぶかは DM05『履歴を持つ：SCD とスナップショット』で扱う）。</p>
 </details>
 
 <h2>8. 参考: 手元の基盤ではどうか</h2>
@@ -757,8 +806,8 @@ GROUP BY s.sender_type
 <div class="aside">
 <ul>
 <li><code>mart_url_performance</code> は <code>url_path × date</code> 粒度で <code>avg_response_time</code>・<code>error_rate_percent</code>・<code>unique_visitors</code>（<code>COUNT(DISTINCT client_ip)</code>）を持つ。週次に上げると §2 の (a)(b)(c) が3つとも同時に起きる形になっている。</li>
-<li>この回の基準なら、<code>error_rate_percent</code> は分子（<code>client_error_count + server_error_count</code>）も分母（<code>total_requests</code>）も既に列にあるので、率の列を落としても情報は 1 ビットも失われない。<code>avg_response_time</code> は <code>sum(response_time_sec)</code> を並べて初めて同じ状態になる。</li>
-<li><code>percentile()</code> マクロの <code>APPROX_QUANTILES(x, 100)[OFFSET(p)]</code> を日次テーブルに焼くと、その <code>p95</code> は週次へ持ち上げられない。原子（<code>stg_access_logs</code>）から都度計算する経路を残しておくかどうかが、この回の判断が効く分岐点。</li>
+<li>この資料の基準なら、<code>error_rate_percent</code> は分子（<code>client_error_count + server_error_count</code>）も分母（<code>total_requests</code>）も既に列にあるので、率の列を削っても情報は 1 ビットも失われない。<code>avg_response_time</code> は <code>sum(response_time_sec)</code> を並べて初めて同じ状態になる。</li>
+<li><code>percentile()</code> マクロの <code>APPROX_QUANTILES(x, 100)[OFFSET(p)]</code> を日次テーブルに事前計算して保存すると、その <code>p95</code> は週次へ持ち上げられない。原子（<code>stg_access_logs</code>）から都度計算する経路を残しておくかどうかが、この資料の判断が分かれる点である。</li>
 <li>種: <code>unique_visitors</code> を <code>HLL_COUNT.INIT(client_ip)</code> のスケッチ列に置き換え、<code>HLL_COUNT.MERGE</code> で週次・月次を出して <code>COUNT(DISTINCT)</code> の実測値と誤差を比べてみる。</li>
 </ul>
 </div>
