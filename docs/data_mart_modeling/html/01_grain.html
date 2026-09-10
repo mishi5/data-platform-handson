@@ -205,7 +205,7 @@ DT#77（Margy Ross）: <em>“you can’t magically explode summary data into it
 
 <div class="aside kimball">
 Grain（2003）: <em>“Declaring the grain means saying exactly what a fact table record represents.”</em> / <em>“If the grain isn’t clearly defined, the whole design rests on quicksand… rogue facts that introduce application errors sneak into the design.”</em><br>
-そして粒度違反のメジャーについて: <em>“Helpful facts… aren’t true to the grain. …dangerous because they invite the end user to make mistakes. Omit them from the design.”</em>
+そして粒度違反のメジャーについて: <em>“Helpful facts… aren’t true to the grain. …dangerous because they invite the end user to make mistakes. Omit them from the design.”</em>（訳: 便利そうなファクトは粒度に合っていない。利用者の誤りを誘うので危険であり、設計から外す）
 </div>
 
 <h3>原子粒度の原則</h3>
@@ -534,7 +534,7 @@ LEFT JOIN {{ ref('dim_channel') }} AS dch
 
 <p>応募を数えたいなら <code>fct_application_pipeline</code> の1行を数える。<strong>「応募数」と「選考イベント数」は別の表で数える</strong>——粒度を分けるとは、この状態を作ることを指す。</p>
 
-<p>入れたくなるが入れてはいけないメジャーの例を挙げておく。いずれも Grain の <em>“aren’t true to the grain… Omit them from the design.”</em> に該当する。</p>
+<p>入れたくなるが入れてはいけないメジャーの例を挙げておく。いずれも Grain の <em>“aren’t true to the grain… Omit them from the design.”</em>（粒度に合っていない。設計から外す）に該当する。</p>
 
 <div class="table-wrap">
 <table>

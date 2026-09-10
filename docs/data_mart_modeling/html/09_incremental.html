@@ -42,9 +42,52 @@
 <h1>増分・遅延到着・冪等性</h1>
 <p class="meta">データマート設計 09 ／ 参照: DWT ch.19–20, ETL サブシステム #2 #6 #13 #14 #16 #24, Design Tip #43 #164 ／ 再解釈: Functional Data Engineering, dbt の増分戦略（BigQuery configs / incremental strategies / microbatch）</p>
 
-<h2>1. この回が決めること</h2>
+<div class="aside">
+<p><strong>この資料で使う題材。</strong> CareerVoice は、社員・元社員の企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントからのスカウト・応募から入社までの選考を1つのプラットフォームで扱う架空のサービスである。業務データベースは CDC（変更データキャプチャ）で BigQuery に複製され、dbt で、業務イベントを1行ずつ記録する<strong>ファクト</strong>テーブル（<code>fct_*</code>）と、その相手方の属性を説明する<strong>ディメンション</strong>テーブル（<code>dim_*</code>）へ組み替えられる。</p>
 
-<p>「増分で作る」とは、毎回どこを消してどこを書き直すかを決めることに尽きる。CareerVoice のファクトは、行が追加されるだけのもの（<code>fct_scout</code>）と、既存行が更新され続けるもの（<code>fct_application_pipeline</code>）で書き戻し方が違う。この回はファクトごとに「方式 × ルックバック窓」を決め、同じ <code>run_date</code> で2回流しても結果が1バイトも変わらない形にする。</p>
+<p><strong>この資料に出るサンプル ID</strong></p>
+<div class="table-wrap">
+<table>
+<tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr>
+<tr><td><code>M001</code></td><td>会員</td><td>1991年生・東京・現職 <code>C002</code>。2026-06-15 に転職意欲が <code>passive</code> から <code>active</code> へ、年収帯が <code>400_600</code> から <code>600_800</code> へ変化。2026-08-01 に <code>C001</code> へ入社</td></tr>
+<tr><td><code>M002</code></td><td>会員</td><td>1985年生・大阪・現職 <code>C001</code>。<code>S003</code> の宛先</td></tr>
+<tr><td><code>C001</code></td><td>企業</td><td>アオゾラ商事（商社、従業員 1000人以上、上場）。求人 <code>J001</code> の掲載元、スカウト <code>S001</code> の送信主体、契約 <code>K001</code> の契約先</td></tr>
+<tr><td><code>C002</code></td><td>企業</td><td>ネクスト技研（IT、非上場）。2026-05-01 に <code>employee_size_band</code> が <code>50_299</code> から <code>300_999</code> へ変わり、その変更が DWH に届いたのは 5/3（§2(c) の題材）</td></tr>
+<tr><td><code>J001</code></td><td>求人</td><td><code>C001</code> のデータエンジニア求人。2026-04-01 掲載、エージェントを介さない直接掲載</td></tr>
+<tr><td><code>AG02</code></td><td>エージェント担当者</td><td>転職エージェント「ワークリンク」（<code>standard</code>）の担当者。<code>S003</code> の送信主体</td></tr>
+<tr><td><code>S001</code></td><td>スカウト</td><td><code>C001</code>（企業）→ <code>M001</code>。求人 <code>J001</code>、2026-06-20 送信、06-21 開封、06-22 返信</td></tr>
+<tr><td><code>S003</code></td><td>スカウト</td><td><code>AG02</code>（エージェント担当者）→ <code>M002</code>。求人 <code>J001</code>、2026-06-18 送信、未開封。この資料では「6/18 に送信され、6/20 になって DWH へ届いた遅れて到着する行」として使う</td></tr>
+<tr><td><code>P001</code></td><td>応募</td><td><code>M001</code> → <code>J001</code>（企業スカウト経由 <code>scout_company</code>）。6/23 応募 → 7/1 書類 → 7/8 一次面接 → 7/15 最終面接 → 7/20 内定 → 7/22 承諾 → 8/1 入社</td></tr>
+<tr><td><code>K001</code></td><td>契約</td><td><code>C001</code> の <code>premium</code> 契約（スカウト枠 200/月、月額 300,000 円）、2026-01-01 開始</td></tr>
+</table>
+</div>
+
+<p><strong>この資料で使う主なテーブル</strong></p>
+<div class="table-wrap">
+<table>
+<tr><th>テーブル</th><th>1行の意味・役割</th></tr>
+<tr><td><code>stg_careervoice__*</code></td><td>複製した業務テーブルをクリーニングしたステージング層。ここでは <code>scouts</code> / <code>applications</code> / <code>selection_events</code> / <code>reviews</code> を使う</td></tr>
+<tr><td><code>fct_scout</code></td><td>1行 = 送信された1スカウト。日付 <code>sent_date</code> で日次パーティションを切る。この資料の中心になるファクト</td></tr>
+<tr><td><code>fct_application_pipeline</code></td><td>1行 = 1応募のパイプライン。応募から入社までの節目の日付を1行に持ち、選考が進むたびに同じ行が更新される（累積スナップショットのファクト）</td></tr>
+<tr><td><code>fct_selection_event</code></td><td>1行 = 1選考ステージ遷移。上の累積スナップショットの裏付けになる明細</td></tr>
+<tr><td><code>fct_page_view</code></td><td>1行 = 1ページ表示。日次 2,000 万行を想定する最大のファクト</td></tr>
+<tr><td><code>fct_job_posting_daily</code></td><td>1行 = 1求人 × 掲載中の1日（定期スナップショットのファクト）</td></tr>
+<tr><td><code>fct_contract_monthly</code></td><td>1行 = 1契約 × 1月。スカウト枠の消化を持つ定期スナップショット</td></tr>
+<tr><td><code>fct_review</code></td><td>1行 = 投稿された1クチコミ</td></tr>
+<tr><td><code>fct_scout_funnel</code> / <code>fct_review_moderation</code> / <code>fct_placement</code></td><td>スカウトの反応、クチコミ審査、エージェント経由の入社（成果報酬）を扱うファクト。§6 の判断基準の表にだけ出る</td></tr>
+<tr><td><code>dim_member</code></td><td>会員のディメンション。属性が変わると新しい版の行を足し、有効期間 <code>valid_from</code> / <code>valid_to</code> で版を区別する（SCD2）</td></tr>
+<tr><td><code>dim_member_daily</code></td><td>1行 = 1会員 × 1日。その日の終わり時点の会員属性を毎日そのまま保存する表</td></tr>
+<tr><td><code>dim_member_profile_mini</code></td><td>年収帯 × 転職意欲の 15 通りだけを持つ小さなディメンション（ミニディメンション）。速く変わる属性を <code>dim_member</code> から分離したもので、ファクトは <code>member_profile_mini_key</code> で参照する</td></tr>
+<tr><td><code>dim_company</code></td><td>企業のディメンション。<code>dim_member</code> と同じく SCD2 で版を持つ</td></tr>
+<tr><td><code>dim_scout_sender</code> / <code>dim_job_posting</code></td><td>スカウトの送信主体（企業またはエージェント担当者）と、求人のディメンション</td></tr>
+<tr><td><code>dim_audit</code></td><td>1行 = 1回のロード実行。<code>batch_id</code> / <code>loaded_at</code> / <code>dbt_invocation_id</code> を持ち、全ファクトが <code>audit_key</code> で参照する</td></tr>
+</table>
+</div>
+</div>
+
+<h2>1. この資料で決めること</h2>
+
+<p>「増分で作る」とは、毎回どこを消してどこを書き直すかを決めることに尽きる。CareerVoice のファクトは、行が追加されるだけのもの（<code>fct_scout</code>）と、既存行が更新され続けるもの（<code>fct_application_pipeline</code>）で書き戻し方が違う。この資料ではファクトごとに「方式 × ルックバック窓（毎回さかのぼって作り直す日数の範囲）」を決め、同じ <code>run_date</code> で2回流しても結果が1バイトも変わらない形＝冪等（同じ入力で何度実行しても同じ結果）にする。</p>
 
 <h3>1.1 BigQuery で選べる方式</h3>
 
@@ -100,9 +143,9 @@
 </table>
 </div>
 
-<p>パーティション列は <code>&lt;role&gt;_date</code> の DATE 列に張り、<code>WHERE</code> も同じ DATE 列で書く。<code>sent_date_key</code>（INT64 <code>YYYYMMDD</code>）で絞ってもプルーニングは効かない。</p>
+<p>パーティション列は <code>&lt;role&gt;_date</code> の DATE 列に張り、<code>WHERE</code> も同じ DATE 列で書く。<code>sent_date_key</code>（INT64 <code>YYYYMMDD</code>）で絞っても、読むパーティションの絞り込み（プルーニング）は機能しない。</p>
 
-<h2>2. どこで壊れるか</h2>
+<h2>2. よくある失敗</h2>
 
 <h3>(a) <code>&gt; MAX(sent_at)</code> の境界と、永久欠損</h3>
 
@@ -210,15 +253,15 @@ where s.sent_at &gt; (select max(sent_at) from {{ this }})
 
 <h3>(b) 累積スナップショットを追記にすると <code>P001</code> が7行になる</h3>
 
-<p><code>P001</code>（<code>M001</code> → <code>J001</code>）は 6/23 応募 → 7/1 書類 → 7/8 一次 → 7/15 最終 → 7/20 内定 → 7/22 承諾 → 8/1 入社と7回状態が変わる。<code>fct_application_pipeline</code> を <code>unique_key</code> 無しの <code>merge</code>（＝追記）で作ると、状態が動いた日の実行ごとに1行増えて7行になる。粒度宣言「1行 = 1応募のパイプライン」が壊れ、<code>COUNT(*)</code> は応募数 1 ではなく 7 を返す。</p>
+<p><code>P001</code>（<code>M001</code> → <code>J001</code>）は 6/23 応募 → 7/1 書類 → 7/8 一次 → 7/15 最終 → 7/20 内定 → 7/22 承諾 → 8/1 入社と7回状態が変わる。<code>fct_application_pipeline</code> を <code>unique_key</code> 無しの <code>merge</code>（＝追記）で作ると、状態が動いた日の実行ごとに1行増えて7行になる。粒度宣言「1行 = 1応募のパイプライン」が成立しなくなり、<code>COUNT(*)</code> は応募数 1 ではなく 7 を返す。</p>
 
-<p><code>COUNT(*)</code> と <code>COUNT(DISTINCT application_id)</code> の乖離が、そのまま二重計上の量になる。一方 <code>SUM(is_hired)</code> は 1 のまま（入社を観測できた最後の1行しか <code>is_hired = 1</code> にならない）で、<code>AVG(days_applied_to_offer)</code> も内定前の4行が NULL で平均から外れるため <code>P001</code> 単独では正しい値を返す。壊れていても合う指標があることが、この失敗を見つけにくくしている。</p>
+<p><code>COUNT(*)</code> と <code>COUNT(DISTINCT application_id)</code> の乖離が、そのまま二重計上の量になる。一方 <code>SUM(is_hired)</code> は 1 のまま（入社を観測できた最後の1行しか <code>is_hired = 1</code> にならない）で、<code>AVG(days_applied_to_offer)</code> も内定前の4行が NULL で平均から外れるため <code>P001</code> 単独では正しい値を返す。行が二重になっていても正しい値を返す指標があることが、この失敗を見つけにくくしている。</p>
 
 <h3>(c) 遅延到着ディメンション: <code>C002</code> の規模変更</h3>
 
 <p><code>C002</code>（ネクスト技研）の <code>employee_size_band</code> は 5/1 に <code>50_299</code> から <code>300_999</code> へ変わったが、CDC が DWH に届いたのは 5/3 だった。<code>dim_company</code> 側は <code>valid_from</code> を 5/1 に遡って新版を挿入できるので正しくなる。しかし 5/1–5/2 に投稿されたクチコミの <code>fct_review.company_key</code> は、その時点で唯一存在した旧版のキーを指したまま残る。</p>
 
-<p>結果、「企業規模別の平均 <code>overall_score</code>」は2日分だけ旧規模帯に載る。ディメンションは正しく、ファクトの外部キーだけが古い、という壊れ方をする。§5(c) の修復対象はここ。</p>
+<p>結果、「企業規模別の平均 <code>overall_score</code>」は2日分だけ旧規模帯に載る。ディメンションは正しく、ファクトの外部キーだけが古い、という誤り方になる。§5(c) で修復するのは、この 5/1–5/2 の <code>fct_review.company_key</code> である。</p>
 
 <h3>(d) 冪等でない処理の再実行</h3>
 
@@ -232,11 +275,11 @@ where s.sent_at &gt; (select max(sent_at) from {{ this }})
 
 <div class="table-wrap">
 <table>
-<tr><th>#</th><th>サブシステム</th><th>この回での使いどころ</th></tr>
+<tr><th>#</th><th>サブシステム</th><th>この資料での使いどころ</th></tr>
 <tr><td>2</td><td>Change Data Capture</td><td>Datastream の CDC。「どこまで取り込んだか」の境界を持つのはこの層の責任で、マート側の <code>MAX()</code> ではない</td></tr>
 <tr><td>6</td><td>Audit Dimension Creation</td><td><code>dim_audit</code> の <code>batch_id</code> / <code>loaded_at</code> / <code>dbt_invocation_id</code>。遅延の実測とルックバック決定の材料（DT#164）</td></tr>
 <tr><td>13</td><td>Fact Table Builders</td><td>トランザクション／定期スナップショット／累積スナップショットで書き戻し方が違う。§1.2 の割当はこの分類に従う</td></tr>
-<tr><td>14</td><td>Surrogate Key Pipeline</td><td>自然キーを版付きサロゲートキーに置換する段。遅延到着の修復とは、この段をやり直すこと</td></tr>
+<tr><td>14</td><td>Surrogate Key Pipeline</td><td>自然キーを、版ごとに振り直したサロゲートキー（DWH 側で独自に採番する代理キー）に置換する段。遅延到着の修復とは、この段をやり直すこと</td></tr>
 <tr><td>16</td><td>Late Arriving Data Handler</td><td>遅延到着ファクト／ディメンションの専用処理。§3.1</td></tr>
 <tr><td>24</td><td>Recovery and Restart</td><td>失敗したロードを安全に再開できること。冪等性はこの要件の現代的な言い換え</td></tr>
 </table>
@@ -250,17 +293,17 @@ where s.sent_at &gt; (select max(sent_at) from {{ this }})
 <tr>
   <td><strong>遅延到着ファクト</strong>: 過去日付のファクト行が今日届く</td>
   <td>今日の現行版ではなく、<strong>そのイベント時点で有効だったディメンション版</strong>のサロゲートキーを割り当てる。SCD2 の有効期間で解決する</td>
-  <td><code>S003</code>（<code>AG02</code> → <code>M002</code>、6/18 送信）が 6/20 に届いても、<code>member_key</code> は 6/18 時点の <code>M002</code> の版に結ぶ。<code>sent_at &gt;= valid_from AND sent_at &lt; valid_to</code> の as-of join（05回）で解決する</td>
+  <td><code>S003</code>（<code>AG02</code> → <code>M002</code>、6/18 送信）が 6/20 に届いても、<code>member_key</code> は 6/18 時点の <code>M002</code> の版に結ぶ。<code>sent_at &gt;= valid_from AND sent_at &lt; valid_to</code> という時点結合（イベント時点の版に結ぶ結合。DM05『履歴を持つ：SCD とスナップショット』で扱う）で解決する</td>
 </tr>
 <tr>
   <td><strong>遅延到着ディメンション</strong>: ディメンションの新版が遅れて届く</td>
   <td>新版を <code>valid_from</code> 遡及で挿入し、<strong>その区間に既に入っているファクトの外部キーを貼り替える</strong></td>
-  <td>§2(c)。5/1–5/2 の <code>fct_review.company_key</code> を新版へ更新する（§5c）</td>
+  <td>§2(c) がこの状況にあたる。5/1–5/2 の <code>fct_review.company_key</code> を新版へ更新する（§5c）</td>
 </tr>
 <tr>
   <td><strong>ディメンション行が無いままファクトが来る</strong></td>
   <td>自然キーだけを埋めた仮の行を立て、属性が届いたら更新する</td>
-  <td>正典は未知を <code>-1</code> で受ける（DT#43）。仮行を立てるなら <code>dim_company</code> に <code>company_id</code> だけの行を作り、属性到着時に Type1 で埋める</td>
+  <td>この題材では、参照先が未知のときも外部キーを NULL にせず <code>-1</code> の行で受ける（DT#43）。仮行を立てるなら <code>dim_company</code> に <code>company_id</code> だけの行を作り、属性到着時に Type1 で埋める</td>
 </tr>
 </table>
 </div>
@@ -273,17 +316,17 @@ where s.sent_at &gt; (select max(sent_at) from {{ this }})
 <p>Functional Data Engineering（Beauchemin）は、バッチ処理を関数型プログラミングの語彙で捉え直す。タスクは副作用を持たない純関数であり、再実行は追記ではなく上書きで行う。状態の最小単位はパーティションで、「1タスク → 1テーブル、1タスク実行 → 1パーティション」を守ると系譜とデバッグが単純になる。</p>
 </div>
 
-<p>この主張のうち増分にそのまま効くのは2点。パーティションを不変の単位として扱うことと、行単位の更新をやめて丸ごと置換することだ。</p>
+<p>この主張のうち増分にそのまま当てはまるのは2点である。パーティションを不変の単位として扱うことと、行単位の更新をやめて丸ごと置換することだ。</p>
 
-<p>3点目として FDE は「過去への依存を持たず、<strong>処理時刻</strong>でパーティションを切る」ことを挙げ、それでバックフィルが並列化でき遅延ファクトも素直に扱えるとする。CareerVoice はそこを採らず、<code>run_date</code> を与えた実行が <code>sent_date</code>（イベント時刻）のパーティションを置換し、遅延分はルックバック窓で吸収する形にした。イベント時刻側に寄せる選択は dbt の <code>microbatch</code> が <code>event_time</code> として持っている側で、代わりに「窓の外は自動では入らない」という穴を自分で塞ぐ必要がある（§5c）。</p>
+<p>3点目として Functional Data Engineering（以下 FDE）は「過去への依存を持たず、<strong>処理時刻</strong>でパーティションを切る」ことを挙げ、それでバックフィル（過去分をまとめて作り直す処理）が並列化でき、遅れて届くファクトも素直に扱えるとする。CareerVoice はそこを採らず、<code>run_date</code> を与えた実行が <code>sent_date</code>（イベント時刻）のパーティションを置換し、遅延分はルックバック窓で吸収する形にした。イベント時刻を基準にする選択は dbt の <code>microbatch</code> が <code>event_time</code> として持っている側で、代わりに「窓の外は自動では入らない」という穴を自分で塞ぐ必要がある（§5c）。</p>
 
-<p>dbt の <code>insert_overwrite</code> に静的な <code>partitions</code> を渡す形は、この「1タスク実行 → 指定したパーティションを丸ごと置換」をそのまま実装する。ディメンションを日次スナップショットで持つ提案（<code>dim_member_daily</code>、05回）も、同じ不変パーティションの発想の適用にすぎない。</p>
+<p>dbt の <code>insert_overwrite</code> に静的な <code>partitions</code> を渡す形は、この「1タスク実行 → 指定したパーティションを丸ごと置換」をそのまま実装する。ディメンションを日次スナップショットで持つ設計（<code>dim_member_daily</code>。DM05『履歴を持つ』で扱う）も、同じ不変パーティションの発想の適用にすぎない。</p>
 
 <div class="table-wrap">
 <table>
 <tr><th>論点</th><th>Kimball（原典）</th><th>FDE / dbt</th><th>この題材の決定</th></tr>
 <tr><td>遅延ファクトの吸収</td><td>遅延到着ハンドラ（#16）で行を挿入し、キーを当時の版で解決</td><td>該当パーティションを作り直す。窓の中なら遅延分は自動で入る</td><td>ルックバック3日の <code>insert_overwrite</code>。窓の外は §5(c) の修復に回す</td></tr>
-<tr><td>ディメンションの版</td><td>SCD2（<code>valid_from</code> / <code>valid_to</code>）</td><td>日次スナップショットで置き換える</td><td>両方持つ（05回）。ファクトのキー解決は時刻精度が要るので SCD2 の as-of</td></tr>
+<tr><td>ディメンションの版</td><td>SCD2（<code>valid_from</code> / <code>valid_to</code>）</td><td>日次スナップショットで置き換える</td><td>両方持つ（DM05『履歴を持つ』）。ファクトのキー解決は時刻の精度が要るので SCD2 の時点結合を使う</td></tr>
 <tr><td>再実行</td><td>Recovery and Restart（#24）＝安全に再開できること</td><td>冪等＝何回流しても同じ。再実行は上書き</td><td>静的 <code>partitions</code> と <code>unique_key</code> 付き <code>merge</code> で担保し、指紋クエリで検証（§5d）</td></tr>
 <tr><td>実行の追跡</td><td>監査ディメンション（#6, DT#164）</td><td>invocation id をタスク出力に埋める</td><td><code>dim_audit</code> に <code>dbt_invocation_id</code> と <code>loaded_at</code>。遅延の実測にも使う（§7a）</td></tr>
 </table>
@@ -376,9 +419,9 @@ left join {{ ref('dim_scout_sender') }} as snd
 left join {{ ref('dim_job_posting') }} as jp
     on t.job_posting_id = jp.job_posting_id</code></pre>
 
-<p><code>{{ audit_key() }}</code> は10回で定義するマクロ。それまでは <code>-1</code> を返す。<code>member_key</code> はイベント時刻の as-of join で解決するので、6/18 送信の <code>S003</code> が 6/20 に届いても 6/18 時点の版に結ばれる（§3.1 の遅延到着ファクト）。</p>
+<p><code>{{ audit_key() }}</code> は、その実行に対応する <code>dim_audit</code> の行のキーを返すマクロで、定義は DM10『レイヤ・命名・契約・テスト・監査』で扱う。この資料の範囲では <code>-1</code> を返すものとして読めばよい。<code>member_key</code> はイベント時刻の時点結合で解決するので、6/18 送信の <code>S003</code> が 6/20 に届いても 6/18 時点の版に結ばれる（§3.1 の遅延到着ファクト）。</p>
 
-<p><code>member_profile_mini_key</code> のほうは <code>dim_member_daily</code>（その日の終わり時点）で解決するので、同日中の属性変化は当日ぶんが変化後の版に寄る。<code>M001</code> の 6/15 の <code>active</code>・<code>600_800</code> 化がまさにこの型で、時点精度が要るならミニディメンションの履歴側（05回）に切り替える。</p>
+<p><code>member_profile_mini_key</code> のほうは <code>dim_member_daily</code>（その日の終わり時点）で解決するので、同日中の属性変化は当日ぶんが変化後の版になる。<code>M001</code> の 6/15 の <code>active</code>・<code>600_800</code> 化がまさにこの型で、時刻の精度が要るならミニディメンション <code>dim_member_profile_mini</code> の履歴側（DM05『履歴を持つ』）に切り替える。</p>
 
 <div class="table-wrap">
 <table>
@@ -562,7 +605,7 @@ select 'before のみ' as side, * from (select * from before_run except distinct
 union all
 select 'after のみ',  * from (select * from after_run  except distinct select * from before_run);</code></pre>
 
-<p><code>EXCEPT DISTINCT</code> は片方向なので両向きを取る。<code>audit_key</code> は実行ごとに変わるので <code>SELECT AS STRUCT t.* EXCEPT (audit_key)</code> で落としてから指紋を取る。「同じ入力なら同じ出力」を守る対象はメジャーとキーであって、実行の記録ではない。</p>
+<p><code>EXCEPT DISTINCT</code> は片方向なので両向きを取る。<code>audit_key</code> は実行ごとに変わるので <code>SELECT AS STRUCT t.* EXCEPT (audit_key)</code> で除いてから指紋を取る。「同じ入力なら同じ出力」を守る対象はメジャーとキーであって、実行の記録ではない。</p>
 
 <pre><code># models/marts/schema.yml（一部）
 version: 2
@@ -615,7 +658,7 @@ models:
 <details>
 <summary>解答例</summary>
 
-<p>測るのは3つ。遅延の分布、再ビルドの課金、窓外に落ちる行が指標を動かす量。</p>
+<p>測るのは3つある。遅延の分布、再ビルドの課金、そして窓の外に外れた行が指標を動かす量である。</p>
 
 <pre><code>-- 1. 遅延の分布（監査ディメンションを使う）
 select
@@ -645,23 +688,23 @@ limit 10;</code></pre>
 <details>
 <summary>解答例</summary>
 
-<p>「日」。理由は3つ。</p>
+<p>単位は「日」にする。理由は3つある。</p>
 
 <ul>
 <li>粒度が「1行 = 1求人 × 掲載中の1日」で、パーティション列が <code>snapshot_date</code>。置換単位と粒度の日次側が一致し、FDE の「1タスク実行 → 1パーティション」に収まる。</li>
-<li>「求人」単位にすると1回の実行が <code>J001</code> の全掲載日パーティションに書き込むことになり、<code>insert_overwrite</code> が使えず <code>merge</code>（<code>unique_key=['job_posting_id','snapshot_date']</code>）になる。冪等ではあるがターゲット全体が更新対象になり、プルーニングを自前で設計する羽目になる。</li>
+<li>「求人」単位にすると1回の実行が <code>J001</code> の全掲載日パーティションに書き込むことになり、<code>insert_overwrite</code> が使えず <code>merge</code>（<code>unique_key=['job_posting_id','snapshot_date']</code>）になる。冪等ではあるがターゲット全体が更新対象になり、パーティションの絞り込みを自前で設計することになる。</li>
 <li>ソース（<code>job_postings</code> の現在値）は過去日の <code>status</code> を再現できない。過去パーティションは不変にし、当日ぶんだけ作る＝ルックバック0日（判断基準の表の5行目）。掲載終了の反映が1日遅れる経路があるなら、前日ぶんの再生成だけを許す。</li>
 </ul>
 
 <p>ただし <code>application_count_cum</code> / <code>scout_count_cum</code> は累計なので、過去日を作り直さない代わりに「その日の時点で観測できた累計」を持つことになる。この定義を <code>description</code> に書いておかないと、あとから遡って数えた累計と一致しないという問い合わせになる。</p>
 </details>
 
-<h3>(c) <code>dim_member_daily</code>（05回）が1日欠けた時、as-of join はどう壊れ、どう埋めるか</h3>
+<h3>(c) <code>dim_member_daily</code>（DM05『履歴を持つ』）が1日欠けたとき、時点結合に何が起きるか。どう埋めるか</h3>
 
 <details>
 <summary>解答例</summary>
 
-<p><strong>壊れ方</strong>: 6/19 の <code>snapshot_date</code> が無いと、<code>snapshot_date = &lt;role&gt;_date</code> で結ぶモデル（§5(a) の <code>member_snapshot</code> は <code>sent_date</code>、<code>fct_page_view</code> なら <code>view_date</code>）は 6/19 だけ一致行を失う。inner join なら 6/19 の行が丸ごと消え、left join なら <code>member_profile_mini_key</code> が NULL になる。<code>-1</code> すら付かないので DT#43 の「NULL 外部キー禁止」に違反し、年収帯別の集計から6/19 だけが抜ける。</p>
+<p><strong>起きること</strong>: 6/19 の <code>snapshot_date</code> が無いと、<code>snapshot_date = &lt;role&gt;_date</code> で結ぶモデル（§5(a) の <code>member_snapshot</code> は <code>sent_date</code>、<code>fct_page_view</code> なら <code>view_date</code>）は 6/19 だけ一致行を失う。inner join なら 6/19 の行が丸ごと消え、left join なら <code>member_profile_mini_key</code> が NULL になる。<code>-1</code> すら付かないので DT#43 の「NULL 外部キー禁止」に違反し、年収帯別の集計から6/19 だけが抜ける。</p>
 
 <p>しかも <code>require_partition_filter=true</code> なので、欠損しているのか単にそのパーティションを読んでいないだけなのかがクエリ結果からは区別できない。</p>
 
@@ -669,7 +712,7 @@ limit 10;</code></pre>
 
 <pre><code>dbt run --select dim_member_daily --vars '{"run_date": "2026-06-19"}'</code></pre>
 
-<p><strong>埋め方2（再生成できない場合）</strong>: 前日を carry-forward する。</p>
+<p><strong>埋め方2（再生成できない場合）</strong>: 前日の行をそのまま複製して埋める（carry-forward）。</p>
 
 <pre><code>insert into `marts.dim_member_daily`
     (snapshot_date, member_id, member_key, member_profile_mini_key,
@@ -681,7 +724,7 @@ select
 from `marts.dim_member_daily`
 where snapshot_date = date '2026-06-18';</code></pre>
 
-<p>これは属性変化を1日遅らせる近似で、<code>M001</code> の 6/15 のような変化がちょうど欠損日に起きていれば取りこぼす。時点精度が要る結合なら、そもそも <code>dim_member</code> の as-of join（<code>event_ts &gt;= valid_from AND event_ts &lt; valid_to</code>）に切り替える。SCD2 と日次スナップショットを両方持つ（05回）判断が効くのはこの場面で、片方の欠損がもう片方で埋まる。</p>
+<p>これは属性変化を1日遅らせる近似で、<code>M001</code> の 6/15 のような変化がちょうど欠損日に起きていれば取りこぼす。時点精度が要る結合なら、そもそも <code>dim_member</code> の時点結合（<code>event_ts &gt;= valid_from AND event_ts &lt; valid_to</code>）に切り替える。SCD2 と日次スナップショットを両方持つ（DM05『履歴を持つ』）判断が役に立つのはこの場面で、片方の欠損がもう片方で埋まる。</p>
 </details>
 
 <h2>8. 参考: 手元の基盤ではどうか</h2>
@@ -689,7 +732,7 @@ where snapshot_date = date '2026-06-18';</code></pre>
 <div class="aside">
 <ul>
 <li><code>mart_url_performance_incremental</code> は <code>unique_key=['url_path','date']</code>（BigQuery 既定の <code>merge</code>）だが、増分境界が <code>DATE(request_timestamp) &gt; (SELECT MAX(date) FROM {{ this }})</code> で、§2(a) の形そのもの。ログが1日でも遅れて届くとその日は永久に埋まらない。</li>
-<li><code>partition_by</code> は <code>date</code>（DATE）で張ってあるので、この回の基準なら <code>insert_overwrite</code> ＋ 静的 <code>partitions</code>（当日 + 3日）にすれば、境界を持たずに冪等になる。<code>unique_key</code> も不要になる。</li>
+<li><code>partition_by</code> は <code>date</code>（DATE）で張ってあるので、この資料の基準なら <code>insert_overwrite</code> ＋ 静的 <code>partitions</code>（当日 + 3日）にすれば、境界を持たずに冪等になる。<code>unique_key</code> も不要になる。</li>
 <li><code>news_pipeline</code> の <code>summaries</code> はパーティション無しで <code>insert_rows_json</code>（ストリーミング挿入）。再実行の冪等性をテーブル側に置けないので、収集時の URL 全件突合で重複を防いでいる。冪等性をパーティションに預けられない典型例。</li>
 <li>試せる種: <code>mart_url_performance_incremental</code> を <code>--vars run_date</code> 付きの静的 <code>partitions</code> に書き換え、同じ <code>run_date</code> で2回流して §5(d) の指紋クエリが一致するかを見る。</li>
 </ul>

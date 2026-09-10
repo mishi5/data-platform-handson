@@ -454,7 +454,7 @@ SELECT -1 AS member_profile_mini_key, '不明' AS annual_income_band, '不明' A
 <tr><td>型</td><td>INT64（8バイト、符号付き）</td><td>STRING。BigQuery では <code>TO_HEX(MD5(...))</code> に展開され 32 文字の16進</td><td>ソースの型。<code>member_id</code> なら STRING <code>'M001'</code></td></tr>
 <tr><td>衝突</td><td>64bit。誕生日問題で 1,000 万行なら約 3×10⁻⁶、10 億行なら約 2.7%。<strong>ディメンションでは非現実的だが、ファクト表の主キーに使うなら要注意</strong></td><td>128bit MD5。10 億行でも 10⁻²¹ 台で実質ゼロ</td><td>衝突なし（ソースが一意である限り）</td></tr>
 <tr><td>可読性</td><td>✗ <code>-5137827...</code>。BigQuery コンソールでの目視デバッグができない</td><td>✗ <code>7c9e6679...</code>。同上</td><td>✓ <code>M001</code> / <code>J001</code> / <code>20260620</code> がそのまま読める。障害調査でこの可読性が役に立つ</td></tr>
-<tr><td>結合コスト</td><td>8バイト整数のハッシュ結合。最も安い</td><td>32バイト STRING。<code>fct_page_view</code> 規模でシャッフル量が効いてくる</td><td>短い STRING なら A とほぼ同等。長い自然キー（<code>corporate_number</code> 13桁など）だと不利</td></tr>
+<tr><td>結合コスト</td><td>8バイト整数のハッシュ結合。最も安い</td><td>32バイト STRING。<code>fct_page_view</code> 規模ではシャッフル量の差が無視できない</td><td>短い STRING なら A とほぼ同等。長い自然キー（<code>corporate_number</code> 13桁など）だと不利</td></tr>
 <tr><td><code>-1</code> 既定行</td><td>✓ そのまま <code>-1</code> を使える</td><td>△ <code>'-1'</code> か、センチネル文字列のハッシュ。後者は可読性ゼロ</td><td>△ <code>'-1'</code>。自然キーの値空間と衝突しないことを確認する</td></tr>
 <tr><td>注意点</td><td><code>CONCAT</code> は引数に NULL があると NULL を返し、キーが NULL になる。必ず <code>IFNULL(x, '')</code> で包む。区切り文字 <code>'|'</code> が値に現れないことも確認する</td><td>区切りが <code>-</code> 固定。値に <code>-</code> を含む列が並ぶと <code>('a-b','c')</code> と <code>('a','b-c')</code> が同じキーになる。NULL は <code>_dbt_utils_surrogate_key_null_</code> に置換される</td><td>ソースがキー書式を変えたら marts を作り直す必要がある（§3 の表の5番目）</td></tr>
 </table>

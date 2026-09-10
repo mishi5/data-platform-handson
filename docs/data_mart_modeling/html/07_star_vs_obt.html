@@ -267,7 +267,7 @@ GROUP BY b.job_category_key;
      xmlns="http://www.w3.org/2000/svg"
      role="img" aria-labelledby="dg-obt-t dg-obt-d">
   <title id="dg-obt-t">star と OBT のスキャン範囲</title>
-  <desc id="dg-obt-d">同じ日付フィルタで送信主体別の返信率を集計したとき、star では細いファクト4列と小さいディメンションのブロードキャストで、OBTでは同じ4列でも文字列が行ごとに複製されるぶん多くのバイトを読む。パーティションプルーニングは両方に等しく効く。数値は題材上の想定値。</desc>
+  <desc id="dg-obt-d">同じ日付フィルタで送信主体別の返信率を集計したとき、star では細いファクト4列と小さいディメンションのブロードキャストで、OBTでは同じ4列でも文字列が行ごとに複製されるぶん多くのバイトを読む。パーティションプルーニングは両方に同じように働く。数値は題材上の想定値。</desc>
   <style>
     #dg-obt{
       --paper:#fbfbfa; --ink:#22262e; --muted:#5b6472; --soft:#828b9a;
@@ -345,7 +345,7 @@ GROUP BY b.job_category_key;
   <text class="name" x="600" y="302" text-anchor="middle">21 MB スキャン</text>
   <text class="sub" x="600" y="320" text-anchor="middle">結合 0 回 / 文字列が重い</text>
 
-  <text class="note" x="32" y="366">列指向ではスキャン量が「読む列」で決まる。パーティションプルーニングは両方に等しく効く。</text>
+  <text class="note" x="32" y="366">列指向ではスキャン量が「読む列」で決まる。パーティションプルーニングは両方に同じように働く。</text>
   <text class="note" x="32" y="386">OBT が速いのは読むバイトが減るからではなく、結合とシャッフルの段が消えるから。</text>
   <text class="note" x="32" y="408">数値は題材上の想定値（実測ではない）。自分の表の実値は §5(d) の dry-run で取る。</text>
 </svg>
