@@ -43,15 +43,66 @@
 <h1>ディメンションの設計</h1>
 <p class="meta">データマート設計 03 ／ 参照: DWT ch.3, ch.6, Kimball Dimensional Modeling Techniques (2013), Surrogate Keys (1998), Design Tip #5 #43 #46 #83 #100 #127 #164 ／ 再解釈: dbt Kimball (Neo 2023), ECM (Beauchemin 2023), FDE / スナップショット (Beauchemin 2018)</p>
 
-<h2>1. この回が決めること</h2>
+<div class="aside">
+<p><strong>この資料で使う題材</strong></p>
 
-<p>ファクトの粒度が決まれば（01回）、次は「その粒度に何をぶら下げるか」だけが残る。この回で決めるのは2つ。<strong>サロゲートキーは BigQuery + dbt で本当に要るのか</strong>（結論: SCD2 の 5 ディメンションだけ）、そして<strong>ある属性を本体ディメンション・ミニ・ジャンク・退化・メジャーのどこに置くか</strong>。</p>
+<p>CareerVoice は、社員・元社員が書く企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントからのスカウト・応募から入社までの選考を1つのプラットフォームで扱う架空のサービスである。業務システム（OLTP）のテーブルは CDC で BigQuery の <code>src_careervoice</code> データセットへ複製されており、そこから staging 層・marts 層の順に dbt でディメンショナルモデルを組む。</p>
 
-<p>CareerVoice のディメンションは正典で名前まで固まっているので、ここでは「なぜその形なのか」を技法名に紐付けて言語化する。</p>
+<p>本文に出るサンプル ID は次の6つ。</p>
 
 <div class="table-wrap">
 <table>
-<caption class="meta">この回の決定</caption>
+<tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr>
+<tr><td><code>M001</code></td><td>会員</td><td>1991年生・東京在住・現職は <code>C002</code>。登録は 2026-01-05。<strong>2026-06-15</strong> に転職意欲 <code>job_change_intent</code> が <code>passive</code> → <code>active</code>、年収帯 <code>annual_income_band</code> が <code>400_600</code> → <code>600_800</code> へ変化。<strong>2026-08-01</strong> に <code>C001</code> へ入社し <code>current_company_id</code> が変わる</td></tr>
+<tr><td><code>C001</code></td><td>企業</td><td>アオゾラ商事（商社・従業員 1000人以上・上場）。求人 <code>J001</code> の掲載元であり、スカウト <code>S001</code> の送信主体であり、<code>M001</code> の 8/1 の入社先</td></tr>
+<tr><td><code>C002</code></td><td>企業</td><td>ネクスト技研（IT・従業員 50〜299人・非上場）。<code>M001</code> が現在在籍している企業である。クチコミの匿名性を論じるときの「小規模企業」の例として出る</td></tr>
+<tr><td><code>J001</code></td><td>求人</td><td><code>C001</code> のデータエンジニア求人。2026-04-01 掲載、エージェントを介さない直接掲載</td></tr>
+<tr><td><code>S001</code></td><td>スカウト</td><td><code>C001</code>（企業が送信主体）から <code>M001</code> へ、<code>J001</code> について 2026-06-20 送信。06-21 開封、06-22 に <code>interested</code> で返信</td></tr>
+<tr><td><code>P001</code></td><td>応募</td><td><code>M001</code> から <code>J001</code> への応募。2026-06-23 応募 → 07-01 書類 → 07-08 一次面接 → 07-15 最終面接 → 07-20 内定 → 07-22 承諾 → 08-01 入社</td></tr>
+</table>
+</div>
+
+<p>本文に出るテーブルは次のとおり。ディメンションは <code>dim_</code>、ファクトは <code>fct_</code>、集約は <code>agg_</code>、中間モデルは <code>int_</code> の接頭辞を付ける。</p>
+
+<div class="table-wrap">
+<table>
+<tr><th>テーブル</th><th>1行の意味</th></tr>
+<tr><td><code>dim_date</code></td><td>1日。主キー <code>date_key</code> は <code>YYYYMMDD</code> の INT64。年度（4月始まり）・祝日フラグ・表示名を持つ</td></tr>
+<tr><td><code>dim_member</code></td><td>1会員の1つの版。属性が変わると行が増える（SCD Type 2）。生年・性別・都道府県・現職企業・登録日を持つ</td></tr>
+<tr><td><code>dim_member_profile_mini</code></td><td>年収帯（5値）× 転職意欲（3値）の1組合せ。この資料の主役の1つで、行数は会員数に依存しない</td></tr>
+<tr><td><code>dim_member_daily</code></td><td>1会員 × 1日（その日の終わり時点の属性）。日次スナップショット方式のディメンション</td></tr>
+<tr><td><code>dim_company</code></td><td>1企業の1つの版。従業員規模帯・上場区分・業種などを持ち、法人番号は不変、表示名だけは上書き（Type 6 相当）</td></tr>
+<tr><td><code>dim_agent</code></td><td>転職エージェントの担当者1人の1つの版。所属エージェンシーの名前と等級を同じ表に平坦化して持つ</td></tr>
+<tr><td><code>dim_agency</code></td><td>転職エージェンシー1社の1つの版。<code>dim_agent</code> を粗い粒度にした縮約ディメンション</td></tr>
+<tr><td><code>dim_scout_sender</code></td><td>スカウト送信主体1つの1つの版。企業と担当者という異なる種類の実体を1本に載せる</td></tr>
+<tr><td><code>dim_job_posting</code></td><td>1求人。表示名・想定年収・勤務地・雇用形態・掲載日を持つ</td></tr>
+<tr><td><code>dim_job_category</code></td><td>1職種。3階層の職種ツリーを固定深さの列に平坦化したもの</td></tr>
+<tr><td><code>dim_review_attributes</code></td><td>在籍区分（2値）× 雇用形態（3値）× 勤続年数帯（5値）の1組合せ。30行のジャンクディメンション</td></tr>
+<tr><td><code>dim_page_context</code></td><td>ページ種別（3値）× 端末（3値）× 流入元（4値）× 閲覧権限（2値）の1組合せ。72行のジャンクディメンション</td></tr>
+<tr><td><code>dim_channel</code> / <code>dim_contract_plan</code> / <code>dim_moderation_reason</code></td><td>それぞれ応募チャネル1つ / 契約プラン1つ / クチコミ審査の却下理由1つ。いずれも値が変わらない小さなディメンション</td></tr>
+<tr><td><code>dim_audit</code></td><td>dbt の1実行 × 品質フラグ1つ。実行 ID・バッチ ID・ロード時刻を持つ監査用ディメンション</td></tr>
+<tr><td><code>fct_review</code></td><td>投稿された1クチコミ。8軸のスコアを持つが、匿名性のため会員のキーは持たない</td></tr>
+<tr><td><code>fct_page_view</code></td><td>1ページ表示。想定規模は日次 2,000 万行</td></tr>
+<tr><td><code>fct_scout</code></td><td>送信された1スカウト。想定規模は日次 10 万行</td></tr>
+<tr><td><code>fct_application_pipeline</code></td><td>1応募の応募〜入社。マイルストーンに到達するたび同じ行が更新される累積スナップショット</td></tr>
+<tr><td><code>fct_job_posting_daily</code></td><td>1求人 × 掲載中の1日</td></tr>
+<tr><td><code>fct_placement</code></td><td>エージェント経由の1入社。年収・料率・成果報酬額を持つ</td></tr>
+<tr><td><code>agg_company_entity</code></td><td>1企業。クチコミ件数や直近90日の平均スコアなどの指標を企業の属性の隣に並べた集約表</td></tr>
+<tr><td><code>int_review_member_link</code></td><td>クチコミと会員を結ぶ中間モデル。個人特定を避けるためアクセス制限データセットに隔離する</td></tr>
+<tr><td><code>snap_members</code> / <code>stg_careervoice__scouts</code></td><td>それぞれ <code>members</code> の版を記録する dbt snapshot / <code>scouts</code> のクリーニング済み staging モデル</td></tr>
+</table>
+</div>
+</div>
+
+<h2>1. この資料で決めること</h2>
+
+<p>ファクトの粒度、つまり「ファクト表の1行が何を表すか」が決まれば（粒度の宣言そのものは DM01『粒度を宣言する』で扱う）、次は「その粒度に何をぶら下げるか」だけが残る。この資料で決めるのは2つ。<strong>サロゲートキーは BigQuery + dbt で本当に要るのか</strong>（結論: SCD2 の 5 ディメンションだけ）、そして<strong>ある属性を本体ディメンション・ミニ・ジャンク・退化・メジャーのどこに置くか</strong>。</p>
+
+<p>CareerVoice のディメンションは、冒頭の題材の枠に挙げたとおり名前まで決まっている。ここでは「なぜその形なのか」を技法名に紐付けて言語化する。</p>
+
+<div class="table-wrap">
+<table>
+<caption class="meta">この資料の決定</caption>
 <tr><th>論点</th><th>決定</th><th>理由（詳細は §3–§6）</th></tr>
 <tr><td>サロゲートキーを全ディメンションに振るか</td><td><strong>振らない。SCD2 の <code>dim_member</code> / <code>dim_company</code> / <code>dim_agent</code> / <code>dim_agency</code> / <code>dim_scout_sender</code> の 5 本だけ</strong></td><td>Kimball が SK(1998) で並べた理由のうち、BigQuery + 単一ソースで残るのは「1自然キーに複数行」だけ</td></tr>
 <tr><td>Type 0/1 のディメンションのキー</td><td>自然キーをそのまま <code>_key</code> にする</td><td>自然キーのハッシュは「自然キーの符号化」であってサロゲートキーではない。可読性を捨てて何も得ない</td></tr>
@@ -76,29 +127,29 @@
 </table>
 </div>
 
-<p><code>fct_review</code> が <code>member_key</code> を持たないのは技法の帰結ではなく、正典の固定判断（匿名性）だ。投稿者の属性は <code>dim_review_attributes</code> にジャンク化して落とす。つまりここでは<strong>ジャンクディメンションが匿名化装置を兼ねている</strong>。</p>
+<p><code>fct_review</code> が <code>member_key</code> を持たないのは技法の帰結ではなく、匿名性のためにこの題材で固定した設計判断だ。投稿者の属性は <code>dim_review_attributes</code> にジャンク化して移す。つまりここでは<strong>ジャンクディメンションが匿名化装置を兼ねている</strong>。</p>
 <p>ただし 30 行の粗い帯でも小規模企業では特定されうる（<code>C002</code> の <code>former</code>/<code>fulltime</code>/<code>1_3</code> が1人しか居ない場合）。会員×クチコミの結合が要る分析は <code>int_review_member_link</code> に隔離する。</p>
 <p>「1人しか居ない組合せ」は感覚ではなく数える。準識別子（<code>company_key</code> × <code>dim_review_attributes</code> の3属性 × <code>job_category_key</code>）ごとの行数の最小値が <em>k</em>-匿名性の <em>k</em> で、<code>GROUP BY</code> して <code>HAVING COUNT(*) &lt; 5</code> を出せば危ない組合せが列挙できる。Google Cloud の Sensitive Data Protection（旧 Cloud DLP）の Risk analysis は同じ計算を <em>l</em>-多様性まで含めてジョブとして回せる（DMBOK07 の「分類の自動化」）。<em>k</em> が小さい組合せは <code>years_of_service_band</code> を粗くするか、その企業のクチコミを件数閾値未満なら非公開にする——どちらもジャンクディメンションの帯の設計に戻ってくる。</p>
 
-<h2>2. どこで壊れるか</h2>
+<h2>2. よくある失敗</h2>
 
 <h3>(a) 速く変わる属性を <code>dim_member</code> に Type2 で持つ</h3>
 
-<p>以下、規模は<strong>正典 §5 の想定規模</strong>（会員 300 万人、<code>page_views</code> 日次 2,000 万行）を使う。断定ではなく前提で、この回の判断のいくつかはこの桁に乗っている。</p>
+<p>以下、規模は<strong>題材の想定値</strong>（会員 300 万人、<code>page_views</code> 日次 2,000 万行）を使う。断定ではなく前提で、この資料の判断のいくつかはこの桁に乗っている。</p>
 
-<p><code>annual_income_band</code> と <code>job_change_intent</code> を <code>dim_member</code> の Type2 属性にしたとする。<code>M001</code> は 2026-06-15 に <code>passive</code>/<code>400_600</code> → <code>active</code>/<code>600_800</code> へ変わるので、この日に新しい <code>member_key</code> が発行される。壊れ方は3つ。</p>
+<p><code>annual_income_band</code> と <code>job_change_intent</code> を <code>dim_member</code> の Type2 属性にしたとする。<code>M001</code> は 2026-06-15 に <code>passive</code>/<code>400_600</code> → <code>active</code>/<code>600_800</code> へ変わるので、この日に新しい <code>member_key</code> が発行される。この形では次の3つの問題が起きる。</p>
 
 <ul>
-<li><strong>行数</strong>: 転職意欲は求人を見た会員が数か月単位で切り替える。会員 300 万人 × 年2回でディメンションが年 600 万行ずつ伸びる。5年で 3,000 万行超のディメンションを、<code>fct_page_view</code>（日次 2,000 万行）に毎日結合することになる。</li>
+<li><strong>行数</strong>: 転職意欲は求人を見た会員が数か月単位で切り替える。会員 300 万人 × 年2回の変化で、ディメンションは年 600 万行ずつ伸びる。5年で 3,000 万行超のディメンションを、<code>fct_page_view</code>（日次 2,000 万行）に毎日結合することになる。</li>
 <li><strong>会員数が二重計上される</strong>: <code>SELECT COUNT(DISTINCT member_key) FROM fct_page_view</code> は 6月の <code>M001</code> を 2 人と数える。正しく数えるには <code>member_id</code>（耐久キー）で数え直す必要があり、「キーで数える」という素直な操作が使えなくなる。</li>
 <li><strong>ETL が範囲結合になる</strong>: イベント時点の版を引くために、<code>fct_page_view</code> のロードが毎回 <code>valid_from &lt;= viewed_at AND viewed_at &lt; valid_to</code> の範囲結合になる。日次 2,000 万行 × 3,000 万行の範囲結合は BigQuery でも重い。</li>
 </ul>
 
-<p>正典の形（ミニディメンション）では (i) が消え、(ii)(iii) が桁で軽くなる。<code>dim_member</code> は 6/15 に<strong>行が増えない</strong>。<code>dim_member_profile_mini</code> も組合せ 15 通りのまま動かず、動くのは「ファクト行がどの1つを指すか」だけだ。</p>
+<p>ミニディメンションを使う形では行数の増加が消え、二重計上と範囲結合が桁で軽くなる。<code>dim_member</code> は 6/15 に<strong>行が増えない</strong>。<code>dim_member_profile_mini</code> も組合せ 15 通りのまま動かず、動くのは「ファクト行がどの1つを指すか」だけだ。</p>
 
-<p>ただし<strong>(ii)(iii) は消えない</strong>。正典の <code>dim_member</code> は SCD2 のままで、<code>M001</code> は <code>current_company_id</code> が変わる 8/1 に版が増えて <code>member_key</code> が2つになる。会員数は <code>member_id</code>（耐久キー）で数える必要が残り、イベント時点の版を引く as-of 結合も残る。</p>
+<p>ただし<strong>二重計上と範囲結合は消えない</strong>。この題材の <code>dim_member</code> は SCD2 のままで、<code>M001</code> は <code>current_company_id</code> が変わる 8/1 に版が増えて <code>member_key</code> が2つになる。会員数は <code>member_id</code>（耐久キー）で数える必要が残り、イベント時点の版を引く時点結合（イベント時点の版に結ぶ結合、as-of join）も残る。</p>
 
-<p>ミニが消すのは「速く変わる属性のせいで版が増える」分だけで、規模を桁で下げても現象そのものは残る（05回）。</p>
+<p>ミニディメンションが消すのは「速く変わる属性のせいで版が増える」分だけで、規模を桁で下げても現象そのものは残る。版そのものの持ち方は DM05『履歴を持つ：SCD とスナップショット』で扱う。</p>
 
 <h3>(b) <code>dim_date</code> を作らず <code>DATE</code> 列で済ませる</h3>
 
@@ -110,7 +161,7 @@
 <tr><td>年度（4月始まり）</td><td>ある mart は <code>EXTRACT(YEAR FROM applied_date)</code>、別の mart は <code>EXTRACT(YEAR FROM DATE_SUB(applied_date, INTERVAL 3 MONTH))</code>。2026-03 の応募が 2025年度と 2026年度の両方に現れる</td><td><code>dim_date.fiscal_year</code> 一箇所。定義は1回だけ書かれる</td></tr>
 <tr><td>営業日でのリードタイム</td><td>祝日判定を各クエリの <code>CASE</code> に書く。2026-09-21 / 09-23 のように年ごとに動く祝日で必ずずれる</td><td><code>dim_date.is_holiday_jp</code> を <code>COUNTIF</code> するだけ</td></tr>
 <tr><td>「内定月 × 応募月」のクロス集計</td><td>7つの日付列それぞれに <code>FORMAT_DATE</code> を書く。列名の付け方がクエリごとに違う</td><td>同じ <code>dim_date</code> を役割ごとに別名で結ぶ（ロールプレイング）。属性名は共通</td></tr>
-<tr><td>未達マイルストーン</td><td><code>NULL</code> しか置けない → (c) へ</td><td><code>date_key = -1</code>、<code>dim_date</code> の既定行に落ちる</td></tr>
+<tr><td>未達マイルストーン</td><td><code>NULL</code> しか置けない → (c) へ</td><td><code>date_key = -1</code>、<code>dim_date</code> の既定行に結び付く</td></tr>
 </table>
 </div>
 
@@ -150,7 +201,7 @@ GROUP BY d.year;</code></pre>
 <tr><td>退化ディメンション（DT#46）</td><td>「ファクト表の中でディメンションキーとして機能するが、対応するディメンション表を持たない」。伝票番号・注文番号がその典型</td><td>属性が全部他のディメンションに吸われ、主キーしか残らないとき。<strong>ディメンション表がファクト表とほぼ同じ速度で伸びていたら、見落とした退化ディメンションが潜んでいる</strong>（DT#46）</td></tr>
 <tr><td>ロールプレイング</td><td>「1つの物理ディメンションがファクト表から複数回参照され、それぞれが論理的に別の役割にリンクする」。各 FK は<strong>別のビュー</strong>を参照し、属性列名を役割ごとに変えるべき（Techniques, p.9）</td><td>同じディメンションを1ファクトから2回以上参照するとき。累積スナップショットは常にこれになる</td></tr>
 <tr><td>ジャンクディメンション</td><td>雑多な低カーディナリティのフラグ・指示子を1本にまとめる。「全属性値の直積である必要はなく、ソースデータに実際に出現する組合せだけを持てばよい」（Techniques, p.9）</td><td>単独ではディメンションにする価値がないフラグが3つ以上あるとき</td></tr>
-<tr><td>ミニディメンション（Type 4, DT#127）</td><td>「属性群が急速に変化し、ミニディメンションへ切り出される。ミニディメンションは独自の主キーを持ち、本体とミニの両方の主キーがファクトに入る」（Techniques, p.12）。連続値は<strong>帯にしてから</strong>入れる。本体にも現在のミニキーを Type1 で埋めると Type 5 だが、正典は採らない（<code>dim_member</code> にミニキーを持たせると時点解決の経路が2本になる）</td><td>本体ディメンションが大きく（数百万行）、その一部の属性が速く変わる／頻繁に絞り込みに使われるとき</td></tr>
+<tr><td>ミニディメンション（Type 4, DT#127）</td><td>「属性群が急速に変化し、ミニディメンションへ切り出される。ミニディメンションは独自の主キーを持ち、本体とミニの両方の主キーがファクトに入る」（Techniques, p.12）。連続値は<strong>帯にしてから</strong>入れる。本体にも現在のミニキーを Type1 で埋めると Type 5 だが、この題材では採らない（<code>dim_member</code> にミニキーを持たせると時点解決の経路が2本になる）</td><td>本体ディメンションが大きく（数百万行）、その一部の属性が速く変わる／頻繁に絞り込みに使われるとき</td></tr>
 <tr><td>監査ディメンション（DT#164）</td><td>「ファクト行が ETL のバックルームで作られるとき、その時点で分かっている ETL 処理メタデータを持つ監査ディメンション行を作ると役に立つ」。ETL コードの版や実行時刻を入れる</td><td>行がいつ・どの版のコードで作られたかを BI 側からドリルダウンしたいとき（＝いつでも）</td></tr>
 <tr><td>NULL 外部キー</td><td>「ファクト表の外部キーに NULL があってはならない。参照整合性違反を自動的に引き起こす。NULL 外部キーの代わりに、ディメンション表が未知または該当なしを表す既定行（とサロゲートキー）を持たなければならない」（Techniques, p.4）</td><td>常に。ただし<strong>メジャーの NULL は残してよい</strong>（集計関数が正しく扱う）</td></tr>
 </table>
@@ -159,7 +210,7 @@ GROUP BY d.year;</code></pre>
 <h3>サロゲートキーが要る理由（SK, 1998）と、この題材での成否</h3>
 
 <div class="aside kimball">
-<p>Kimball は 1998 年の <em>Surrogate Keys</em> でサロゲートキーの理由を並べた。内訳は<strong>「本番系があなたのキーを踏む」6通り ＋ 未知値の符号化 ＋ 4バイト整数による容量削減 ＋ 結合性能</strong>の計9つ。「本番系はパージしたキーを再利用しうるが、あなたはまだそれを保持している」「本番系はキー空間を再圧縮しうる」「4バイト整数の美点は 20 億以上の値を表現できることだ」。</p>
+<p>Kimball は 1998 年の <em>Surrogate Keys</em> でサロゲートキーの理由を並べた。内訳は<strong>「本番系側の都合でキーの値が変わる」6通り ＋ 未知値の符号化 ＋ 4バイト整数による容量削減 ＋ 結合性能</strong>の計9つ。「本番系はパージしたキーを再利用しうるが、あなたはまだそれを保持している」「本番系はキー空間を再圧縮しうる」「4バイト整数の美点は 20 億以上の値を表現できることだ」。</p>
 <p>いずれも<strong>1998年の行指向 RDBMS と複数の業務システムを前提とした主張</strong>である。最後の結合性能の理由については Kimball 自身が留保をつけている——「サロゲートキーについて私が思いつく最後の理由は、強く疑ってはいるが証明したことのないものだ。大きく醜い自然キーや複合キーを、美しく引き締まった整数のサロゲートキーで置き換えれば、結合性能は上がるはずだ」。</p>
 </div>
 
@@ -181,13 +232,13 @@ GROUP BY d.year;</code></pre>
 <h3>DT#100「キーは単純に」</h3>
 
 <div class="aside kimball">
-<p>DT#100 は「SCD2 のキーを、固定キー（自然キーと 1:1）＋日付範囲の組合せにするのは<strong>明確に間違い</strong>だ」と言い切る。理由は9つ挙がる。この題材に効くのは次の3つ。</p>
+<p>DT#100 は「SCD2 のキーを、固定キー（自然キーと 1:1）＋日付範囲の組合せにするのは<strong>明確に間違い</strong>だ」と言い切る。理由は9つ挙がる。この題材に当てはまるのは次の3つ。</p>
 <p>(1) 複合フィールドの結合は性能を損なう——「最良の結合性能は、ディメンションとファクトの間を単一フィールドの整数キーで結ぶことで得られる」。(2) 日付範囲は隙間なく連続していなければならないが、それは「正しくやるのが難しく、しばしばほぼ不可能」だ。ある行の <code>valid_to</code> と次の行の <code>valid_from</code> が一致すると、その境界の瞬間に <code>BETWEEN</code> が2行を返す。</p>
 <p>(3) 「単純なサロゲートキーを使えばこの反論は消える。ディメンション行とファクト行の正しい対応が ETL 時に解決されるからだ」。</p>
 </div>
 
 <p>この主張は現在も生きている。ただし<strong>「単一列の整数キー」であることが要点で、「1から順に採番すること」ではない</strong>。DT#100 が禁じているのは、クエリ時に日付範囲の制約を書かせる設計だ。</p>
-<p><code>FARM_FINGERPRINT(member_id || '|' || valid_from)</code> は連番ではないが、単一列 INT64 であり、対応付けは ETL（＝dbt モデル）で解決されている。<strong>DT#100 の中心の要件（単一列・整数・ETL 時に対応付けを解決）は満たす。</strong> 残る理由9（「ソースシステム由来の自然キーの中身への明示的な依存は、複数ソース統合の課題に対応できない」）はハッシュの入力が自然キーである以上まともに当たるが、ソースが <code>src_careervoice</code> 単一である限り効かない——2つ目のソースが来たら、上の表の6行目と一緒に ✓ に変わる。</p>
+<p><code>FARM_FINGERPRINT(member_id || '|' || valid_from)</code> は連番ではないが、単一列 INT64 であり、対応付けは ETL（＝dbt モデル）で解決されている。<strong>DT#100 の中心の要件（単一列・整数・ETL 時に対応付けを解決）は満たす。</strong> 残る理由9（「ソースシステム由来の自然キーの中身への明示的な依存は、複数ソース統合の課題に対応できない」）はハッシュの入力が自然キーである以上まともに当たるが、ソースが <code>src_careervoice</code> 単一である限り問題にならない——2つ目のソースが来たら、上の表の6行目と一緒に ✓ に変わる。</p>
 
 <h3>ミニディメンションの設計</h3>
 
@@ -200,10 +251,10 @@ GROUP BY d.year;</code></pre>
 <p>(2) について DT#127 は「サロゲートキー列を持つ新しい表を作り、本体ディメンションの列の <code>SELECT DISTINCT</code> で埋めるだけだ」と書くが、これは属性が既に帯になっていることを前提にしている。年収 4,850,000 円を生のまま入れると行数が会員数と同じになり、ミニにする意味が消える。</p>
 <p>行数は<strong>属性値の組合せ数</strong>で決まり、会員数にもイベント数にも依存しない。ここが本体ディメンションとの決定的な違いだ。</p>
 
-<p>CareerVoice では帯化がソース側で既に済んでいる（<code>members.annual_income_band</code> が <code>lt400</code>〜<code>ge1000</code> の5値、<code>job_change_intent</code> が3値）。だから <code>dim_member_profile_mini</code> の組合せは <strong>15 通りに固定</strong>される。ソースが生の年収を持っていたら、帯の切り方こそがこの回の最大の設計判断になっていた。</p>
+<p>CareerVoice では帯化がソース側で既に済んでいる（<code>members.annual_income_band</code> が <code>lt400</code>〜<code>ge1000</code> の5値、<code>job_change_intent</code> が3値）。だから <code>dim_member_profile_mini</code> の組合せは <strong>15 通りに固定</strong>される。ソースが生の年収を持っていたら、帯の切り方こそがこの資料の最大の設計判断になっていた。</p>
 
 <div class="aside kimball">
-<p>DT#127 の但し書き: 「顧客属性がファクトイベントを伴わずに変化しうる場合、これは変化の完全な履歴を捉えないかもしれない」。<code>M001</code> が 6/15 に <code>active</code> へ変わっても、その後スカウトも閲覧も発生しなければ、その変化はどのファクト行にも刻まれない。完全な履歴が要るならファクトレスファクト表を別に置く——ミニディメンションは「イベント時点の属性」を安く持つ技法であって、属性履歴の保存装置ではない（05回）。</p>
+<p>DT#127 の但し書き: 「顧客属性がファクトイベントを伴わずに変化しうる場合、これは変化の完全な履歴を捉えないかもしれない」。<code>M001</code> が 6/15 に <code>active</code> へ変わっても、その後スカウトも閲覧も発生しなければ、その変化はどのファクト行にも刻まれない。完全な履歴が要るならファクトレスファクト表を別に置く——ミニディメンションは「イベント時点の属性」を安く持つ技法であって、属性履歴の保存装置ではない。属性の版をどう保存するかは DM05『履歴を持つ：SCD とスナップショット』で扱う。</p>
 </div>
 
 <h2>4. 現代の再解釈</h2>
@@ -215,37 +266,37 @@ GROUP BY d.year;</code></pre>
 <p>利点として挙げるのは「ファクト表のサロゲートキーを生成するときにディメンション表との結合を行う手間が省ける」こと。</p>
 </div>
 
-<p>変わったのは作り方だ。<strong>連番が使えなくなった</strong>——BigQuery には IDENTITY もシーケンスもなく、<code>ROW_NUMBER()</code> は再実行のたびに値が変わりうる（＝冪等でない／09回）。Kimball の「1から順に振る単純整数」は、採番機構を持つ RDBMS の前提だった。</p>
+<p>変わったのは作り方だ。<strong>連番が使えなくなった</strong>——BigQuery には IDENTITY もシーケンスもなく、<code>ROW_NUMBER()</code> は再実行のたびに値が変わりうる（＝冪等でない。冪等とは、同じ入力で何度実行しても同じ結果になる性質を指す。増分ロードでこれをどう保つかは DM09『増分・遅延到着・冪等性』で扱う）。Kimball の「1から順に振る単純整数」は、採番機構を持つ RDBMS の前提だった。</p>
 <p>決定的ハッシュはこの穴を埋める。しかも ETL 時にディメンションを引く必要がないので、ファクトとディメンションを並列に構築できる。</p>
 
 <p>変わっていないのは<strong>要否の判断</strong>のほうだ。記事のコードは <code>generate_surrogate_key(['stg_product.productid'])</code> のように<strong>自然キー1列をハッシュしている</strong>。これは自然キーの再符号化であって、§3 の表の9つの理由を1つも満たさない。</p>
 
-<p><code>M001</code> を <code>-5137...</code> に置き換えても、再利用も再割当も統合も起きない題材では可読性を失うだけだ。<strong>ハッシュがサロゲートキーになるのは、入力に版を識別する要素（<code>valid_from</code>）が入るときだけ</strong>だ。これがこの回の中心的な結論である。</p>
+<p><code>M001</code> を <code>-5137...</code> に置き換えても、再利用も再割当も統合も起きない題材では可読性を失うだけだ。<strong>ハッシュがサロゲートキーになるのは、入力に版を識別する要素（<code>valid_from</code>）が入るときだけ</strong>だ。これがこの資料の中心的な結論である。</p>
 
-<h3>ECM（Maxime Beauchemin, 2023）— ディメンションに指標を持たせる</h3>
+<h3>エンティティ中心モデリング（ECM。Maxime Beauchemin, 2023）— ディメンションに指標を持たせる</h3>
 
 <div class="aside modern">
 <p>Beauchemin は自らを「Ralph Kimball の弟子」と呼びつつ、「ディメンショナルモデルを使いながら一群の指標をエンティティの隣に並べるのは厄介だ」と述べ、指標をディメンションの中に入れることを提案する。「Ralph Kimball ならディメンション表に多くの指標を持ち込むことに眉をひそめるところだが、エンティティ中心のアプローチはむしろそうすることを推奨する」。時間軸は <code>7d_visits</code> / <code>28d_visits</code> のような時間窓付き指標の列で扱う。</p>
 </div>
 
-<p>この回のディメンション（<code>dim_member</code>, <code>dim_company</code>）は Kimball 側に置く。属性だけを持ち、指標は持たない。ECM 風の拡張は <code>agg_company_entity</code>（<code>review_count_total</code>, <code>avg_overall_score_90d</code>, <code>mrr</code> …）に隔離してあり、08回で扱う。</p>
-<p><strong>ディメンションと集約エンティティを別テーブルにするのが、この題材での折衷である</strong>。理由は再集約可能性で、<code>avg_overall_score_90d</code> のような窓付き平均は他の粒度へ持ち上げられないため、ディメンションに置くと「ディメンションで絞ってからファクトを足す」という基本操作が壊れる（04回）。</p>
+<p>この資料で扱うディメンション（<code>dim_member</code>, <code>dim_company</code>）は Kimball 側に置く。属性だけを持ち、指標は持たない。ECM 風の拡張は <code>agg_company_entity</code>（<code>review_count_total</code>, <code>avg_overall_score_90d</code>, <code>mrr</code> …）に隔離してあり、複数ファクトを同じ軸で並べる話とあわせて DM08『コンフォームドとドリルアクロス』で扱う。</p>
+<p><strong>ディメンションと集約エンティティを別テーブルにするのが、この題材での折衷である</strong>。理由は再集約可能性で、<code>avg_overall_score_90d</code> のような窓付き平均は他の粒度へ持ち上げられないため、ディメンションに置くと「ディメンションで絞ってからファクトを足す」という基本操作が成立しなくなる。率と平均の持ち方は DM04『加法性と派生指標』で扱う。</p>
 
 <p>Kimball が指標をディメンションに置くのを嫌うのは、ディメンションが「絞り込みとグループ化の対象」でファクトが「計測結果」という役割分担（DWT ch.1）を守るためだ。ECM はこの分担を意図的に崩す。</p>
-<p>ECM がもう一方で推すのが<strong>ディメンションの日次フルスナップショット</strong>だ。「ディメンションの完全なスナップショットを毎日保持する……ポイントインタイムのクエリ・比較が容易になる」。正典にはこれが <code>dim_member_daily</code>（1行 = 1会員 × 1日）として置かれている。</p>
+<p>ECM がもう一方で推すのが<strong>ディメンションの日次フルスナップショット</strong>だ。「ディメンションの完全なスナップショットを毎日保持する……ポイントインタイムのクエリ・比較が容易になる」。この題材にはこれが <code>dim_member_daily</code>（1行 = 1会員 × 1日）として置いてある。</p>
 <p>3つの手法を並べる。</p>
 
 <div class="table-wrap">
 <table>
-<tr><th>手法</th><th>行数（会員 300 万人・1年）</th><th>as-of の書きやすさ</th><th>ファクト結合</th></tr>
+<tr><th>手法</th><th>行数（会員 300 万人・1年）</th><th>時点結合の書きやすさ</th><th>ファクト結合</th></tr>
 <tr><td>速く変わる属性まで本体を Type2（§2(a) の失敗形）</td><td>年 +600 万行（変化回数依存）</td><td>範囲結合が要る</td><td>版で分裂した巨大ディメンションに結合</td></tr>
-<tr><td><strong>ミニディメンション</strong>（正典 <code>dim_member_profile_mini</code>、この回）</td><td><strong>組合せ 15 通り（固定）</strong></td><td>ファクトが既に時点の <code>member_profile_mini_key</code> を持つので不要</td><td>15 行への結合＝実質ブロードキャスト</td></tr>
-<tr><td><strong>ECM / FDE の日次スナップショット</strong>（正典 <code>dim_member_daily</code>、05回）</td><td>約 11 億行/年（300万 × 365）。ただし <code>partition_by=snapshot_date</code> ＋ <code>require_partition_filter=true</code> なので1クエリのスキャンは1日分 ≒ 300 万行に閉じる</td><td><code>WHERE snapshot_date = ...</code> だけ。最も簡単</td><td>日付で絞ってから結合</td></tr>
+<tr><td><strong>ミニディメンション</strong>（<code>dim_member_profile_mini</code>。この資料が採る形）</td><td><strong>組合せ 15 通り（固定）</strong></td><td>ファクトが既に時点の <code>member_profile_mini_key</code> を持つので不要</td><td>15 行への結合＝実質ブロードキャスト</td></tr>
+<tr><td><strong>ECM ／ 関数型データエンジニアリング（FDE）の日次スナップショット</strong>（<code>dim_member_daily</code>。DM05 で扱う）</td><td>約 11 億行/年（300万 × 365）。ただし <code>partition_by=snapshot_date</code> ＋ <code>require_partition_filter=true</code> なので1クエリのスキャンは1日分 ≒ 300 万行に閉じる</td><td><code>WHERE snapshot_date = ...</code> だけ。最も簡単</td><td>日付で絞ってから結合</td></tr>
 </table>
 </div>
 
-<p>スナップショットは「分析者が書く SQL の簡単さ」を、ミニディメンションは「ファクト結合の安さ」を買う。<strong>正典は両方を定義しており、どちらを主経路にするかは 05回で決める。</strong> 日次 2,000 万行の <code>fct_page_view</code> に毎日結合するのはミニの側で、<code>dim_member_daily</code> は会員断面の時系列分析（属性が変わった前後の行動差）用だ。</p>
-<p>同じ属性を2経路で持つので、<strong><code>dim_member_daily.member_profile_mini_key</code> がミニ側と一致することが整合条件</strong>になる。トレードオフは保管コスト対 SQL の簡単さで、行数そのものではない（<code>require_partition_filter</code> がスキャンを1日分に閉じるため）。SCD2 と日次スナップショットの選択そのものは 05回で扱う。</p>
+<p>スナップショットは「分析者が書く SQL の簡単さ」を、ミニディメンションは「ファクト結合の安さ」を買う。<strong>題材には両方を定義してあり、どちらを主経路にするかは DM05『履歴を持つ：SCD とスナップショット』で決める。</strong> 日次 2,000 万行の <code>fct_page_view</code> に毎日結合するのはミニの側で、<code>dim_member_daily</code> は会員断面の時系列分析（属性が変わった前後の行動差）用だ。</p>
+<p>同じ属性を2経路で持つので、<strong><code>dim_member_daily.member_profile_mini_key</code> がミニ側と一致することが整合条件</strong>になる。トレードオフは保管コスト対 SQL の簡単さで、行数そのものではない（<code>require_partition_filter</code> がスキャンを1日分に閉じるため）。SCD2 と日次スナップショットの選択そのものは DM05 で扱う。</p>
 
 <h2>5. BigQuery + dbt での実装</h2>
 
@@ -305,11 +356,11 @@ SELECT
 
 <ul>
 <li><strong><code>YYYYMMDD</code> は「スマートキー」の唯一の例外</strong>。DT#5（2000年）は時間ディメンションのキーについて「時間ディメンションのキーは<strong>アプリケーション上の意味を持ってはならない</strong>。ただの整数であって、計算に使ってはいけない」と書いていた。この立場は 2013 年の Techniques で明示的に緩められている: 「<strong>パーティショニングを容易にするため、日付ディメンションの主キーは YYYYMMDD を表す整数のように、より意味のあるものにしてよい</strong>」。<br>ただし DT#5 の禁止の主旨は残っている——「絞り込みとグループ化は、スマートキーではなく日付ディメンションの属性に基づいて行うべきだ」。つまり <code>WHERE date_key BETWEEN 20260601 AND 20260630</code> ではなく <code>JOIN dim_date … WHERE d.year = 2026 AND d.month = 6</code> と書く。</li>
-<li><strong>数値属性の <code>-1</code> 行は NULL のままにする</strong>。DT#43 と Techniques は「ディメンション属性の NULL は <code>Unknown</code> / <code>Not Applicable</code> の記述文字列で置き換えよ」と言うが、これは<strong>文字列属性</strong>の話だ。<code>year</code> に <code>-1</code> を入れると年の並び順とレンジ集計が壊れる。文字列属性（<code>date_label</code>, <code>day_of_week</code>）に <code>未到達</code> を入れて、レポートの行見出しはそこから取る。</li>
-<li><strong>DT#5 は特殊行を4種類に分けていた</strong>（<code>Normal</code> / <code>Not_Applicable</code> / <code>Hasnt_Happened_Yet</code> / <code>Corrupted</code>）。正典は <code>-1</code> の1行に畳んでいる。CareerVoice の未達はすべて「まだ起きていない」なので今は足りるが、「該当しない」（例: 応募せずに終わったスカウトの <code>applied_date_key</code>）と区別したくなったら <code>-2</code> を足すことになる。</li>
+<li><strong>数値属性の <code>-1</code> 行は NULL のままにする</strong>。DT#43 と Techniques は「ディメンション属性の NULL は <code>Unknown</code> / <code>Not Applicable</code> の記述文字列で置き換えよ」と言うが、これは<strong>文字列属性</strong>の話だ。<code>year</code> に <code>-1</code> を入れると年の並び順とレンジ集計が誤った結果になる。文字列属性（<code>date_label</code>, <code>day_of_week</code>）に <code>未到達</code> を入れて、レポートの行見出しはそこから取る。</li>
+<li><strong>DT#5 は特殊行を4種類に分けていた</strong>（<code>Normal</code> / <code>Not_Applicable</code> / <code>Hasnt_Happened_Yet</code> / <code>Corrupted</code>）。この題材では <code>-1</code> の1行にまとめている。CareerVoice の未達はすべて「まだ起きていない」なので今は足りるが、「該当しない」（例: 応募せずに終わったスカウトの <code>applied_date_key</code>）と区別したくなったら <code>-2</code> を足すことになる。</li>
 </ul>
 
-<h3>ロールプレイングと <code>-1</code> の効き目</h3>
+<h3>ロールプレイングと <code>-1</code> 行の働き</h3>
 
 <pre><code>-- 分析クエリ（モデルではない）。
 -- fct_application_pipeline は dim_date を 8 本の FK で参照する。
@@ -326,7 +377,7 @@ INNER JOIN {{ ref('dim_date') }} AS hired_d   ON f.hired_date_key   = hired_d.da
 GROUP BY applied_d.fiscal_year
 ORDER BY applied_d.fiscal_year;</code></pre>
 
-<p><code>-1</code> 行があるので <code>INNER JOIN</code> でも行が落ちない。結果として <code>applications = still_open + hired_count</code> が常に成立し、<strong>クエリ自身が検算になる</strong>。§2(c) の3つの壊れ方はこれで消える。</p>
+<p><code>-1</code> 行があるので <code>INNER JOIN</code> でも行が除外されない。結果として <code>applications = still_open + hired_count</code> が常に成立し、<strong>クエリ自身が検算になる</strong>。§2(c) の3つの誤りはこれで消える。</p>
 
 <h3>(b) <code>dim_review_attributes</code> — ジャンクを <code>CROSS JOIN</code> で作る</h3>
 
@@ -393,7 +444,7 @@ SELECT -1 AS member_profile_mini_key, '不明' AS annual_income_band, '不明' A
 
 <p>ファクト側は「そのイベントが起きた時点の帯」を解決して <code>member_profile_mini_key</code> に入れる。<code>fct_scout</code> は <code>member_profile_mini_key</code>（送信時点）、<code>fct_application_pipeline</code> は応募時点、<code>fct_page_view</code> は閲覧時点。</p>
 
-<p><strong>キーが 15 種類しかないので、時点解決の結果は「15 行のうちどれを指すか」だけ</strong>になる。§2(a) の 3,000 万行への範囲結合が、正典では 15 行への参照と、<code>dim_member</code> 側の 2 行（<code>M001</code> の版）への as-of 結合に縮む。</p>
+<p><strong>キーが 15 種類しかないので、時点解決の結果は「15 行のうちどれを指すか」だけ</strong>になる。§2(a) の 3,000 万行への範囲結合が、この設計では 15 行への参照と、<code>dim_member</code> 側の 2 行（<code>M001</code> の版）への時点結合に縮む。</p>
 
 <h3>(d) サロゲートキーの作り方 — 3案の比較</h3>
 
@@ -402,10 +453,10 @@ SELECT -1 AS member_profile_mini_key, '不明' AS annual_income_band, '不明' A
 <tr><th>観点</th><th>A. <code>FARM_FINGERPRINT(CONCAT(...))</code></th><th>B. <code>dbt_utils.generate_surrogate_key(...)</code></th><th>C. 自然キーをそのまま <code>_key</code> に</th></tr>
 <tr><td>型</td><td>INT64（8バイト、符号付き）</td><td>STRING。BigQuery では <code>TO_HEX(MD5(...))</code> に展開され 32 文字の16進</td><td>ソースの型。<code>member_id</code> なら STRING <code>'M001'</code></td></tr>
 <tr><td>衝突</td><td>64bit。誕生日問題で 1,000 万行なら約 3×10⁻⁶、10 億行なら約 2.7%。<strong>ディメンションでは非現実的だが、ファクト表の主キーに使うなら要注意</strong></td><td>128bit MD5。10 億行でも 10⁻²¹ 台で実質ゼロ</td><td>衝突なし（ソースが一意である限り）</td></tr>
-<tr><td>可読性</td><td>✗ <code>-5137827...</code>。BigQuery コンソールでの目視デバッグが効かない</td><td>✗ <code>7c9e6679...</code>。同上</td><td>✓ <code>M001</code> / <code>J001</code> / <code>20260620</code> がそのまま読める。障害調査でこれが効く</td></tr>
+<tr><td>可読性</td><td>✗ <code>-5137827...</code>。BigQuery コンソールでの目視デバッグができない</td><td>✗ <code>7c9e6679...</code>。同上</td><td>✓ <code>M001</code> / <code>J001</code> / <code>20260620</code> がそのまま読める。障害調査でこの可読性が役に立つ</td></tr>
 <tr><td>結合コスト</td><td>8バイト整数のハッシュ結合。最も安い</td><td>32バイト STRING。<code>fct_page_view</code> 規模でシャッフル量が効いてくる</td><td>短い STRING なら A とほぼ同等。長い自然キー（<code>corporate_number</code> 13桁など）だと不利</td></tr>
 <tr><td><code>-1</code> 既定行</td><td>✓ そのまま <code>-1</code> を使える</td><td>△ <code>'-1'</code> か、センチネル文字列のハッシュ。後者は可読性ゼロ</td><td>△ <code>'-1'</code>。自然キーの値空間と衝突しないことを確認する</td></tr>
-<tr><td>落とし穴</td><td><code>CONCAT</code> は引数に NULL があると NULL を返し、キーが NULL になる。必ず <code>IFNULL(x, '')</code> で包む。区切り文字 <code>'|'</code> が値に現れないことも確認する</td><td>区切りが <code>-</code> 固定。値に <code>-</code> を含む列が並ぶと <code>('a-b','c')</code> と <code>('a','b-c')</code> が同じキーになる。NULL は <code>_dbt_utils_surrogate_key_null_</code> に置換される</td><td>ソースがキー書式を変えたら marts を作り直す必要がある（§3 の表の5番目）</td></tr>
+<tr><td>注意点</td><td><code>CONCAT</code> は引数に NULL があると NULL を返し、キーが NULL になる。必ず <code>IFNULL(x, '')</code> で包む。区切り文字 <code>'|'</code> が値に現れないことも確認する</td><td>区切りが <code>-</code> 固定。値に <code>-</code> を含む列が並ぶと <code>('a-b','c')</code> と <code>('a','b-c')</code> が同じキーになる。NULL は <code>_dbt_utils_surrogate_key_null_</code> に置換される</td><td>ソースがキー書式を変えたら marts を作り直す必要がある（§3 の表の5番目）</td></tr>
 </table>
 </div>
 
@@ -415,7 +466,7 @@ SELECT -1 AS member_profile_mini_key, '不明' AS annual_income_band, '不明' A
 <table>
 <tr><th>状況</th><th>キーの作り方</th><th>型</th><th>対象</th></tr>
 <tr><td><strong>SCD2</strong>（1自然キーに複数行）</td><td><code>FARM_FINGERPRINT(自然キー + '|' + valid_from)</code></td><td>INT64</td><td><code>dim_member</code>, <code>dim_company</code>, <code>dim_agent</code>, <code>dim_agency</code>, <code>dim_scout_sender</code> の 5 本</td></tr>
-<tr><td>SCD2 の<strong>縮約ディメンション</strong>（同じ自然キー階層の粗い版）</td><td>本体と同じ規則（<code>agency_id + '|' + valid_from</code>）</td><td>INT64</td><td>同上（<code>dim_agency</code>）。この行の主眼は「なぜ <code>dim_agent</code> と別に置くか」で、<code>dim_agent</code> の shrunken rollup（Techniques p.10 / DWT ch.4）だから。担当者が特定できないファクト（<code>fct_job_posting_daily</code>、および <code>fct_placement</code> の主軸）はこちらに結ぶ。コンフォーマンスの扱いは 06回・08回</td></tr>
+<tr><td>SCD2 の<strong>縮約ディメンション</strong>（同じ自然キー階層の粗い版）</td><td>本体と同じ規則（<code>agency_id + '|' + valid_from</code>）</td><td>INT64</td><td>同上（<code>dim_agency</code>）。この行の主眼は「なぜ <code>dim_agent</code> と別に置くか」で、<code>dim_agent</code> の縮約ディメンション（shrunken rollup。Techniques p.10 / DWT ch.4）だから。担当者が特定できないファクト（<code>fct_job_posting_daily</code>、および <code>fct_placement</code> の主軸）はこちらに結ぶ。複数のファクトで同じ軸を共有させる扱い（共通ディメンション、コンフォームドディメンション）は DM06『多対多・不揃い階層・異種ディメンション』と DM08『コンフォームドとドリルアクロス』で扱う</td></tr>
 <tr><td>Type 0/1 で自然キーが1列</td><td><strong>自然キーをそのまま <code>_key</code> に別名付け</strong></td><td>ソースの型</td><td><code>dim_job_posting</code>, <code>dim_job_category</code>, <code>dim_channel</code>, <code>dim_contract_plan</code>, <code>dim_moderation_reason</code></td></tr>
 <tr><td>日付</td><td><code>YYYYMMDD</code> の意味付き整数（Techniques が認める唯一の例外）</td><td>INT64</td><td><code>dim_date</code></td></tr>
 <tr><td>組合せが自然キー（ジャンク・ミニ）</td><td>組合せの決定的ハッシュ。1列にできないため</td><td>INT64</td><td><code>dim_review_attributes</code>, <code>dim_page_context</code>, <code>dim_member_profile_mini</code></td></tr>
@@ -549,13 +600,13 @@ SELECT COUNT(*) AS actual_rows
 FROM {{ ref('dim_member_profile_mini') }}
 HAVING COUNT(*) &lt;&gt; 16   -- 組合せ 15 通り ＋ -1 の既定行</code></pre>
 
-<p>BigQuery には外部キー制約が無い（<code>NOT ENFORCED</code> の宣言はできるが検証されない）。<code>relationships</code> テストが参照整合性の実装であり、<code>-1</code> 行を作り忘れた瞬間にこれが落ちる。<strong><code>-1</code> 行は設計であると同時にテストの前提条件だ。</strong></p>
+<p>BigQuery には外部キー制約が無い（<code>NOT ENFORCED</code> の宣言はできるが検証されない）。<code>relationships</code> テストが参照整合性の実装であり、<code>-1</code> 行を作り忘れた瞬間にそのテストが失敗する。<strong><code>-1</code> 行は設計であると同時にテストの前提条件だ。</strong></p>
 
-<p>ただし<strong>テストは物理設計に従属する</strong>。<code>require_partition_filter=true</code> のテーブルに素の generic テストを当てると、テストは失敗するのではなく実行自体が拒否される。直近3日だけを検査するのは全期間を諦めたのではなく、<strong>全期間の整合は <code>dim_member_daily</code> を作る側のモデルで担保する</strong>という分担だ（09回・10回）。</p>
+<p>ただし<strong>テストは物理設計に従属する</strong>。<code>require_partition_filter=true</code> のテーブルに素の generic テストを当てると、テストは失敗するのではなく実行自体が拒否される。直近3日だけを検査するのは全期間を諦めたのではなく、<strong>全期間の整合は <code>dim_member_daily</code> を作る側のモデルで担保する</strong>という分担だ。増分ロードの設計は DM09『増分・遅延到着・冪等性』、テストと監査の規約は DM10『レイヤ・命名・契約・テスト・監査』で扱う。</p>
 
 <h3>(e) <code>dim_audit</code> と dbt の <code>invocation_id</code></h3>
 
-<p>正本は 10回（マクロ定義・<code>dim_audit</code> モデル・運用まで扱う）。ここでは<strong>呼び出し側の形</strong>、つまりディメンションとファクトが同じ実行をどう指すかだけを示す。</p>
+<p>マクロ定義・<code>dim_audit</code> モデル・運用まで含めた全体は DM10『レイヤ・命名・契約・テスト・監査』で扱う。ここでは<strong>呼び出し側の形</strong>、つまりディメンションとファクトが同じ実行をどう指すかだけを示す。</p>
 
 <pre><code>-- macros/audit_key.sql（正本は 10回）
 {% macro audit_key(quality_flag='ok') -%}
@@ -590,9 +641,9 @@ SELECT
 FROM {{ ref('stg_careervoice__scouts') }} AS s
 ...</code></pre>
 
-<p><code>invocation_id</code> は dbt が実行ごとに発行する UUID で、Jinja コンテキストからそのまま参照できる。同じ実行の中で <code>dim_audit</code> とファクトが同じ式でキーを作るので、追加の結合なしに整合する。<code>run_started_at</code> は Python の datetime なので <code>strftime</code> で整形する。<code>loaded_at</code> に <code>CURRENT_TIMESTAMP()</code> ではなく <code>run_started_at</code> を使うのは、同一実行の全ファクト行が同じ時刻を指すようにするためである。<code>quality_flag</code> の値域 <code>ok</code> / <code>estimated</code> / <code>suspect</code> と、引数を SQL 式ではなく値で渡す形も 10回の正本に合わせている。</p>
+<p><code>invocation_id</code> は dbt が実行ごとに発行する UUID で、Jinja コンテキストからそのまま参照できる。同じ実行の中で <code>dim_audit</code> とファクトが同じ式でキーを作るので、追加の結合なしに整合する。<code>run_started_at</code> は Python の datetime なので <code>strftime</code> で整形する。<code>loaded_at</code> に <code>CURRENT_TIMESTAMP()</code> ではなく <code>run_started_at</code> を使うのは、同一実行の全ファクト行が同じ時刻を指すようにするためである。<code>quality_flag</code> の値域 <code>ok</code> / <code>estimated</code> / <code>suspect</code> と、引数を SQL 式ではなく値で渡す形も DM10 の定義に合わせている。</p>
 
-<p>これが効く場面は具体的だ。「7月の入社数が前月比で 3 割落ちた」ときに、<code>fct_placement</code> を <code>dim_audit</code> と結んで <code>batch_id</code> 別に件数を見れば、<strong>業務の変化なのか特定バッチのロード漏れなのかが1クエリで分かる</strong>。Techniques が「環境変数はコンプライアンスと監査の目的で特に有用で、BI ツールがどの版の ETL でどの行が作られたかをドリルダウンできるようになる」と言うのはこのことだ。</p>
+<p>監査ディメンションが役に立つ場面は具体的だ。「7月の入社数が前月比で 3 割減った」ときに、<code>fct_placement</code> を <code>dim_audit</code> と結んで <code>batch_id</code> 別に件数を見れば、<strong>業務の変化なのか特定バッチのロード漏れなのかが1クエリで分かる</strong>。Techniques が「環境変数はコンプライアンスと監査の目的で特に有用で、BI ツールがどの版の ETL でどの行が作られたかをドリルダウンできるようになる」と言うのはこのことだ。</p>
 
 <h2>6. 判断基準</h2>
 
@@ -608,7 +659,7 @@ FROM {{ ref('stg_careervoice__scouts') }} AS s
 <tr><td>遅い</td><td>中〜高、履歴は不要</td><td><strong>本体を Type 1</strong>（上書き）</td><td>誤記の訂正や表示名の変更に履歴を持つ意味がない</td><td><code>dim_company.name</code>（Type 6 の Type1 側）, <code>dim_job_posting.title</code></td></tr>
 <tr><td><strong>速い</strong>（月〜四半期）</td><td>低（帯化済み or 帯化できる）</td><td><strong>ミニディメンション</strong></td><td>本体の Type2 行数爆発を防ぐ（DT#127）。行数＝組合せ数で固定</td><td><code>annual_income_band</code> × <code>job_change_intent</code> = 15</td></tr>
 <tr><td>速い</td><td>高（連続値、帯化できない）</td><td><strong>ファクトのメジャー</strong></td><td>連続値を帯にせずミニに入れると行数＝エンティティ数になる</td><td><code>fct_placement.annual_income</code>, <code>fee_amount</code></td></tr>
-<tr><td>イベントごとに決まる</td><td>—</td><td><strong>ファクトの列（時点の FK）</strong></td><td>属性ではなく計測結果。ディメンションに置くと粒度が壊れる</td><td><code>fct_scout.member_profile_mini_key</code>（送信時点）</td></tr>
+<tr><td>イベントごとに決まる</td><td>—</td><td><strong>ファクトの列（時点の FK）</strong></td><td>属性ではなく計測結果。ディメンションに置くと1行の意味が粒度と合わなくなる</td><td><code>fct_scout.member_profile_mini_key</code>（送信時点）</td></tr>
 </table>
 </div>
 
@@ -619,12 +670,12 @@ FROM {{ ref('stg_careervoice__scouts') }} AS s
 <tr><th>問い</th><th>Yes</th><th>No</th></tr>
 <tr><td>その値でグループ化・絞り込みをするか</td><td>ディメンション属性</td><td>次の問いへ</td></tr>
 <tr><td>足して意味がある数か</td><td>加法メジャー</td><td>次の問いへ</td></tr>
-<tr><td>ファクト行を業務システムに突き合わせるための識別子か</td><td>退化ディメンション</td><td>そもそも要らない。落とす</td></tr>
+<tr><td>ファクト行を業務システムに突き合わせるための識別子か</td><td>退化ディメンション</td><td>そもそも要らない。ファクトの列に持たない</td></tr>
 </table>
 </div>
 
 <p>Kimball の但し書きも1つ入れておく。DT#83 は「人・場所・物」を1本の汎用ディメンションに抽象化するのを戒める。「我々が自社の内部エンティティについて収集し知っている情報は、外部エンティティについてのそれとは大きく異なる」「抽象化のプロセスは業務ユーザーにとっての明快さを減じ、必然的により大きな表を生む」。</p>
-<p><code>dim_scout_sender</code> は企業と担当者を1本に載せる異種ディメンション（supertype）なので<strong>この警告の射程に入る</strong>。正典が採る理由は、<code>fct_scout</code> の粒度が「送信された1スカウト」で送信主体が排他的に1つだからだ。対案（2本の FK + <code>-1</code>）との比較は 06 回で行う。</p>
+<p><code>dim_scout_sender</code> は企業と担当者を1本に載せる異種ディメンション（supertype）なので<strong>この警告の射程に入る</strong>。この題材が採る理由は、<code>fct_scout</code> の粒度が「送信された1スカウト」で送信主体が排他的に1つだからだ。対案（2本の FK + <code>-1</code>）との比較は DM06『多対多・不揃い階層・異種ディメンション』で行う。</p>
 
 <h2>7. 演習</h2>
 
@@ -637,8 +688,8 @@ FROM {{ ref('stg_careervoice__scouts') }} AS s
 <div class="table-wrap">
 <table>
 <tr><th>条件</th><th>判断</th></tr>
-<tr><td><code>template_id</code> で <code>fct_scout</code> の行をグループ化したいだけ（「テンプレ別の返信率」を ID のまま見る）</td><td><strong>退化</strong>。正典どおり <code>fct_scout</code> の列に置く</td></tr>
-<tr><td>テンプレ名・種別（求人紹介 / カジュアル面談 など）・作成企業で切りたい</td><td><strong>ディメンション化</strong>。ただし正典にテーブルが無いので、まず 01 回のバスマトリクスに列を足す提案をする</td></tr>
+<tr><td><code>template_id</code> で <code>fct_scout</code> の行をグループ化したいだけ（「テンプレ別の返信率」を ID のまま見る）</td><td><strong>退化</strong>。題材の定義どおり <code>fct_scout</code> の列に置く</td></tr>
+<tr><td>テンプレ名・種別（求人紹介 / カジュアル面談 など）・作成企業で切りたい</td><td><strong>ディメンション化</strong>。ただし題材にテーブルが無いので、まずバスマトリクス（ビジネスプロセス × 共通ディメンションの一覧表。DM01『粒度を宣言する』で作る）に列を足す提案をする</td></tr>
 <tr><td>テンプレ数が <code>fct_scout</code> の行数に近づいた（1スカウト1テンプレの自動生成になった）</td><td><strong>退化に戻す</strong>。DT#46 の「ディメンション表がファクト表とほぼ同じ速度で伸びていたら、見落とした退化ディメンションが潜んでいる」に該当</td></tr>
 </table>
 </div>
@@ -650,10 +701,10 @@ FROM {{ ref('stg_careervoice__scouts') }} AS s
 
 <details>
 <summary>解答例</summary>
-<p><strong>正典どおり <code>dim_page_context</code> に入れる（72行の第4軸）。</strong> 判断基準表の2行目（変わらない × 低カーディナリティ → ジャンク）と、タイブレーク表の1問目（グループ化するか → Yes）の両方に当たる。</p>
+<p><strong>題材の定義どおり <code>dim_page_context</code> に入れる（72行の第4軸）。</strong> 判断基準表の2行目（変わらない × 低カーディナリティ → ジャンク）と、タイブレーク表の1問目（グループ化するか → Yes）の両方に当たる。</p>
 <p>メジャー案が成立しない理由: <code>SUM(is_unlocked)</code> は「解錠状態での閲覧数」を返して数値としては意味を持つが、これは <code>view_count</code> を <code>is_unlocked</code> で絞ったものと同じで、<strong>新しい計測ではない</strong>。Techniques の「true/false フラグや業務上の指示子は、単独で見て意味を持つ完全な語でディメンション表に補うべきだ」に従い、軸として持つ。</p>
 <p>反論も書いておく。BigQuery では <code>fct_page_view</code> に <code>is_unlocked BOOL</code> を直接持てば結合なしで絞り込める。</p>
-<p>ただし (1) <code>page_context_key</code> の結合先は 72 行で実質ブロードキャストなので結合コストはほぼゼロ、(2) 2値属性は選択率 50% でクラスタリングも効かない、(3) ファクトとジャンクに同じ値を二重に持つと更新経路が2つになる。<strong>採らない。</strong> 配布用に非正規化した1枚を別途作る話は 07 回（OBT）で扱う。</p>
+<p>ただし (1) <code>page_context_key</code> の結合先は 72 行で実質ブロードキャストなので結合コストはほぼゼロ、(2) 2値属性は選択率 50% でクラスタリングも機能しない、(3) ファクトとジャンクに同じ値を二重に持つと更新経路が2つになる。<strong>この案は採らない。</strong> 配布用に非正規化した1枚（One Big Table、OBT）を別途作る話は DM07『star か One Big Table か』で扱う。</p>
 </details>
 
 <h3>問3</h3>
@@ -661,7 +712,7 @@ FROM {{ ref('stg_careervoice__scouts') }} AS s
 
 <details>
 <summary>解答例</summary>
-<p><strong>6/15 の変化では、どちらのディメンションも行が1行も増えない。</strong> 変わったのは <code>annual_income_band</code> と <code>job_change_intent</code> の2つで、どちらも <code>dim_member</code> の属性ではない（正典の <code>dim_member</code> は <code>birth_year</code>, <code>gender</code>, <code>prefecture</code>, <code>region</code>, <code>current_company_id</code>, <code>current_job_category</code>, <code>registered_date</code>）。<code>dim_member_profile_mini</code> は 15 通りの全組合せを最初から持っているので、こちらも増えない。</p>
+<p><strong>6/15 の変化では、どちらのディメンションも行が1行も増えない。</strong> 変わったのは <code>annual_income_band</code> と <code>job_change_intent</code> の2つで、どちらも <code>dim_member</code> の属性ではない（この題材の <code>dim_member</code> は <code>birth_year</code>, <code>gender</code>, <code>prefecture</code>, <code>region</code>, <code>current_company_id</code>, <code>current_job_category</code>, <code>registered_date</code>）。<code>dim_member_profile_mini</code> は 15 通りの全組合せを最初から持っているので、こちらも増えない。</p>
 <p><strong>変わるのはファクト行がどの行を指すか、だけである。</strong></p>
 <div class="table-wrap">
 <table>
@@ -675,18 +726,18 @@ FROM {{ ref('stg_careervoice__scouts') }} AS s
 </div>
 <p>要点は<strong>変化の種類でディメンションが分かれる</strong>ことだ。8/1 の <code>current_company_id</code> は <code>dim_member</code> の Type2 属性なので新しい <code>member_key</code> が出る。6/15 の2属性はミニ側なので新しいキーは出ない。</p>
 <p><code>M001</code> がもし年に4回意欲を切り替えても、<code>dim_member</code> は静止したままである。</p>
-<p>ただし DT#127 の但し書きが効く。6/15 の変化は、6/20 の <code>S001</code> という<strong>ファクトが発生したからこそ記録に残った</strong>。もし 6/15 以降 <code>M001</code> が何も起こさなければ、この変化はどのファクト行にも刻まれない。</p>
-<p>「会員の意欲がいつ変わったか」自体を分析対象にするなら、ミニディメンションでは足りない。正典の <code>dim_member_daily</code>（日次スナップショット）かファクトレスファクト表が要る（05回）。</p>
+<p>ただし DT#127 の但し書きが当てはまる。6/15 の変化は、6/20 の <code>S001</code> という<strong>ファクトが発生したからこそ記録に残った</strong>。もし 6/15 以降 <code>M001</code> が何も起こさなければ、この変化はどのファクト行にも刻まれない。</p>
+<p>「会員の意欲がいつ変わったか」自体を分析対象にするなら、ミニディメンションでは足りない。<code>dim_member_daily</code>（日次スナップショット）かファクトレスファクト表が要る。どちらを主経路にするかは DM05『履歴を持つ：SCD とスナップショット』で扱う。</p>
 </details>
 
 <h2>8. 参考: 手元の基盤ではどうか</h2>
 
 <div class="aside">
 <ul>
-<li><code>dbt_logs_analysis</code> の <code>mart_url_performance_incremental</code> は <code>unique_key=['url_path', 'date']</code>、つまり自然キーの複合をそのままキーにしている。履歴を持たないモデルなので、この回の基準では<strong>正しい判断</strong>（判断基準表の「Type 0/1 は自然キーをそのまま」）。ハッシュに置き換える理由は無い。</li>
+<li><code>dbt_logs_analysis</code> の <code>mart_url_performance_incremental</code> は <code>unique_key=['url_path', 'date']</code>、つまり自然キーの複合をそのままキーにしている。履歴を持たないモデルなので、この資料の基準では<strong>正しい判断</strong>（判断基準表の「Type 0/1 は自然キーをそのまま」）。ハッシュに置き換える理由は無い。</li>
 <li>同プロジェクトには <code>dim_date</code> に相当するものが無く、<code>date</code> が DATE 列のまま並んでいる。これは §2(b) そのものの形で、「営業日ベースのレスポンスタイム」や「年度別」の要件が来た瞬間に各モデルへ <code>CASE</code> が散る。</li>
-<li><code>news_pipeline</code> の <code>summaries</code> はスコアを上書きする Type 1。<code>scoring_version</code> があるので「どの採点版か」は追えるが、<code>dbt_invocation_id</code> / <code>batch_id</code> に相当する監査列は無い。<code>/recalculate</code> の途中でクレジット枯渇が起きたとき、どの実行がどこまで書いたかを SQL で切り分けられない。<code>dim_audit</code> の最小形はこの1点に効く。</li>
-<li>試せる種: <code>raw_articles.collected_at</code> から <code>date_key</code> INT64 を作り、<code>-1</code> 行を1行だけ持つ <code>dim_date</code> を置いて <code>summaries</code>（<code>notified_at</code> が NULL の行が大量にある）を結ぶ。未通知が <code>-1</code> に落ち、<code>COUNT(*) = notified + not_yet</code> が成立するのを確かめる。これが §2(c) の再現になる。</li>
+<li><code>news_pipeline</code> の <code>summaries</code> はスコアを上書きする Type 1。<code>scoring_version</code> があるので「どの採点版か」は追えるが、<code>dbt_invocation_id</code> / <code>batch_id</code> に相当する監査列は無い。<code>/recalculate</code> の途中でクレジット枯渇が起きたとき、どの実行がどこまで書いたかを SQL で切り分けられない。<code>dim_audit</code> の最小形はこの1点に役に立つ。</li>
+<li>試せる種: <code>raw_articles.collected_at</code> から <code>date_key</code> INT64 を作り、<code>-1</code> 行を1行だけ持つ <code>dim_date</code> を置いて <code>summaries</code>（<code>notified_at</code> が NULL の行が大量にある）を結ぶ。未通知が <code>-1</code> 行に結び付き、<code>COUNT(*) = notified + not_yet</code> が成立するのを確かめる。これが §2(c) の再現になる。</li>
 </ul>
 </div>
 

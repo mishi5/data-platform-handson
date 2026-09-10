@@ -43,27 +43,72 @@
 <h1>粒度を宣言する</h1>
 <p class="meta">データマート設計 01 ／ 参照: DWT ch.2–3, Declaring the Grain, The Matrix, Design Tip #3 #77 #179 ／ 再解釈: Reis（概念→論理→物理）</p>
 
-<h2>1. この回が決めること</h2>
+<div class="aside">
+<p><strong>この資料で使う題材</strong></p>
+<p>CareerVoice は、社員・元社員による企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントからのスカウト・応募から入社までを1つのプラットフォームで扱う架空のサービスである。ソースは OLTP のテーブル群で、BigQuery の <code>src_careervoice</code> データセットに CDC で複製されている前提とする。</p>
+<p>本文に出るサンプル ID は次がすべて。日付は全て 2026 年、時刻は JST。</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr></thead>
+<tbody>
+<tr><td><code>C001</code></td><td>企業</td><td>アオゾラ商事（商社、従業員規模 <code>ge1000</code>、上場、親会社なし）。求人 <code>J001</code> の掲載元、スカウト <code>S001</code> の送信元、契約 <code>K001</code> の契約企業</td></tr>
+<tr><td><code>C002</code></td><td>企業</td><td>ネクスト技研（IT、従業員規模 <code>50_299</code>、非上場）。クチコミ <code>R001</code> の対象企業で、<code>M001</code> の現職</td></tr>
+<tr><td><code>M001</code></td><td>会員</td><td>1991年生・東京・現職 <code>C002</code>・年収帯 <code>400_600</code>・転職意欲 <code>passive</code>。06-15 に <code>active</code> / <code>600_800</code> へ変化し、08-01 に <code>C001</code> へ入社</td></tr>
+<tr><td><code>M003</code></td><td>会員</td><td>1998年生・福岡・現職なし・年収帯 <code>lt400</code>・転職意欲 <code>active</code>。スカウト <code>S002</code> の宛先</td></tr>
+<tr><td><code>AG01</code></td><td>転職エージェント</td><td>キャリアブリッジ（<code>tier</code> = <code>gold</code>）。求人 <code>J002</code> を扱い、スカウト <code>S002</code> をエージェント側の送信者として送る</td></tr>
+<tr><td><code>R001</code></td><td>クチコミ</td><td><code>M001</code> が <code>C002</code> について投稿。03-10 投稿、03-11 に <code>low_quality</code> で差し戻し、03-12 公開。<code>overall_score</code> = 3.5、審査の状態遷移は3件</td></tr>
+<tr><td><code>J001</code></td><td>求人</td><td><code>C001</code> のデータエンジニア（職種コード <code>ENG-DATA</code>）。04-01 掲載、エージェントを介さない直接掲載</td></tr>
+<tr><td><code>J002</code></td><td>求人</td><td><code>C002</code> のバックエンドエンジニア（職種コード <code>ENG-BE-JAVA</code>）。<code>AG01</code> 経由の掲載</td></tr>
+<tr><td><code>S001</code></td><td>スカウト</td><td>送信者は <code>C001</code>（企業）、宛先は <code>M001</code>、求人は <code>J001</code>。06-20 送信、06-21 開封、06-22 返信 <code>interested</code></td></tr>
+<tr><td><code>S002</code></td><td>スカウト</td><td>送信者は <code>AG01</code>（エージェント）、宛先は <code>M003</code>、求人は <code>J002</code>。06-25 送信、未開封</td></tr>
+<tr><td><code>P001</code></td><td>応募</td><td><code>M001</code> が <code>J001</code> へ応募。チャネルは <code>scout_company</code>。06-23 応募、07-01 書類、07-08 一次面接、07-15 最終面接、07-20 内定、07-22 承諾、08-01 入社</td></tr>
+<tr><td><code>K001</code></td><td>契約</td><td><code>C001</code> の <code>premium</code> プラン（スカウト枠 200/月、月額 300,000 円）。2026-01-01 開始、終了日なし</td></tr>
+</tbody>
+</table>
+</div>
+<p>本文に出る主なテーブル。<code>src_careervoice</code> のものがソース、<code>fct_*</code> / <code>dim_*</code> / <code>agg_*</code> がこれから設計するデータマートである。</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>テーブル</th><th>1行の意味</th></tr></thead>
+<tbody>
+<tr><td>ソース <code>reviews</code> / <code>review_moderation_events</code></td><td>投稿された1クチコミ / クチコミの審査ステータスが1回遷移した記録</td></tr>
+<tr><td>ソース <code>scouts</code> / <code>applications</code> / <code>selection_events</code> / <code>placements</code></td><td>送信された1スカウト（開封・返信の時刻を同じ行に持つ）/ 1応募 / 1応募の1選考ステージ遷移 / 1入社（エージェント経由の成果報酬）</td></tr>
+<tr><td>ソース <code>members</code> / <code>job_postings</code> / <code>contracts</code> / <code>page_views</code></td><td>1会員 / 1求人 / 1契約 / 1ページ表示</td></tr>
+<tr><td><code>fct_review</code> / <code>fct_review_moderation</code></td><td>投稿された1クチコミ / 1クチコミの審査ライフサイクル</td></tr>
+<tr><td><code>fct_scout</code> / <code>fct_scout_funnel</code></td><td>送信された1スカウト / 1スカウトの送信から開封・返信・応募までの経過</td></tr>
+<tr><td><code>fct_selection_event</code> / <code>fct_application_pipeline</code></td><td>1応募の1選考ステージ遷移 / 1応募のパイプライン</td></tr>
+<tr><td><code>fct_page_view</code> / <code>fct_job_posting_daily</code> / <code>fct_contract_monthly</code> / <code>fct_placement</code></td><td>1ページ表示 / 1求人 × 掲載中の1日 / 1契約 × 1月 / 1入社（エージェント経由）</td></tr>
+<tr><td><code>dim_date</code> / <code>dim_member</code> / <code>dim_company</code> / <code>dim_job_posting</code> / <code>dim_job_category</code> / <code>dim_agent</code> / <code>dim_agency</code> / <code>dim_channel</code></td><td>日付・会員・企業・求人・職種・担当者・エージェンシー・応募チャネルの切り口。1行 = その実体の1版（属性が変わると版が増えるものがある）</td></tr>
+<tr><td><code>dim_scout_sender</code> / <code>dim_member_profile_mini</code></td><td>スカウト送信主体（企業と担当者を1本にまとめた表）/ 年収帯 × 転職意欲の組合せ（速く変わる会員属性を切り出した小さな表）</td></tr>
+<tr><td><code>dim_review_attributes</code> / <code>dim_page_context</code> / <code>dim_moderation_reason</code> / <code>dim_contract_plan</code> / <code>dim_audit</code></td><td>在籍状況 × 雇用形態 × 勤続年数帯の組合せ 30 行 / ページ種別 × 端末 × 流入元 × 閲覧権限の組合せ 72 行 / 審査の却下理由 / 契約プラン / 行の由来（バッチ・品質フラグ）</td></tr>
+<tr><td><code>agg_company_rating_daily</code> / <code>agg_company_entity</code> / <code>int_review_member_link</code></td><td>企業 × 日の集計 / 企業単位の集計 / 会員とクチコミの対応（アクセスを制限したデータセットに置く中間テーブル）</td></tr>
+</tbody>
+</table>
+</div>
+<p>用語の確認。<strong>粒度</strong>はファクト表の1行が意味するものの水準。<strong>ディメンション</strong>（<code>dim_*</code>）は切り口となる属性の表、<strong>ファクト</strong>（<code>fct_*</code>）は出来事と数値の表。<strong>コンフォームドディメンション（共通ディメンション）</strong>は複数のファクトが同じ定義・同じキーで共有するディメンション、<strong>退化ディメンション</strong>はディメンション表を作らずファクトに残す自然キー（<code>review_id</code> など）、<strong>サロゲートキー</strong>（<code>*_key</code>）はソースの ID とは別に DWH 側で振る代理キーを指す。</p>
+</div>
 
-<p>この回で固定するのは一点だけ。<strong>「このファクトの1行は何を意味するか」を一文で宣言できるか</strong>。宣言できない表は作らない。</p>
+<h2>1. この資料で決めること</h2>
 
-<p>宣言の順序は「ソース → 粒度 → ディメンション → ファクト」（DWT ch.2 の4ステップ）。これを崩すとディメンションの都合で粒度が後付けに決まる。粒度が混ざった表は例外なく二重計上する。</p>
+<p>この資料で固定するのは一点だけ。<strong>「このファクトの1行は何を意味するか」を一文で宣言できるか</strong>。宣言できない表は作らない。</p>
+
+<p>宣言の順序は「ソース → 粒度 → ディメンション → ファクト」（DWT ch.2 の4ステップ）。この順序を入れ替えると、ディメンションの都合で粒度が後付けに決まる。粒度が混ざった表は例外なく二重計上する。</p>
 
 <div class="table-wrap">
 <table>
-<thead><tr><th>決めること</th><th>選択肢</th><th>この回の結論</th></tr></thead>
+<thead><tr><th>決めること</th><th>選択肢</th><th>この資料の結論</th></tr></thead>
 <tbody>
-<tr><td>1行の意味の水準</td><td>原子（1イベント）／集約（1日・1月に畳む）</td><td><strong>原子で宣言する。</strong>集約は <code>agg_*</code> として別テーブルに作る（04回）。集約だけを持つのは禁止（DT#77）</td></tr>
-<tr><td>宣言の順序</td><td>①ソース → ②粒度 → ③ディメンション → ④ファクト</td><td>崩さない。③④は②に <em>true to the grain</em> なものだけを入れる</td></tr>
+<tr><td>1行の意味の水準</td><td>原子（1イベント）／集約（1日・1月にまとめる）</td><td><strong>原子で宣言する。</strong>集約は <code>agg_*</code> として別テーブルに作る（集約テーブルの作り方は DM04『加法性と派生指標』で扱う）。集約だけを持つのは禁止（DT#77）</td></tr>
+<tr><td>宣言の順序</td><td>①ソース → ②粒度 → ③ディメンション → ④ファクト</td><td>この順序は変えない。ディメンションとファクトには、宣言した粒度に合っている（1行の意味と同じ水準の）属性と数値だけを入れる</td></tr>
 <tr><td>1表に複数の粒度</td><td>混ぜる／分ける</td><td><strong>分ける。</strong>プロセスが違えば表も違う（<code>fct_review</code> と <code>fct_review_moderation</code>、<code>fct_scout</code> と <code>fct_scout_funnel</code>）</td></tr>
 <tr><td>粒度をどこに書くか</td><td>設計書／Wiki／コード</td><td>dbt の <code>description</code> 第1文（「1行 = …」）＋ <code>dbt_utils.unique_combination_of_columns</code> テスト。<strong>文書だけでは腐る</strong></td></tr>
 <tr><td>行（プロセス）の単位</td><td>部門／ビジネスプロセス</td><td>ビジネスプロセス（DT#3）。「営業部のマート」を作らない</td></tr>
-<tr><td>バスマトリクス</td><td>—</td><td><strong>この回が正本。</strong>以降の回は列（コンフォームドディメンション）を1本ずつ深掘りする</td></tr>
+<tr><td>バスマトリクス</td><td>—</td><td><strong>この資料の §3 に置く全体表を基準にする。</strong>ビジネスプロセス（行）と共有するディメンション（列）の対応をここで一度に決め、個々の列の設計は別の資料で1本ずつ深掘りする</td></tr>
 </tbody>
 </table>
 </div>
 
-<h2>2. どこで壊れるか</h2>
+<h2>2. よくある失敗</h2>
 
 <h3>(a) <code>fct_review</code> に「投稿」と「審査イベント」を混ぜる</h3>
 
@@ -81,14 +126,14 @@
 </table>
 </div>
 
-<p>この表で <code>C002</code> のクチコミ数を出すと、<code>review_count</code> をどう置いても壊れる。</p>
+<p>この表で <code>C002</code> のクチコミ数を出すと、<code>review_count</code> をどう置いても正しい値にならない。</p>
 
 <ul>
 <li><strong>全行に <code>review_count = 1</code> を置く</strong>: <code>SUM(review_count)</code> = 4。真値は 1。<code>R001</code> が「4件のクチコミ」として企業ページの評価件数に出る。</li>
 <li><strong>遷移行を <code>review_count = 0</code> にする</strong>: 件数は 1 に戻るが、二重計上が消えたわけではない。<code>overall_score</code> はクチコミ粒度の値なので4行すべてに複製されており、<code>AVG(overall_score)</code> は<strong>行数＝遷移回数で重み付けされる</strong>。差し戻しの多いクチコミほど企業平均を強く引っ張る、という業務上まったく正当化できない重み付けが入る。</li>
 </ul>
 
-<p>後者の厄介さは、<code>R001</code> 単独では平均が 3.5 のまま正しく見えることにある。<strong>壊れていても気付けない。</strong>件数の 1→4 と違い、この歪みはテストでも目視でも表面化しない。</p>
+<p>後者の厄介さは、<code>R001</code> 単独では平均が 3.5 のまま正しく見えることにある。<strong>誤った値が出ていても気付けない。</strong>件数の 1→4 と違い、この歪みはテストでも目視でも表面化しない。</p>
 
 <p>正しくは、投稿は <code>fct_review</code>（1行 = 投稿された1クチコミ、トランザクション）、審査ライフサイクルは <code>fct_review_moderation</code>（1行 = 1クチコミの審査ライフサイクル、累積スナップショット、<code>moderation_rounds</code> = 2 ＝ 審査担当者が判定を下した回数（03-11 の差し戻しと 03-12 の公開）であって、<code>screening</code> を通過した回数ではない）。両者は <code>review_id</code>（退化ディメンション）で繋がるが、同じ表には入らない。</p>
 
@@ -107,18 +152,18 @@
 </table>
 </div>
 
-<p>C の破綻が典型で、「両方の問いに答えたい」から行を足した結果、<em>true to the grain</em> でないメジャー（<code>scout_count</code>）が二重に足される。正しい分割は次の2表。</p>
+<p>C の破綻が典型で、「両方の問いに答えたい」から行を足した結果、粒度に合っていない（1行の意味と同じ水準でない）メジャー <code>scout_count</code> が二重に足される。正しい分割は次の2表。</p>
 
 <ul>
 <li><code>fct_scout</code> — 1行 = 送信された1スカウト。<code>sent_date_key</code> 1本。<strong>行は更新されない</strong>（不変トランザクション）。</li>
 <li><code>fct_scout_funnel</code> — 1行 = 1スカウトの送信→開封→返信→応募。<code>sent_date_key</code> / <code>opened_date_key</code> / <code>replied_date_key</code> / <code>applied_date_key</code> の4本を <code>dim_date</code> のロールプレイングで持ち、<strong>行が更新される</strong>（累積スナップショット）。<code>S002</code> の未達マイルストーンは <code>-1</code>（DT#43、NULL 外部キーを作らない）。</li>
 </ul>
 
-<p>粒度が同じでも、この2表は<strong>更新の作法が違う</strong>ので統合できない。不変な表と更新される表を1つのパーティション再構築ジョブに乗せられない（09回）。</p>
+<p>粒度が同じでも、この2表は<strong>更新の作法が違う</strong>ので統合できない。不変な表と更新される表を1つのパーティション再構築ジョブに乗せられない（増分ロードの作法は DM09『増分・遅延到着・冪等性』で扱う）。</p>
 
 <h3>(c) <code>fct_selection_event</code> を作らず <code>fct_application_pipeline</code> だけを作る</h3>
 
-<p>累積スナップショットは DWT ch.4 が扱うファクト型で、マイルストーンごとの日付キー列を持ち、行が更新される。ここでの論点はその型の良し悪しではなく、<strong>それ「だけ」を持つとどうなるか</strong>。</p>
+<p>累積スナップショットは DWT ch.4 が扱うファクト型で、マイルストーンごとの日付キー列を持ち、行が更新される。ここでの論点は累積スナップショットという型の良し悪しではなく、<strong>この型「だけ」を持つとどうなるか</strong>にある。</p>
 
 <p><code>P001</code>（<code>M001</code> → <code>J001</code>、<code>scout_company</code>、06-23 応募 → 07-01 書類 → 07-08 一次 → 07-15 最終 → 07-20 内定 → 07-22 承諾 → 08-01 入社）は、累積スナップショットでは <strong>1行</strong>（到達した7つのマイルストーンが日付キー列に埋まる。列としては未到達の <code>closed_date_key</code> を含め8本、未達は <code>-1</code>）、原子ファクトでは <strong>6行</strong>（<code>document</code>, <code>first_interview</code>, <code>final_interview</code>, <code>offer</code>, <code>accepted</code>, <code>hired</code>）になる。サマリーだけを持つと、次の問いに答えられなくなる。</p>
 
@@ -138,7 +183,7 @@
 DT#77（Margy Ross）: <em>“you can’t magically explode summary data into its underlying components.”</em> 集約は原子データの <em>“performance-tuning complements to the atomic level, not replacements.”</em> — サマリーは補完であって代替ではない。
 </div>
 
-<p>正典の固定判断もこれに従う: <strong><code>fct_application_pipeline</code> の裏には必ず <code>fct_selection_event</code> を置く</strong>（02回）。逆は成立する。原子ファクトからパイプラインは再構築できるが、パイプラインから原子ファクトは復元できない。</p>
+<p>そこでこの題材では、<strong><code>fct_application_pipeline</code> の裏に必ず <code>fct_selection_event</code> を置く</strong>と決めておく（ファクトの3つの型の使い分けは DM02『ファクトの3型とファクトレス』で扱う）。逆向きは成立する。原子ファクトからパイプラインは再構築できるが、パイプラインから原子ファクトは復元できない。</p>
 
 <h2>3. Kimball の原則</h2>
 
@@ -165,11 +210,11 @@ Grain（2003）: <em>“Declaring the grain means saying exactly what a fact tab
 
 <h3>原子粒度の原則</h3>
 
-<p>Kimball の主張は「原子粒度は<strong>次元数が最大になる</strong>」。<code>fct_selection_event</code> の1行には7つのディメンションが自然に付く。これを「応募あたり1行」に畳んだ瞬間、ステージ（<code>stage</code>）という軸が消える。</p>
+<p>Kimball の主張は「原子粒度は<strong>次元数が最大になる</strong>」。<code>fct_selection_event</code> の1行には7つのディメンションが自然に付く。これを「応募あたり1行」にまとめた瞬間、ステージ（<code>stage</code>）という軸が消える。</p>
 
 <p>Kimball の言い方では——<em>“Atomic data has the most dimensionality and so it can be constrained and rolled up in every way possible for that data source.”</em>（Grain, 2003）。</p>
 
-<p>粒度は<strong>最も原子的な水準で宣言し、集約は後から</strong>。集約テーブル（<code>agg_company_rating_daily</code>、<code>agg_company_entity</code>）は原子ファクトから導出される性能チューニングであって、設計の一次判断ではない。この非対称性が DT#77 の核。</p>
+<p>粒度は<strong>最も原子的な水準で宣言し、集約はそのあとで別テーブルとして作る</strong>。集約テーブル（<code>agg_company_rating_daily</code>、<code>agg_company_entity</code>）は原子ファクトから導出される性能チューニングであって、設計の一次判断ではない。この非対称性が DT#77 の核。</p>
 
 <h3>DT#3: 行はビジネスプロセス、部門ではない</h3>
 
@@ -177,7 +222,7 @@ Grain（2003）: <em>“Declaring the grain means saying exactly what a fact tab
 
 <h3>DT#179: 粒度宣言が仕様書になる</h3>
 
-<p>DT#179 の7項目のうちこの回に効くのは3つ。<em>“The dimensional model is the best specification for the DW/BI system.”</em>（モデル自体が要求仕様である）、<em>“Dimensional modeling is a group activity.”</em>（粒度宣言は一人で決めるものではない）、<em>“It’s all about the business.”</em>。</p>
+<p>DT#179 の7項目のうち粒度宣言に関係するのは3つ。<em>“The dimensional model is the best specification for the DW/BI system.”</em>（モデル自体が要求仕様である）、<em>“Dimensional modeling is a group activity.”</em>（粒度宣言は一人で決めるものではない）、<em>“It’s all about the business.”</em>。</p>
 
 <p>だから粒度の一文はビジネス側が読んで是非を判定できる日本語でなければならない。「<code>event_id</code> がユニーク」ではなく「1行 = 1応募の1選考ステージ遷移」と書く理由がここにある。</p>
 
@@ -185,7 +230,7 @@ Grain（2003）: <em>“Declaring the grain means saying exactly what a fact tab
 
 <p>行 = ビジネスプロセス、列 = コンフォームドディメンション。1999年の原文は行を <em>“all the first-level data marts that you could possibly build”</em> と呼んでおり、「ビジネスプロセス」は DWT 3rd ed.（2013）と DT#3 での言い直し。単一ソース1つ＝1行という中身は変わっていない。</p>
 
-<p>列については <em>“a column in the matrix is a map of where the dimension is required”</em>（The Matrix, 1999）。同じ列に ✓ が2つ以上あるディメンションは<strong>コンフォームドでなければならない</strong>（完全に同一か、一方が他方の完全な部分集合）。このマトリクスは以降の全回の正本で、02回以降は各セル・各列を1本ずつ掘り下げる。</p>
+<p>列については <em>“a column in the matrix is a map of where the dimension is required”</em>（The Matrix, 1999）。同じ列に ✓ が2つ以上あるディメンションは<strong>コンフォームドでなければならない</strong>（完全に同一か、一方が他方の完全な部分集合）。このマトリクスがこの題材の設計の基準表になる。以降の資料では各セル・各列を1本ずつ掘り下げるが、行と列の対応そのものはここで決まる。</p>
 
 <div class="table-wrap">
 <table>
@@ -211,10 +256,10 @@ Grain（2003）: <em>“Declaring the grain means saying exactly what a fact tab
 <p>このマトリクスから読み取れる設計上の事実を3点だけ挙げる。</p>
 
 <ul>
-<li><strong><code>fct_review</code> の member 列だけが ✗。</strong>これは技術的制約ではなく方針。少人数企業ではクチコミの属性から投稿者が特定できるため、<code>fct_review</code> は <code>member_key</code> を持たず、投稿時点の会員属性は <code>dim_review_attributes</code>（<code>employment_status</code> × <code>employment_type</code> × <code>years_of_service_band</code> = 30行のジャンクディメンション）に落とす。会員 × クチコミの結合が必要な分析は <code>int_review_member_link</code> に隔離する。<strong>マトリクスの空セルには「そのプロセスに関係ない」と「意図的に持たない」の2種類がある。</strong>後者は理由を書き添える。</li>
-<li><strong>agent 列は「agent / agency」の2解像度をまとめた表記。</strong>担当者まで決まるファクトは <code>agent_key</code>、エージェンシー止まりのファクトは縮約ディメンション <code>dim_agency</code> の <code>agency_key</code> を持つ（両方持つファクトもある）。マトリクスの列は<strong>コンフォームドな意味の単位</strong>であって物理テーブル1本とは限らない。</li>
+<li><strong><code>fct_review</code> の member 列だけが ✗。</strong>これは技術的制約ではなく方針。少人数企業ではクチコミの属性から投稿者が特定できるため、<code>fct_review</code> は <code>member_key</code> を持たず、投稿時点の会員属性は <code>dim_review_attributes</code>（<code>employment_status</code> × <code>employment_type</code> × <code>years_of_service_band</code> = 30行のジャンクディメンション）に持たせる。会員 × クチコミの結合が必要な分析は <code>int_review_member_link</code> に隔離する。<strong>マトリクスの空セルには「そのプロセスに関係ない」と「意図的に持たない」の2種類がある。</strong>後者は理由を書き添える。</li>
+<li><strong>agent 列は、担当者（agent）とエージェンシー（agency）という粒度の違う2つをまとめた表記。</strong>担当者まで決まるファクトは <code>agent_key</code>、エージェンシー止まりのファクトは縮約ディメンション <code>dim_agency</code> の <code>agency_key</code> を持つ（両方持つファクトもある）。マトリクスの列は<strong>コンフォームドな意味の単位</strong>であって物理テーブル1本とは限らない。</li>
 <li><strong>date 列に単純な ✓ が無い。</strong>累積スナップショットの行は複数の日付ロールを持つ。ロールプレイングディメンション（<code>submitted_date</code>, <code>published_date</code>, <code>replied_date</code>…）は同一の <code>dim_date</code> を別名で参照する。1つの物理テーブルが1列に複数回現れるのは、コンフォームド性が保たれている証拠。</li>
-<li><strong>company 列は10プロセス全てに ✓ が付く。</strong>10行を貫く唯一のディメンションであり、上の「✓ が2つ以上ある列はコンフォームドでなければならない」を最も強く受けるのがここ。つまり <code>dim_company</code> の定義が全社の分析結果を左右する。「投稿当時の企業規模」と「現在の企業規模」を両方答えるため、ファクトはイベント時点の <code>company_key</code>（SCD2 版）を持ち、現在値は <code>company_id</code> で <code>is_current</code> 版に再結合する（05回）。</li>
+<li><strong>company 列は10プロセス全てに ✓ が付く。</strong>10行を貫く唯一のディメンションであり、上の「✓ が2つ以上ある列はコンフォームドでなければならない」を最も強く受けるのがここ。つまり <code>dim_company</code> の定義が全社の分析結果を左右する。「投稿当時の企業規模」と「現在の企業規模」を両方答えるため、ファクトはイベント時点の <code>company_key</code>（SCD2 版）を持ち、現在値は <code>company_id</code> で <code>is_current</code> 版に再結合する（属性の版をどう持つかは DM05『履歴を持つ：SCD とスナップショット』で扱う）。</li>
 </ul>
 
 <h2>4. 現代の再解釈</h2>
@@ -231,7 +276,7 @@ Reis（Ch.14 The Levels of Data Modeling）: <em>“At this stage, your goal is 
 
 <p>ステップ2（粒度）だけが両方に足を掛けている。「1行 = 1選考ステージ遷移」はビジネス側が読んで是非を言える文（概念）でありながら、そのまま主キー制約に翻訳できる（論理）。</p>
 
-<p>CareerVoice でこの semantic conflict が起きる場所は具体的に予測できる。</p>
+<p>CareerVoice で、この語義の食い違い（semantic conflict）が起きる場所は具体的に予測できる。</p>
 
 <div class="table-wrap">
 <table>
@@ -239,7 +284,7 @@ Reis（Ch.14 The Levels of Data Modeling）: <em>“At this stage, your goal is 
 <tbody>
 <tr><td>「会員」— 退会者（<code>members.deleted_at</code> あり）を含むか</td><td><code>dim_member</code> の行数と <code>fct_scout</code> の会員数が一致せず、返信率の分母が部署ごとに違う</td></tr>
 <tr><td>「クチコミ」— <code>status</code> が <code>published</code> のものだけか、<code>submitted</code> を含むか</td><td>「クチコミ数の推移」が公開ベースか投稿ベースか不明になり、審査リードタイムの改善が投稿数の増加に見える</td></tr>
-<tr><td>「スカウト」— <code>company</code> 送信と <code>agent</code> 送信を同じものと数えるか</td><td><code>dim_scout_sender</code>（異種ディメンション）を作る動機が共有されず、2本の外部キーで済ませる案と決着しない（06回）</td></tr>
+<tr><td>「スカウト」— <code>company</code> 送信と <code>agent</code> 送信を同じものと数えるか</td><td><code>dim_scout_sender</code>（異種ディメンション）を作る動機が共有されず、2本の外部キーで済ませる案と決着しない（送信主体が企業とエージェントに分かれるディメンションの持ち方は DM06『多対多・不揃い階層・異種ディメンション』で扱う）</td></tr>
 <tr><td>「入社」— <code>selection_events.stage = 'hired'</code> か <code>placements</code> の行か</td><td>直接応募の入社が成果報酬売上から漏れ、<code>fct_placement</code> と <code>fct_application_pipeline</code> の入社数が恒常的にずれる</td></tr>
 </tbody>
 </table>
@@ -253,7 +298,7 @@ Reis（Ch.14 The Levels of Data Modeling）: <em>“At this stage, your goal is 
 <tbody>
 <tr><td><strong>残る</strong>: 粒度宣言</td><td>設計崩壊を防ぐ契約</td><td>変わらない。むしろ <code>description</code> とテストとしてコードに埋め込めるようになった分、強制力が上がった</td></tr>
 <tr><td><strong>残る</strong>: 原子粒度で持つ</td><td>次元数が最大になるから</td><td>変わらない。加えてストレージが安く原子データを捨てる理由が消えた</td></tr>
-<tr><td><strong>変わる</strong>: 集約を作る動機</td><td>クエリ性能のため必須に近い</td><td>性能のための集約は多くの場合不要。<code>agg_*</code> を作るのは<strong>意味の共有</strong>（04回・08回）のためで、性能はその副産物</td></tr>
+<tr><td><strong>変わる</strong>: 集約を作る動機</td><td>クエリ性能のため必須に近い</td><td>性能のための集約は多くの場合不要。<code>agg_*</code> を作るのは<strong>意味の共有</strong>（指標の定義を1か所に固定して全社で同じ数字を見る）のためで、性能はその副産物</td></tr>
 <tr><td><strong>変わる</strong>: 「マート」の物理的独立</td><td>部門ごとに別 DB/サーバに置かれた</td><td>同一プロジェクト内のデータセット。それでも DT#3 の教訓（部門で切らない）は名前空間の切り方として残る</td></tr>
 </tbody>
 </table>
@@ -346,11 +391,11 @@ models:
 
 <p>この SQL で粒度を決めているのは <code>FROM {{ ref('stg_careervoice__selection_events') }}</code> の1行だけ。以降の JOIN は<strong>全て多対一の <code>LEFT JOIN</code></strong>で、行数を増やしも減らしもしない。一対多が1つ紛れ込めば行が増え、粒度が静かに崩れる。</p>
 
-<p>減る方も同じくらい危険で、こちらは見落としやすい。参照先が見つからない行を <code>INNER JOIN</code> で落とすと粒度は宣言どおりのまま<strong>母数だけが静かに欠ける</strong>（応募の論理削除、Datastream の遅延で求人が未着、など）。</p>
+<p>減る方も同じくらい危険で、こちらは見落としやすい。参照先が見つからない行を <code>INNER JOIN</code> で除外すると、粒度は宣言どおりのまま<strong>母数だけが静かに欠ける</strong>（応募の論理削除、Datastream の遅延で求人が未着、など）。</p>
 
-<p>DT#43 の <code>-1</code> は、まさに落とさずに残すための仕掛けなので、<code>INNER JOIN</code> と <code>COALESCE(..., -1)</code> を同じ SQL に同居させてはならない。両方向を検出するのが上の <code>equal_rowcount</code>。</p>
+<p>DT#43 の <code>-1</code> は、参照先が無い行を除外せずに残すための仕組みなので、<code>INNER JOIN</code> と <code>COALESCE(..., -1)</code> を同じ SQL に同居させてはならない。両方向を検出するのが上の <code>equal_rowcount</code>。</p>
 
-<p>as-of join の比較は DATE ではなく TIMESTAMP で行う。<code>valid_from</code> / <code>valid_to</code> も <code>occurred_at</code> も UTC の TIMESTAMP で統一し、JST は表示（と日付キーの算出）にだけ使う。DATE に落として比較すると、属性が変わった当日のイベントが境界の丸めで旧バージョンに当たる（作法は05回）。</p>
+<p>時点結合（イベント時点の版に結ぶ結合。as-of join）の比較は DATE ではなく TIMESTAMP で行う。<code>valid_from</code> / <code>valid_to</code> も <code>occurred_at</code> も UTC の TIMESTAMP で統一し、JST は表示（と日付キーの算出）にだけ使う。DATE に変換して比較すると時刻が切り捨てられ、属性が変わった当日のイベントが変更前の版に結ばれる（時点結合の手順は DM05『履歴を持つ：SCD とスナップショット』で扱う）。</p>
 
 <pre><code>-- models/marts/fct_selection_event.sql
 {{ config(
@@ -475,19 +520,19 @@ LEFT JOIN {{ ref('dim_channel') }} AS dch
     ON a.source_channel = dch.source_channel
 </code></pre>
 
-<p><strong>解像度の違う2本の FK を並べる。</strong><code>agent_key</code>（担当者）はスカウト経由でしか決まらない。<code>source_channel = 'agent_referral'</code> のような紹介経由は <code>scouts</code> に行が無いからだ。</p>
+<p><strong>粒度の違う2本の外部キーを並べる。</strong><code>agent_key</code>（担当者）はスカウト経由でしか決まらない。<code>source_channel = 'agent_referral'</code> のような紹介経由は <code>scouts</code> に行が無いからだ。</p>
 
-<p>一方 <code>agency_key</code> は <code>job_postings.agency_id</code>（またはスカウト送信者の所属）から決まるので、<strong>求人がエージェント経由なら紹介経由でも失われない</strong>。逆に、直接掲載求人へのエージェント紹介はどちらの手がかりも無く <code>-1</code> に落ちる——解像度を1段落としても、関与の有無そのものを常に復元できるわけではない。</p>
+<p>一方 <code>agency_key</code> は <code>job_postings.agency_id</code>（またはスカウト送信者の所属）から決まるので、<strong>求人がエージェント経由なら紹介経由でも失われない</strong>。逆に、直接掲載求人へのエージェント紹介はどちらの手がかりも無く <code>-1</code> になる——粒度を1段粗くしても、関与の有無そのものを常に復元できるわけではない。</p>
 
 <p><code>dim_agency</code> は <code>dim_agent</code> の<strong>縮約（shrunken/rollup）ディメンション</strong>（DWT ch.4）。<code>agency_name</code> / <code>agency_tier</code> を <code>dim_agent</code> と<strong>同一の名前・同一の値</strong>で共有する（<code>dim_agency</code> 固有の <code>contract_start_date</code> は、エージェンシー粒度でしか意味を持たない属性）。</p>
 
-<p>共有部分がコンフォームドである限り drill across は成立する。だから「担当者別」と「エージェンシー別」を同じ <code>agency_tier</code> で並べられる。</p>
+<p>共有部分がコンフォームドである限り、横断集計（ドリルアクロス。別々のファクトを共通のディメンションで並べる集計）は成立する。だから「担当者別」と「エージェンシー別」を同じ <code>agency_tier</code> で並べられる。</p>
 
-<p>ここで <code>dim_agent</code> を <code>agency_id</code> で結んで済ませたくなるが、1エージェンシーに複数担当者がいるので<strong>一対多になり粒度が崩れる</strong>。<strong>解像度が足りないときに粗い側のディメンションを別 FK として足すのが正解で、細かい側のディメンションを粗いキーで結ぶのは誤り</strong>。前者は行数を変えず、後者は変える。</p>
+<p>ここで <code>dim_agent</code> を <code>agency_id</code> で結んで済ませたくなるが、1エージェンシーに複数担当者がいるので<strong>一対多になり粒度が崩れる</strong>。<strong>粒度が足りないときは、粗い側のディメンションを別の外部キーとして足すのが正解で、細かい側のディメンションを粗いキーで結ぶのは誤り</strong>。前者は行数を変えず、後者は変える。</p>
 
 <p><code>P001</code> をこのモデルに通すと 6 行（<code>document</code> / <code>first_interview</code> / <code>final_interview</code> / <code>offer</code> / <code>accepted</code> / <code>hired</code>）。応募そのもの（06-23）は行にならない。</p>
 
-<p>応募を数えたいなら <code>fct_application_pipeline</code> の1行を数える。<strong>「応募数」と「選考イベント数」は別の表で数える</strong>——これが粒度を分けるということ。</p>
+<p>応募を数えたいなら <code>fct_application_pipeline</code> の1行を数える。<strong>「応募数」と「選考イベント数」は別の表で数える</strong>——粒度を分けるとは、この状態を作ることを指す。</p>
 
 <p>入れたくなるが入れてはいけないメジャーの例を挙げておく。いずれも Grain の <em>“aren’t true to the grain… Omit them from the design.”</em> に該当する。</p>
 
@@ -505,29 +550,29 @@ LEFT JOIN {{ ref('dim_channel') }} AS dch
 
 <h2>6. 判断基準</h2>
 
-<p>「答えたい問い → 必要な粒度 → 表の型」。正典の分析要求（CareerVoice が答えたい5つの問い）ごとに引く。</p>
+<p>「答えたい問い → 必要な粒度 → 表の型」の順に引く。CareerVoice の分析側が答えたい5つの問いを、そのまま行にした。</p>
 
 <div class="table-wrap">
 <table>
-<thead><tr><th>答えたい問い</th><th>1行が意味するもの（粒度宣言）</th><th>表と型</th><th>これ以上畳むと失うもの</th></tr></thead>
+<thead><tr><th>答えたい問い</th><th>1行が意味するもの（粒度宣言）</th><th>表と型</th><th>これ以上まとめると失うもの</th></tr></thead>
 <tbody>
 <tr>
-<td>クチコミ数・評価スコアの推移が求人応募率・スカウト返信率に効くか</td>
+<td>クチコミ数・評価スコアの推移が求人応募率・スカウト返信率に影響するか</td>
 <td>1行 = 投稿された1クチコミ<br>1行 = 1ページ表示<br>1行 = 1スカウトのライフサイクル</td>
 <td><code>fct_review</code>（トランザクション）<br><code>fct_page_view</code>（トランザクション・ファクトレス）<br><code>fct_scout_funnel</code>（累積スナップショット）</td>
-<td>日 × 企業に畳むと <code>review_id</code> が消え、「どのクチコミが読まれてから応募されたか」が追えない。3表は別粒度なので、企業 × 日で drill across する（08回）</td>
+<td>日 × 企業にまとめると <code>review_id</code> が消え、「どのクチコミが読まれてから応募されたか」が追えない。3表は別粒度なので、企業 × 日という共通の軸で横断集計（ドリルアクロス）する（横断集計が成立する条件は DM08『コンフォームドとドリルアクロス』で扱う）</td>
 </tr>
 <tr>
 <td>スカウト送信主体（企業 vs エージェント）別の開封→返信→応募ファネル</td>
 <td>1行 = 1スカウトの送信→開封→返信→応募</td>
 <td><code>fct_scout_funnel</code>（累積スナップショット）。送信量だけなら <code>fct_scout</code>（トランザクション）</td>
-<td>日次の送信数・返信数に畳むと<strong>コホートが消える</strong>。「6月に送った分の返信率」と「6月に返信された数」は別の問いで、後者しか答えられなくなる</td>
+<td>日次の送信数・返信数にまとめると<strong>コホートが消える</strong>。「6月に送った分の返信率」と「6月に返信された数」は別の問いで、後者しか答えられなくなる</td>
 </tr>
 <tr>
 <td>応募から入社までのリードタイムと歩留まり（職種・企業規模・チャネル別）</td>
 <td>リードタイム: 1行 = 1応募のパイプライン<br>歩留まりの経路: 1行 = 1選考ステージ遷移</td>
 <td><code>fct_application_pipeline</code>（累積スナップショット）<br><code>fct_selection_event</code>（トランザクション）</td>
-<td>パイプラインだけにすると再面接・差し戻し・イベント日基準の集計が失われる（§2c）。<strong>両方作る</strong>のが正典の固定判断</td>
+<td>パイプラインだけにすると再面接・差し戻し・イベント日基準の集計が失われる（§2 の (c)）。<strong>両方作る</strong>のがこの題材での決定</td>
 </tr>
 <tr>
 <td>契約枠の消化率、MRR、成果報酬売上</td>
@@ -539,7 +584,7 @@ LEFT JOIN {{ ref('dim_channel') }} AS dch
 <td>会員属性（年収帯・転職意欲）の変化前後での行動差</td>
 <td>1行 = 送信された1スカウト<br>1行 = 1ページ表示</td>
 <td><code>fct_scout</code> / <code>fct_page_view</code>（どちらもトランザクション）＋ イベント時点の <code>member_profile_mini_key</code></td>
-<td>会員 × 月に畳むと <strong><code>M001</code> の 6/15 の属性変化が月内で潰れる</strong>。6/20 の <code>S001</code> は変化<em>後</em>（<code>active</code> / <code>600_800</code>）の枠に入る必要がある（05回）</td>
+<td>会員 × 月にまとめると <strong><code>M001</code> の 6/15 の属性変化が月内で上書きされ、変化前と変化後を区別できなくなる</strong>。6/20 の <code>S001</code> は変化<em>後</em>（<code>active</code> / <code>600_800</code>）の枠に入る必要がある（イベント時点の版に結ぶ方法は DM05『履歴を持つ：SCD とスナップショット』で扱う）</td>
 </tr>
 <tr>
 <td colspan="4"><strong>共通ルール</strong>: 粒度を上げてよいのは、①上げた先でも全ての問いに答えられ、かつ ②同じ原子ファクトが別テーブルとして残る場合だけ。②が無い集約は作らない（DT#77）</td>
@@ -557,9 +602,9 @@ LEFT JOIN {{ ref('dim_channel') }} AS dch
 <details>
 <summary>解答例</summary>
 
-<p><strong>1行 = 1ページ表示。</strong>正典のマトリクスどおり。§6 の第1行を適用する。</p>
+<p><strong>1行 = 1ページ表示。</strong>§3 のバスマトリクスで宣言したとおりで、§6 の判断基準の第1行を適用する。</p>
 
-<p>判断は性能ではなく問いで決まる。「クチコミ数・評価スコアの推移が応募率に効くか」に答えるには、<strong>どのクチコミ（<code>review_id</code>）が読まれたか</strong>を数える必要がある。セッション粒度では1セッションに複数の <code>review_id</code> / <code>page_type</code> / <code>company_id</code> が含まれるため、これらが多値になり、<code>dim_page_context</code>（<code>page_type</code> × <code>device</code> × <code>referrer_type</code> × <code>is_unlocked</code> = 72行のジャンクディメンション）を1つの外部キーで結べない。</p>
+<p>判断は性能ではなく問いで決まる。「クチコミ数・評価スコアの推移が応募率に影響するか」に答えるには、<strong>どのクチコミ（<code>review_id</code>）が読まれたか</strong>を数える必要がある。セッション粒度では1セッションに複数の <code>review_id</code> / <code>page_type</code> / <code>company_id</code> が含まれるため、これらが多値になり、<code>dim_page_context</code>（<code>page_type</code> × <code>device</code> × <code>referrer_type</code> × <code>is_unlocked</code> = 72行のジャンクディメンション）を1つの外部キーで結べない。</p>
 
 <p>逆向きは無コストで成立する。<code>session_id</code> を退化ディメンションとして持てば、セッション指標はいつでも導出できる。</p>
 
@@ -574,7 +619,7 @@ FROM {{ ref('fct_page_view') }}
 GROUP BY view_date_key, company_key
 </code></pre>
 
-<p>DT#77 の非対称性そのもの: ページ表示からセッションは畳めるが、セッションからページ表示は展開できない。スキャン量が問題になったら、粒度を上げるのではなく <code>agg_*</code> をもう1本作る（原子ファクトは残す）。<code>fct_page_view</code> は <code>view_date</code> パーティション + <code>company_key</code> クラスタで、企業単位の分析なら実スキャンは行数ほど増えない。</p>
+<p>DT#77 の非対称性そのもの: ページ表示からセッションはまとめられるが、セッションからページ表示は展開できない。スキャン量が問題になったら、粒度を上げるのではなく <code>agg_*</code> をもう1本作る（原子ファクトは残す）。<code>fct_page_view</code> は <code>view_date</code> パーティション + <code>company_key</code> クラスタで、企業単位の分析なら実スキャンは行数ほど増えない。</p>
 </details>
 
 <h3>問2: <code>fct_contract_monthly</code> の粒度宣言と行数</h3>
@@ -590,11 +635,11 @@ GROUP BY view_date_key, company_key
 
 <p>ただし 2026-09 は進行中の月なので <code>scouts_sent</code> / <code>scouts_remaining</code> は締まっておらず、日々更新される。定期スナップショットの最新月は<strong>未確定行</strong>であることを利用側に明示する必要がある（<code>is_active</code> とは別の問題）。</p>
 
-<p>宣言を誤ったときに何が壊れるか。</p>
+<p>宣言を誤ったときに何が起きるか。</p>
 
 <div class="table-wrap">
 <table>
-<thead><tr><th>誤った宣言</th><th>壊れ方</th></tr></thead>
+<thead><tr><th>誤った宣言</th><th>起きること</th></tr></thead>
 <tbody>
 <tr><td>1行 = 1企業 × 1月</td><td><code>C001</code> がプラン変更や別部門で複数契約を持った月に行が合体し、<code>scout_quota</code> と <code>monthly_fee</code> がどの契約のものか判別不能になる</td></tr>
 <tr><td>1行 = 1契約</td><td>月次の枠残高（<code>scouts_remaining</code>）を持つ場所が無い。MRR の推移も出せない</td></tr>
@@ -605,7 +650,7 @@ GROUP BY view_date_key, company_key
 
 <p>加法性の注意: <code>scouts_remaining</code> は<strong>半加法</strong>。企業をまたいでは足せるが、月をまたいで足すと意味が無い（1月と2月の残枠を合計しても何も表さない）。<code>monthly_fee</code> は月をまたいで足せる（＝期間売上）。</p>
 
-<p>同じ表の中でメジャーごとに加法性が違うので、<code>description</code> の列コメントに書く（04回）。</p>
+<p>同じ表の中でメジャーごとに加法性が違うので、<code>description</code> の列コメントに書く（メジャーごとの加法性は DM04『加法性と派生指標』で扱う）。</p>
 </details>
 
 <h3>問3: バスマトリクスに1プロセス追加する</h3>
@@ -615,7 +660,7 @@ GROUP BY view_date_key, company_key
 <details>
 <summary>解答例</summary>
 
-<p>まず4ステップの①。<strong>バスマトリクスに行を足すとは、ソースを1つ増やすと宣言すること</strong>。domain.md §2 に投票のソーステーブルは無いので、<code>review_votes</code>（<code>vote_id</code>, <code>review_id</code>, <code>member_id</code>, <code>voted_at</code>）相当が新たに要る（本文のマトリクスに入れていないのはこのためで、正典への追加提案として扱う）。</p>
+<p>まず4ステップの①。<strong>バスマトリクスに行を足すとは、ソースを1つ増やすと宣言すること</strong>。この題材のソースに投票を記録するテーブルは無いので、<code>review_votes</code>（<code>vote_id</code>, <code>review_id</code>, <code>member_id</code>, <code>voted_at</code>）相当が新たに要る（§3 のマトリクスに入れていないのはこのためで、題材への追加提案として扱う）。</p>
 
 <p>以下はそのソースが在る前提での解答。</p>
 
@@ -625,7 +670,7 @@ GROUP BY view_date_key, company_key
 <table>
 <thead><tr><th>プロセス</th><th>ファクト</th><th>型</th><th>粒度宣言</th><th>date</th><th>member</th><th>company</th><th>job_posting</th><th>agent</th><th>job_category</th><th>channel/junk</th></tr></thead>
 <tbody>
-<tr><td>クチコミ投票</td><td><code>fct_review_vote</code>（正典への追加提案）</td><td>トランザクション（ファクトレス）</td><td>1行 = 1会員による1クチコミへの1投票</td><td>投票日</td><td>✓</td><td>✓</td><td>✗</td><td>✗</td><td>✓</td><td><code>dim_page_context</code></td></tr>
+<tr><td>クチコミ投票</td><td><code>fct_review_vote</code>（題材への追加提案）</td><td>トランザクション（ファクトレス）</td><td>1行 = 1会員による1クチコミへの1投票</td><td>投票日</td><td>✓</td><td>✓</td><td>✗</td><td>✗</td><td>✓</td><td><code>dim_page_context</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -635,23 +680,23 @@ GROUP BY view_date_key, company_key
 <ul>
 <li><strong>date ✓</strong> — 投票日。<code>dim_date</code> のロールプレイング。</li>
 <li><strong>member ✓</strong> — <code>fct_review</code> が <code>member_key</code> を持たないのは<strong>投稿者</strong>の匿名性のため。投票者は投稿者ではないので、この制約は継承しない。ただし「同一クチコミへの投票者が1名しかいない企業」では投稿者と投票者の相関から推定される余地があるので、集計の最小件数ルールは別途要る。</li>
-<li><strong>company ✓</strong> — クチコミの対象企業。<code>review_id</code> 経由でも辿れるが、<code>fct_review</code> と<strong>コンフォームドな <code>company_key</code> で drill across する</strong>ため直接持つ。「クチコミ数」と「投票数」を企業 × 日で並べる問いは確実に来る。</li>
+<li><strong>company ✓</strong> — クチコミの対象企業。<code>review_id</code> 経由でも辿れるが、<code>fct_review</code> と<strong>コンフォームドな <code>company_key</code> で横断集計（ドリルアクロス）する</strong>ため直接持つ。「クチコミ数」と「投票数」を企業 × 日で並べる問いは確実に来る。</li>
 <li><strong>job_posting ✗ / agent ✗</strong> — 投票は求人にもエージェントにも関係しない。空セルは「関係ない」種別。</li>
-<li><strong>job_category ✓</strong> — クチコミの <code>job_category_code</code>。<code>fct_review</code> と同じ <code>dim_job_category</code> を使えば「職種別の投票率（投票数 ÷ 公開クチコミ数）」が drill across で出る。ここが ✗ だとその問いに答えられない。</li>
+<li><strong>job_category ✓</strong> — クチコミの <code>job_category_code</code>。<code>fct_review</code> と同じ <code>dim_job_category</code> を使えば「職種別の投票率（投票数 ÷ 公開クチコミ数）」が横断集計（ドリルアクロス）で出る。ここが ✗ だとその問いに答えられない。</li>
 <li><strong>channel/junk</strong> — 既存の <code>dim_page_context</code> を再利用する。投票は <code>company_review</code> ページから <code>device</code> / <code>referrer_type</code> / <code>is_unlocked</code> の文脈で起きるので、72行のジャンクディメンションがそのまま当たる。<strong>新しいジャンクを作らずに済むなら作らない</strong>（コンフォームド化の機会）。</li>
 </ul>
 
-<p><strong>最大の落とし穴</strong>: 「参考になった数」を <code>fct_review</code> の列（<code>helpful_count</code>）として足したくなる。これは粒度違反で二重に危険。</p>
+<p><strong>最大の注意点</strong>: 「参考になった数」を <code>fct_review</code> の列（<code>helpful_count</code>）として足したくなる。これは粒度違反で二重に危険。</p>
 
-<p>(1) <code>fct_review</code> の粒度は「1投稿」であり投票累計はその粒度に忠実でない（Grain: <em>“Omit them from the design.”</em>）。(2) 投票は投稿の何か月も後に増えるため、<code>fct_review</code> が不変トランザクションでなくなり、パーティション単位の再構築が壊れる（09回）。累計が要るなら <code>agg_company_rating_daily</code> 側か、企業単位の <code>agg_company_entity</code> に置く（04回・08回）。</p>
+<p>(1) <code>fct_review</code> の粒度は「1投稿」であり投票累計はその粒度に忠実でない（Grain: <em>“Omit them from the design.”</em>）。(2) 投票は投稿の何か月も後に増えるため、<code>fct_review</code> が不変トランザクションでなくなり、パーティション単位で作り直す増分ロードが成立しなくなる（増分ロードの作法は DM09『増分・遅延到着・冪等性』で扱う）。累計が要るなら <code>agg_company_rating_daily</code> 側か、企業単位の <code>agg_company_entity</code> に置く（集約テーブルは DM04『加法性と派生指標』と DM08『コンフォームドとドリルアクロス』で扱う）。</p>
 </details>
 
 <h2>8. 参考: 手元の基盤ではどうか</h2>
 
 <div class="aside">
 <ul>
-<li><code>dbt_logs_analysis</code> の <code>mart_url_performance</code> は「1行 = <code>url_path</code> × <code>date</code>」で作られているが、<code>schema.yml</code> に粒度テストが無い。v1 / v2 / incremental の3本が同じ粒度を主張しているのに、それを検証しているものが1つも無い状態。この回の基準なら <code>dbt_utils.unique_combination_of_columns: [url_path, date]</code> が3本すべての最低条件。増分モデルは <code>unique_key=['url_path','date']</code> を持っているので、<strong>粒度は宣言済みだが「テストされている」のは増分モデルだけ</strong>——full-refresh 版は無防備。</li>
-<li>同じ <code>mart_url_performance</code> は生ログ（1行 = 1リクエスト）を日次に畳んだ集約で、原子ファクトが marts に残っていない。DT#77 の形そのもの。「特定の遅いリクエストの中身を見たい」に <code>staging</code> のビュー経由でしか答えられないのは、原子ファクトが marts の一級市民になっていないから。</li>
+<li><code>dbt_logs_analysis</code> の <code>mart_url_performance</code> は「1行 = <code>url_path</code> × <code>date</code>」で作られているが、<code>schema.yml</code> に粒度テストが無い。v1 / v2 / incremental の3本が同じ粒度を主張しているのに、それを検証しているものが1つも無い状態。この資料の基準なら <code>dbt_utils.unique_combination_of_columns: [url_path, date]</code> が3本すべての最低条件。増分モデルは <code>unique_key=['url_path','date']</code> を持っているので、<strong>粒度は宣言済みだが「テストされている」のは増分モデルだけ</strong>——full-refresh 版は無防備。</li>
+<li>同じ <code>mart_url_performance</code> は生ログ（1行 = 1リクエスト）を日次にまとめた集約で、原子ファクトが marts に残っていない。DT#77 の形そのもの。「特定の遅いリクエストの中身を見たい」に <code>staging</code> のビュー経由でしか答えられないのは、原子ファクトが marts の一級市民になっていないから。</li>
 <li><code>news_pipeline</code> は粒度の分離ができている側の例。<code>summaries</code> は「1行 = 1記事の最新スコア」（<code>/recalculate</code> が同じ行を上書き＝Type 1）、<code>raw_articles</code> は「1行 = 1収集イベント」に近く同一 <code>article_id</code> が複数行になりうる。この2つを1表にしなかったのは正しい。<code>get_unnotified_summaries</code> が両側を <code>article_id</code> ごとに1行へ絞っているのは、<strong>粒度の不一致を後段のクエリで吸収している</strong>証拠で、その吸収を忘れた版では通知が増幅していた。</li>
 <li>種: <code>summaries</code> に「1行 = 1 <code>article_id</code>」のアサーション（dbt を使わないなら BigQuery の <code>ASSERT</code> か、insert 前の <code>COUNT(*) vs COUNT(DISTINCT article_id)</code> 比較）を1本置くと、再採点バッチの二重挿入をデプロイ前に検出できる。<code>fct_review</code> に <code>unique_combination_of_columns</code> を置くのと同じ発想。</li>
 </ul>
@@ -668,7 +713,7 @@ GROUP BY view_date_key, company_key
 <li>Design Tip #179, <em>Key Tenets of the Kimball Method</em> — <a href="https://www.kimballgroup.com/2015/11/design-tip-179-key-tenets-of-kimball-method/">kimballgroup.com</a></li>
 <li>Design Tip #43, <em>Dealing With Nulls In The Dimensional Model</em> — <a href="https://www.kimballgroup.com/2003/02/design-tip-43-dealing-with-nulls-in-the-dimensional-model/">kimballgroup.com</a></li>
 <li>Design Tip #5, <em>Surrogate Keys For The Time Dimension</em> — <a href="https://www.kimballgroup.com/wp-content/uploads/2012/05/DT5SurrogateKeys.pdf">kimballgroup.com (PDF)</a></li>
-<li>Design Tip #164, <em>Have You Built Your Audit Dimension Yet</em> — <a href="https://www.kimballgroup.com/2014/03/design-tip-164-built-your-audit-dimension/">kimballgroup.com</a>（10回で扱う）</li>
+<li>Design Tip #164, <em>Have You Built Your Audit Dimension Yet</em> — <a href="https://www.kimballgroup.com/2014/03/design-tip-164-built-your-audit-dimension/">kimballgroup.com</a>（監査ディメンションは DM10『レイヤ・命名・契約・テスト・監査』で扱う）</li>
 <li>Joe Reis, <em>Practical Data Modeling</em> Ch.14 <em>The Levels of Data Modeling</em> — <a href="https://practicaldatamodeling.substack.com/p/ch-14-the-levels-of-data-modeling">practicaldatamodeling.substack.com</a></li>
 </ul>
 

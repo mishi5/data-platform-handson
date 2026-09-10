@@ -119,3 +119,5 @@ progress.md 内の `Ruling:` 行を参照。主要なもの: dim_agency 追加 /
 
 上書きは `publish.py --html <file> --title <title> --content-id <id>`（--slack なし）。
 - 2026-09-09 DLP 追記: DMBOK07 §3 に Sensitive Data Protection の節、DM03 §1 に k-匿名性の計測、DM10 演習(c) に再識別リスクの監査を追記して上書き公開（--slack なし）。DMBOK 17本のタイトルを DMBOKnn 接頭辞に改名
+- 2026-09-11 ユーザーレビュー: ID 未説明・『回』・未翻訳語・AI 的語彙・他資料依存 → style.md に読みやすさ規約を追加し、全11本を書き直し（rewrite_prompt.md、4本ずつ並列）
+- DM00 書き直し完了（禁止語 0、ID 表 OK）。DM04 起動

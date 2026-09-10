@@ -44,38 +44,61 @@
 <h1>題材と簡易データモデル</h1>
 <p class="meta">データマート設計 00 ／ 参照: DWT ch.1（4ステップ設計）, ch.18（設計プロセス）, 10 Rules, Manifesto, Design Tip #3 ／ 再解釈: Reis（概念/論理/物理）, Hightouch Modelling Part 1</p>
 
-<p>このシリーズは DMBOK シリーズ（総論）と扱う範囲を分ける。総論はガバナンス・品質・メタデータ・組織まで含む「データマネジメント全体」を扱うが、こちらは<strong>マートを1本作るときにその場で下す判断</strong>だけを扱う。粒度をどこに置くか、履歴をどう持つか、star にするか One Big Table にするか — 手を動かす直前に必ず迷う地点を、Kimball の原典と現代の再解釈の両方から詰める。</p>
+<div class="aside">
+<strong>この資料で使う題材</strong><br>
+<strong>CareerVoice</strong> は、社員・元社員が在籍/退職した企業を8軸で採点するクチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントのスカウト・応募選考までを1つで扱う架空のサービス。収益源は、クチコミの閲覧権限・求人の掲載プラン月額・スカウト枠の契約・入社時の成果報酬の4種類あり、それぞれ別のビジネスプロセスから発生する。
+<div class="table-wrap">
+<table>
+<thead><tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr></thead>
+<tbody>
+<tr><td><code>C001</code></td><td>企業</td><td>アオゾラ商事。商社、従業員規模 <code>ge1000</code>、上場、親会社なし</td></tr>
+<tr><td><code>C002</code></td><td>企業</td><td>ネクスト技研。IT、<code>50_299</code>、非上場。<strong>2026-05-01 に従業員規模が <code>300_999</code> へ変化</strong></td></tr>
+<tr><td><code>C003</code></td><td>企業</td><td>ヒノデ物流。物流、<code>300_999</code>、非上場。<strong>親会社が <code>C001</code></strong>（<code>companies</code> の自己参照の例）</td></tr>
+<tr><td><code>M001</code></td><td>会員</td><td>1991年生・東京・現職 <code>C002</code>。<strong>2026-06-15 に転職意欲が <code>passive</code> → <code>active</code>、年収帯が <code>400_600</code> → <code>600_800</code> へ変化</strong>。2026-08-01 に <code>C001</code> へ入社</td></tr>
+<tr><td><code>M002</code></td><td>会員</td><td>1985年生・大阪・現職 <code>C001</code>、年収帯 <code>800_1000</code>、転職意欲 <code>none</code></td></tr>
+<tr><td><code>A01</code></td><td>転職エージェント会社</td><td>キャリアブリッジ（<code>tier</code> = <code>gold</code>）</td></tr>
+<tr><td><code>J002</code></td><td>求人</td><td><code>C002</code> のバックエンド職。<strong><code>A01</code> 経由</strong>で掲載（<code>job_postings.agency_id</code> が埋まる）</td></tr>
+<tr><td><code>R001</code></td><td>クチコミ</td><td><code>M001</code> → <code>C002</code>。2026-03-10 投稿、03-11 に <code>low_quality</code> で差し戻し1回、2026-03-12 公開</td></tr>
+<tr><td><code>R002</code></td><td>クチコミ</td><td><code>M002</code> → <code>C001</code>。2026-04-02 投稿、<code>defamation</code> で却下</td></tr>
+<tr><td><code>S001</code></td><td>スカウト</td><td><code>C001</code>（企業として送信）→ <code>M001</code>。2026-06-20 送信、06-21 開封、06-22 返信</td></tr>
+</tbody>
+</table>
+</div>
+<strong>主なテーブル</strong>: ソース側（<code>src_careervoice</code>）は 17 表で、<code>members</code>（会員マスタ）/ <code>companies</code>（企業マスタ）/ <code>agencies</code>・<code>agents</code>（エージェント会社と担当者）/ <code>reviews</code>・<code>review_moderation_events</code>（クチコミと審査ログ）/ <code>job_postings</code>（求人）/ <code>scouts</code>（スカウト送信と開封・返信）/ <code>applications</code>・<code>selection_events</code>・<code>placements</code>（応募・選考・入社）/ <code>contracts</code>（企業の契約）/ <code>page_views</code>（閲覧ログ）/ <code>job_categories</code>・<code>industries</code>・<code>prefectures</code>（参照マスタ）/ <code>member_desired_job_categories</code>（会員の希望職種、1会員に最大3件）。列定義は §3 に全て挙げる。分析側で作るテーブルは <code>dim_*</code>（切り口）・<code>fct_*</code>（測定値）・<code>agg_*</code>（集約）・<code>stg_*</code>（ソースを整えた層）の命名で、一覧は §4 のバスマトリクスにある。
+</div>
+
+<p>このシリーズは DMBOK シリーズ（総論）と扱う範囲を分ける。総論はガバナンス・品質・メタデータ・組織まで含む「データマネジメント全体」を扱うが、こちらは<strong>マートを1本作るときにその場で下す判断</strong>だけを扱う。粒度をどこに置くか、履歴をどう持つか、星形スキーマ（star）に分けるか結合済みの1枚（One Big Table）にするか — 手を動かす直前に必ず迷う地点を、Kimball の原典と現代の再解釈の両方から詰める。</p>
 
 <h2>1. このシリーズが扱うこと</h2>
 
-<p>全11回。各回は「中心の判断」を1つ持ち、その判断を題材の具体テーブル・具体 ID で下しきる。原典（Kimball）の主張・現代の列指向 DWH での再解釈・この題材での決定、の3段で書く。</p>
+<p>この資料を含めて全11本ある。各資料は「中心の判断」を1つ持ち、その判断を題材の具体テーブル・具体 ID で下しきる。原典（Kimball）の主張・現代の列指向 DWH（データウェアハウス）での再解釈・この題材での決定、の3段で書く。</p>
 
 <div class="table-wrap">
 <table>
-<thead><tr><th>#</th><th>タイトル</th><th>中心の判断</th><th>図</th></tr></thead>
+<thead><tr><th>資料</th><th>タイトル</th><th>中心の判断</th><th>図</th></tr></thead>
 <tbody>
-<tr><td>00</td><td>題材と簡易データモデル</td><td>シリーズの位置づけ、CareerVoice のソースモデルとビジネスプロセス、概念→論理→物理</td><td>OLTP ER 図</td></tr>
-<tr><td>01</td><td>粒度を宣言する</td><td>1行の意味を一文で。バスマトリクス。粒度をテストで固定</td><td>—</td></tr>
-<tr><td>02</td><td>ファクトの3型とファクトレス</td><td>トランザクション/定期/累積スナップショット、ファクトレス。型は問いで決まる</td><td>累積スナップショット更新</td></tr>
-<tr><td>03</td><td>ディメンションの設計</td><td>サロゲートキーが要る条件、退化・ロールプレイング・ジャンク・ミニ・監査・<code>-1</code></td><td>—</td></tr>
-<tr><td>04</td><td>加法性と派生指標</td><td>加法/半加法/非加法。率と平均は持たず分子分母を持つ</td><td>平均の平均 vs 和と件数</td></tr>
-<tr><td>05</td><td>履歴を持つ：SCD とスナップショット</td><td>Type 0〜7、as-of join、SCD2 vs 日次スナップショット</td><td>as-of join</td></tr>
-<tr><td>06</td><td>多対多・不揃い階層・異種ディメンション</td><td>ブリッジ+重み / ARRAY、階層ブリッジ / 平坦化、supertype</td><td>ブリッジ vs ARRAY</td></tr>
-<tr><td>07</td><td>star か One Big Table か</td><td>star は意味のため。star 正本 + OBT 配布。パーティション/クラスタ</td><td>スキャン範囲の比較</td></tr>
-<tr><td>08</td><td>コンフォームドとドリルアクロス</td><td>同じ軸で複数ファクトを並べる。集約を持つ条件。ECM 風エンティティ表</td><td>—</td></tr>
-<tr><td>09</td><td>増分・遅延到着・冪等性</td><td>insert_overwrite / merge、ルックバック、遅延到着ディメンションの修復</td><td>遅延到着とルックバック</td></tr>
-<tr><td>10</td><td>レイヤ・命名・契約・テスト・監査</td><td>層と命名、粒度/参照整合性/加法性テスト、contract、改版、監査ディメンション</td><td>—</td></tr>
+<tr><td>DM00</td><td>題材と簡易データモデル</td><td>シリーズの位置づけ、CareerVoice のソースモデルとビジネスプロセス、概念→論理→物理</td><td>OLTP ER 図</td></tr>
+<tr><td>DM01</td><td>粒度を宣言する</td><td>1行の意味を一文で。バスマトリクス。粒度をテストで固定</td><td>—</td></tr>
+<tr><td>DM02</td><td>ファクトの3型とファクトレス</td><td>トランザクション/定期/累積スナップショット、ファクトレス。型は問いで決まる</td><td>累積スナップショット更新</td></tr>
+<tr><td>DM03</td><td>ディメンションの設計</td><td>サロゲートキーが要る条件、退化・ロールプレイング・ジャンク・ミニ・監査・<code>-1</code></td><td>—</td></tr>
+<tr><td>DM04</td><td>加法性と派生指標</td><td>加法/半加法/非加法。率と平均は持たず分子分母を持つ</td><td>平均の平均 vs 和と件数</td></tr>
+<tr><td>DM05</td><td>履歴を持つ：SCD とスナップショット</td><td>Type 0〜7、時点結合（as-of join）、SCD2 vs 日次スナップショット</td><td>時点結合</td></tr>
+<tr><td>DM06</td><td>多対多・不揃い階層・異種ディメンション</td><td>ブリッジ+重み / ARRAY、階層ブリッジ / 平坦化、異種ディメンション（supertype）</td><td>ブリッジ vs ARRAY</td></tr>
+<tr><td>DM07</td><td>star か One Big Table か</td><td>star は意味のため。star を正本にし、One Big Table を配布用に置く。パーティション/クラスタ</td><td>スキャン範囲の比較</td></tr>
+<tr><td>DM08</td><td>コンフォームドとドリルアクロス</td><td>同じ軸で複数ファクトを並べる。集約を持つ条件。エンティティ中心モデル（ECM）風のエンティティ表</td><td>—</td></tr>
+<tr><td>DM09</td><td>増分・遅延到着・冪等性</td><td>insert_overwrite / merge、ルックバック、遅延到着ディメンションの修復</td><td>遅延到着とルックバック</td></tr>
+<tr><td>DM10</td><td>レイヤ・命名・契約・テスト・監査</td><td>層と命名、粒度/参照整合性/加法性テスト、モデル契約（contract）、改版、監査ディメンション</td><td>—</td></tr>
 </tbody>
 </table>
 </div>
 
 <div class="aside kimball">
-<strong>Kimball（10 Rules, Rule #10）</strong>: 次元モデラーは常に「業務側の要求」と「ソースデータの現実」の間に立つ、と書かれている。要求だけを聞けば実装できないモデルになり、ソースだけを見ればレポートが作れないモデルになる。このシリーズが毎回「判断基準の表」で終わるのはそのためで、正解を1つ配るのではなく、状況→選択→理由の対応を置く。
+<strong>Kimball（10 Rules, Rule #10）</strong>: 次元モデラーは常に「業務側の要求」と「ソースデータの現実」の間に立つ、と書かれている。要求だけを聞けば実装できないモデルになり、ソースだけを見ればレポートが作れないモデルになる。このシリーズのどの資料も「判断基準の表」で終わるのはそのためで、正解を1つ配るのではなく、状況→選択→理由の対応を置く。
 </div>
 
 <h2>2. 題材: CareerVoice</h2>
 
-<p>架空のサービス <strong>CareerVoice</strong>。社員・元社員の企業クチコミを軸に、求人掲載・直接スカウト・エージェントスカウト・応募選考を1つのプラットフォームで提供する。収益源が4種類あり、それぞれ別のビジネスプロセスから発生する点が設計上の要になる。</p>
+<p><strong>CareerVoice</strong> は架空のサービスで、社員・元社員の企業クチコミを軸に、求人掲載・直接スカウト・エージェントスカウト・応募選考を1つのプラットフォームで提供する。収益源が4種類あり、それぞれ別のビジネスプロセスから発生する点が設計上の要になる。</p>
 
 <div class="table-wrap">
 <table>
@@ -101,17 +124,17 @@
 <li>クチコミ数・評価スコアの推移と、求人応募率・スカウト返信率への影響</li>
 <li>スカウト送信主体（企業 vs エージェント）別の開封→返信→応募→入社ファネル</li>
 <li>応募から入社までのリードタイムと歩留まり（職種・企業規模・チャネル別）</li>
-<li>契約枠の消化率、MRR、成果報酬売上</li>
+<li>契約枠の消化率、MRR（月次経常収益）、成果報酬売上</li>
 <li>会員属性（年収帯・転職意欲）の<strong>変化前後</strong>での行動差</li>
 </ul>
 
-<p>この5つは全回の演習の種になる。5つ目だけが他と質的に違い、「今の属性」ではなく「そのイベントが起きた時点の属性」を要求する。これが 05回（SCD と as-of join）の存在理由で、サンプル値の <code>M001</code> が 2026-06-15 に <code>job_change_intent</code> を <code>passive</code> → <code>active</code> へ変え、06-20 に <code>S001</code> を受け取り、06-23 に応募する、という並びで検証する。</p>
+<p>この5つは全11本の演習の種になる。5つ目だけが他と質的に違い、「今の属性」ではなく「そのイベントが起きた時点の属性」を要求する。この要求に応えるのが DM05『履歴を持つ：SCD とスナップショット』で、属性の版を残す緩やかに変化するディメンション（SCD）と、イベント時点の版に結ぶ時点結合（as-of join）を扱う。サンプル値の <code>M001</code> が 2026-06-15 に <code>job_change_intent</code> を <code>passive</code> → <code>active</code> へ変え、06-20 に <code>S001</code> を受け取り、06-23 に応募する、という並びで検証する。</p>
 
 <h2>3. ソースシステムの簡易モデル</h2>
 
-<p>OLTP は BigQuery の <code>src_careervoice</code> データセットに Datastream（CDC）で複製されている前提。行が更新されるテーブル（<code>members</code>, <code>member_desired_job_categories</code>, <code>companies</code>, <code>agencies</code>, <code>agents</code>, <code>reviews</code>, <code>job_postings</code>, <code>contracts</code>）だけが <code>updated_at</code> を持ち、論理削除 <code>deleted_at</code> を持つのは <code>members</code> だけである。残る9表（<code>job_categories</code>, <code>industries</code>, <code>prefectures</code>, <code>review_moderation_events</code>, <code>scouts</code>, <code>applications</code>, <code>selection_events</code>, <code>placements</code>, <code>page_views</code>）は追記型で更新列を持たない。</p>
+<p>業務システム側のデータベース（OLTP）は BigQuery の <code>src_careervoice</code> データセットに Datastream（変更データキャプチャ, CDC）で複製されている前提。行が更新されるテーブル（<code>members</code>, <code>member_desired_job_categories</code>, <code>companies</code>, <code>agencies</code>, <code>agents</code>, <code>reviews</code>, <code>job_postings</code>, <code>contracts</code>）だけが <code>updated_at</code> を持ち、論理削除 <code>deleted_at</code> を持つのは <code>members</code> だけである。残る9表（<code>job_categories</code>, <code>industries</code>, <code>prefectures</code>, <code>review_moderation_events</code>, <code>scouts</code>, <code>applications</code>, <code>selection_events</code>, <code>placements</code>, <code>page_views</code>）は追記型で更新列を持たない。</p>
 
-<p><code>scouts</code> の <code>opened_at</code> / <code>replied_at</code> / <code>reply_type</code> だけが例外で、更新列を持たないまま後から値が埋まる。<strong>列は以下が全てで、以降の回もこれ以外を持ち出さない。</strong></p>
+<p><code>scouts</code> の <code>opened_at</code> / <code>replied_at</code> / <code>reply_type</code> だけが例外で、更新列を持たないまま後から値が埋まる。<strong>列は以下が全てで、この題材を使う他の資料もこれ以外を持ち出さない。</strong></p>
 
 <h3>会員・企業（マスタ）</h3>
 <div class="table-wrap">
@@ -275,11 +298,11 @@
 
 <p class="cap">図に出していない外部キーが4本ある。<code>members.current_company_id</code> → <code>companies</code>、<code>companies.parent_company_id</code> → <code>companies</code>（自己参照、<code>C003</code> の親が <code>C001</code>）、<code>agents.agency_id</code> → <code>agencies</code>、<code>job_postings.agency_id</code> → <code>agencies</code>（<code>J002</code> が <code>A01</code> 経由であることの根拠）。仲介会社そのもの（<code>agencies</code>）、参照マスタ（<code>job_categories</code>, <code>industries</code>, <code>prefectures</code>）、多値の <code>member_desired_job_categories</code>、審査ログの <code>review_moderation_events</code>、成果報酬の <code>placements</code>、イベントログの <code>page_views</code> も図からは省いた。</p>
 
-<p class="cap">塗ったテーブルも <code>reviews.status</code> や <code>scouts.opened_at</code> のように後から列が更新される。追記と更新が混ざる点が 02回（ファクトの型）と 05回（履歴の持ち方）の論点になる。</p>
+<p class="cap">図で色を塗ったイベントテーブルも、<code>reviews.status</code> や <code>scouts.opened_at</code> のように後から列が更新される。追記と更新が混ざる点は、ファクトをどの型で持つかを扱う DM02『ファクトの3型とファクトレス』と、属性の履歴の持ち方を扱う DM05『履歴を持つ：SCD とスナップショット』の論点になる。</p>
 
 <h3>OLTP としての設計意図</h3>
 
-<p>この形はアプリケーションの都合で正しい。<code>job_categories</code> は <code>parent_code</code> による自己参照で階層を持ち、<code>industries</code> や <code>prefectures</code> はコード表に切り出されている。重複を消して更新を1箇所に閉じる、正規化の教科書どおりの形だ。</p>
+<p>この正規化された形は、アプリケーションの都合では正しい。<code>job_categories</code> は <code>parent_code</code> による自己参照で階層を持ち、<code>industries</code> や <code>prefectures</code> はコード表に切り出されている。重複を消して更新を1箇所に閉じる、正規化の教科書どおりの形だ。</p>
 
 <p>状態は列で持つ。<code>reviews.status</code>、<code>job_postings.status</code>、<code>contracts.status</code>、<code>scouts.opened_at</code>/<code>replied_at</code> はいずれも行を上書きして遷移する。<code>members</code> の削除も <code>deleted_at</code> を立てるだけで、行は消えない。</p>
 
@@ -287,7 +310,7 @@
 
 <div class="aside kimball">
 <strong>Kimball（Manifesto, 1997）</strong>: ER モデリングはトランザクション処理には適切で、そこでは最高のトランザクション性能とデータ整合性が得られる。しかしデータがエンドユーザーに届く前に、理解しやすさと性能の両方のために次元モデルへ変換しなければならない、と主張する。<br>
-Manifesto が次元モデルの強みとして挙げるのは5つ — 予測可能な枠組み、対称性（どのディメンションからでも等しく入れる）、優雅な拡張性（行や列を足すだけで既存クエリを壊さない）、緩やかに変化するディメンションやファクトレスファクトのような<strong>定型の対処法が揃っていること</strong>、そして集約を管理するユーティリティ群。このシリーズが扱うのは4つ目の「定型」の中身で、5つ目の集約は 04回・08回で扱う。
+Manifesto が次元モデルの強みとして挙げるのは5つ — 予測可能な枠組み、対称性（どのディメンションからでも等しく入れる）、優雅な拡張性（行や列を足すだけで既存クエリを壊さない）、緩やかに変化するディメンションやファクトレスファクトのような<strong>定型の対処法が揃っていること</strong>、そして集約を管理するユーティリティ群。このシリーズが扱うのは4つ目の「定型」の中身で、5つ目の集約は DM04『加法性と派生指標』と DM08『コンフォームドとドリルアクロス』で扱う。
 </div>
 
 <h2>4. ビジネスプロセスの棚卸し</h2>
@@ -303,7 +326,7 @@ Manifesto が次元モデルの強みとして挙げるのは5つ — 予測可�
 
 <h3>バスマトリクス（予告）</h3>
 
-<p>行＝ビジネスプロセス、列＝コンフォームドディメンション。この表の読み方と作り方は 01回で扱う。ここでは「これから11回でこの10行を埋めていく」という地図として置く。</p>
+<p>行＝ビジネスプロセス、列＝共通ディメンション（コンフォームドディメンション。複数のファクトから同じ意味で参照される切り口）。この表の読み方と作り方は DM01『粒度を宣言する』で扱う。ここでは「これから11本でこの10行を埋めていく」という地図として置く。</p>
 
 <div class="table-wrap">
 <table>
@@ -323,7 +346,7 @@ Manifesto が次元モデルの強みとして挙げるのは5つ — 予測可�
 </table>
 </div>
 
-<p>10行のうち3行が累積スナップショット、2行が定期スナップショットである点に注意する。§2 に挙げた5つの問いのうち2つが「ファネル」と「リードタイム」で、これはトランザクションファクトだけでは答えられない。型の選び方は 02回。</p>
+<p>10行のうち3行が累積スナップショット、2行が定期スナップショットである点に注意する。§2 に挙げた5つの問いのうち2つが「ファネル」と「リードタイム」で、この2つはトランザクションファクトだけでは答えられない。型の選び方は DM02『ファクトの3型とファクトレス』で扱う。</p>
 
 <div class="aside modern">
 <strong>再解釈（Hightouch, Part 1）</strong>: 現代の構成は raw（Fivetran などが同期したソースそのまま）→ staging（列名の整理・重複排除・JSON 展開・クレンジング、raw と 1:1）→ reporting models（結合してビジネスの問いに答える）の3層で、<strong>raw を直接使ってレポート層を作らない</strong>ことを原則に置く。バスマトリクスはこの3層目の設計図であって、staging の設計図ではない。命名規約もこの層に対応する（<code>stg_careervoice__reviews</code> / <code>int_review_member_link</code> / <code>fct_review</code>）。
@@ -344,7 +367,7 @@ Reis はこの順を飛ばすと、部門ごとに「顧客」の定義が食い
 <tbody>
 <tr><td>概念（CDM）</td><td>この組織は何をしているか</td><td>① ビジネスプロセスを選ぶ</td><td>§4 のプロセス10行、バスマトリクスの行</td></tr>
 <tr><td>論理（LDM）</td><td>1行は何を意味するか / 何で切れるか / 何を測るか</td><td>② 粒度を宣言する<br>③ ディメンションを特定する<br>④ ファクトを特定する</td><td>「1行 = 1スカウトの送信→開封→返信→応募」、<code>dim_*</code> と <code>fct_*</code> の列</td></tr>
-<tr><td>物理（PDM）</td><td>BigQuery でどう置くか</td><td>（4ステップの外側）</td><td><code>partition_by</code> / <code>cluster_by</code>、dbt の materialization、増分戦略、contract</td></tr>
+<tr><td>物理（PDM）</td><td>BigQuery でどう置くか</td><td>（4ステップの外側）</td><td><code>partition_by</code> / <code>cluster_by</code>、dbt のマテリアライズ方式（materialization）、増分戦略、モデル契約（contract）</td></tr>
 </tbody>
 </table>
 </div>
@@ -354,49 +377,49 @@ Reis はこの順を飛ばすと、部門ごとに「顧客」の定義が食い
 粒度宣言は設計に対する拘束力のある契約であり、異なる粒度は同じファクトテーブルに混ぜてはならない。
 </div>
 
-<p>各回がどの段階に属するかを先に置く。物理の回（07, 09）だけを読んでも設計は決まらない。</p>
+<p>各資料がどの段階に属するかを先に置く。物理を扱う DM07・DM09 だけを読んでも設計は決まらない。</p>
 
 <div class="table-wrap">
 <table>
-<thead><tr><th>回</th><th>概念</th><th>論理</th><th>物理</th><th>主な決定物</th></tr></thead>
+<thead><tr><th>資料</th><th>概念</th><th>論理</th><th>物理</th><th>主な決定物</th></tr></thead>
 <tbody>
-<tr><td>00 題材と簡易データモデル</td><td>◎</td><td>—</td><td>—</td><td>プロセス一覧、固定判断</td></tr>
-<tr><td>01 粒度を宣言する</td><td>○</td><td>◎</td><td>—</td><td>粒度宣言文、バスマトリクス</td></tr>
-<tr><td>02 ファクトの3型とファクトレス</td><td>—</td><td>◎</td><td>○</td><td>ファクトの型、マイルストーン列</td></tr>
-<tr><td>03 ディメンションの設計</td><td>—</td><td>◎</td><td>○</td><td>サロゲートキー、<code>-1</code>、ジャンク/ミニ</td></tr>
-<tr><td>04 加法性と派生指標</td><td>—</td><td>◎</td><td>—</td><td>メジャーの持ち方（和と件数）</td></tr>
-<tr><td>05 履歴を持つ</td><td>—</td><td>◎</td><td>○</td><td>SCD 型、as-of join</td></tr>
-<tr><td>06 多対多・不揃い階層・異種ディメンション</td><td>—</td><td>◎</td><td>○</td><td>ブリッジ / ARRAY / supertype</td></tr>
-<tr><td>07 star か One Big Table か</td><td>—</td><td>○</td><td>◎</td><td>配布形式、パーティション/クラスタ</td></tr>
-<tr><td>08 コンフォームドとドリルアクロス</td><td>○</td><td>◎</td><td>—</td><td>共有ディメンション、集約の条件</td></tr>
-<tr><td>09 増分・遅延到着・冪等性</td><td>—</td><td>—</td><td>◎</td><td>増分戦略、ルックバック</td></tr>
-<tr><td>10 レイヤ・命名・契約・テスト・監査</td><td>—</td><td>○</td><td>◎</td><td>層と命名、テスト、contract</td></tr>
+<tr><td>DM00 題材と簡易データモデル</td><td>◎</td><td>—</td><td>—</td><td>プロセス一覧、固定判断</td></tr>
+<tr><td>DM01 粒度を宣言する</td><td>○</td><td>◎</td><td>—</td><td>粒度宣言文、バスマトリクス</td></tr>
+<tr><td>DM02 ファクトの3型とファクトレス</td><td>—</td><td>◎</td><td>○</td><td>ファクトの型、マイルストーン列</td></tr>
+<tr><td>DM03 ディメンションの設計</td><td>—</td><td>◎</td><td>○</td><td>サロゲートキー、<code>-1</code>、ジャンク/ミニ</td></tr>
+<tr><td>DM04 加法性と派生指標</td><td>—</td><td>◎</td><td>—</td><td>メジャーの持ち方（和と件数）</td></tr>
+<tr><td>DM05 履歴を持つ</td><td>—</td><td>◎</td><td>○</td><td>SCD 型、時点結合</td></tr>
+<tr><td>DM06 多対多・不揃い階層・異種ディメンション</td><td>—</td><td>◎</td><td>○</td><td>ブリッジ / ARRAY / 異種ディメンション</td></tr>
+<tr><td>DM07 star か One Big Table か</td><td>—</td><td>○</td><td>◎</td><td>配布形式、パーティション/クラスタ</td></tr>
+<tr><td>DM08 コンフォームドとドリルアクロス</td><td>○</td><td>◎</td><td>—</td><td>共有ディメンション、集約の条件</td></tr>
+<tr><td>DM09 増分・遅延到着・冪等性</td><td>—</td><td>—</td><td>◎</td><td>増分戦略、ルックバック</td></tr>
+<tr><td>DM10 レイヤ・命名・契約・テスト・監査</td><td>—</td><td>○</td><td>◎</td><td>層と命名、テスト、モデル契約</td></tr>
 </tbody>
 </table>
 </div>
 
 <h2>6. 判断基準: このシリーズで固定した設計判断</h2>
 
-<p>回をまたいで守る決定。以降の回はこの表を前提にし、覆すときは理由を明示する。</p>
+<p>以下は11本すべてで守る決定である。以降の資料はこの表を前提にし、覆すときは理由を明示する。</p>
 
 <div class="table-wrap">
 <table>
-<thead><tr><th>論点</th><th>決定</th><th>理由</th><th>扱う回</th></tr></thead>
+<thead><tr><th>論点</th><th>決定</th><th>理由</th><th>扱う資料</th></tr></thead>
 <tbody>
-<tr><td>クチコミの匿名性</td><td><code>fct_review</code> は <code>member_key</code> を<strong>持たない</strong>。会員属性は投稿時点の <code>dim_member_profile_mini</code> 相当を<strong>ジャンク化した <code>dim_review_attributes</code></strong> に落とす。会員×クチコミの結合が要る分析は <code>int_review_member_link</code>（アクセス制限データセット）に隔離</td><td>公開分析からの個人特定リスク（少人数企業では属性で特定できる）</td><td>00, 01, 03</td></tr>
-<tr><td>企業属性の時点</td><td>ファクトには<strong>イベント時点</strong>の <code>company_key</code>（SCD2 版）を持つ。現在値で見たい場合は <code>dim_company</code> の <code>is_current</code> 版へ <code>company_id</code> で再結合</td><td>「投稿当時の規模」と「現在の規模」を両方答えられる</td><td>05</td></tr>
-<tr><td>集約テーブルの平均</td><td><code>avg_*</code> を持たず <code>sum_*</code> + <code>count</code> を持つ</td><td>再集約可能性</td><td>04, 08</td></tr>
-<tr><td>累積スナップショットの裏に原子ファクト</td><td><code>fct_application_pipeline</code> の裏に <code>fct_selection_event</code> を必ず置く</td><td>サマリーだけは危険（DT#77）</td><td>02</td></tr>
-<tr><td>未達マイルストーン</td><td><code>date_key = -1</code>、<code>dim_date</code> に <code>-1</code> 行（<code>full_date</code> = NULL, 表示名 <code>未到達</code>）</td><td>NULL 外部キー禁止（DT#43）</td><td>02, 03</td></tr>
-<tr><td>ディメンションの雪片化</td><td>しない（agency は <code>dim_agent</code> に平坦化、job_category も平坦化）</td><td>BigQuery の結合コストより可読性</td><td>03, 06</td></tr>
-<tr><td>増分の単位</td><td>パーティション単位の <code>insert_overwrite</code>、ルックバック 3 日</td><td>冪等性（Functional DE）</td><td>09</td></tr>
+<tr><td>クチコミの匿名性</td><td><code>fct_review</code> は <code>member_key</code> を<strong>持たない</strong>。会員属性は投稿時点の <code>dim_member_profile_mini</code> 相当を<strong>ジャンク化した <code>dim_review_attributes</code></strong> へ移す。会員×クチコミの結合が要る分析は <code>int_review_member_link</code>（アクセス制限データセット）に隔離</td><td>公開分析からの個人特定リスク（少人数企業では属性で特定できる）</td><td>DM00, DM01, DM03</td></tr>
+<tr><td>企業属性の時点</td><td>ファクトには<strong>イベント時点</strong>の <code>company_key</code>（SCD2 版）を持つ。現在値で見たい場合は <code>dim_company</code> の <code>is_current</code> 版へ <code>company_id</code> で再結合</td><td>「投稿当時の規模」と「現在の規模」を両方答えられる</td><td>DM05</td></tr>
+<tr><td>集約テーブルの平均</td><td><code>avg_*</code> を持たず <code>sum_*</code> + <code>count</code> を持つ</td><td>再集約可能性</td><td>DM04, DM08</td></tr>
+<tr><td>累積スナップショットの裏に原子ファクト</td><td><code>fct_application_pipeline</code> の裏に <code>fct_selection_event</code> を必ず置く</td><td>サマリーだけは危険（DT#77）</td><td>DM02</td></tr>
+<tr><td>未達マイルストーン</td><td><code>date_key = -1</code>、<code>dim_date</code> に <code>-1</code> 行（<code>full_date</code> = NULL, 表示名 <code>未到達</code>）</td><td>NULL 外部キー禁止（DT#43）</td><td>DM02, DM03</td></tr>
+<tr><td>ディメンションの雪片化</td><td>しない（agency は <code>dim_agent</code> に平坦化、job_category も平坦化）</td><td>BigQuery の結合コストより可読性</td><td>DM03, DM06</td></tr>
+<tr><td>増分の単位</td><td>パーティション単位の <code>insert_overwrite</code>、ルックバック 3 日</td><td>冪等性（Functional DE）</td><td>DM09</td></tr>
 </tbody>
 </table>
 </div>
 
-<p>1行目だけが Kimball の原則と正面から衝突する。10 Rules の Rule #1 は「原子の詳細を入れよ」、Rule #5 は「多対多はファクトテーブルで解決し、その外部キーを NULL にしてはならない」と言うが、<code>fct_review</code> から <code>member_key</code> を落とすのは<strong>原子性を意図的に下げる</strong>判断だ。理由は性能でも簡潔さでもなく、少人数企業では「30代・男性・在籍3〜5年・エンジニア」だけで投稿者が特定できてしまう点にある。</p>
+<p>1行目だけが Kimball の原則と正面から衝突する。10 Rules の Rule #1 は「原子の詳細を入れよ」、Rule #5 は「多対多はファクトテーブルで解決し、その外部キーを NULL にしてはならない」と言うが、<code>fct_review</code> から <code>member_key</code> を外すのは<strong>原子性を意図的に下げる</strong>判断だ。理由は性能でも簡潔さでもなく、少人数企業では「30代・男性・在籍3〜5年・エンジニア」だけで投稿者が特定できてしまう点にある。</p>
 
-<p>原子ファクトが要る分析は <code>int_review_member_link</code> に隔離し、公開マートには出さない。この衝突の扱いは 01回と 03回で詰める。</p>
+<p>原子ファクトが要る分析は <code>int_review_member_link</code>（アクセスを制限したデータセットに置く中間テーブル）に隔離し、公開マートには出さない。原子性と匿名性のこの衝突は、DM01『粒度を宣言する』（粒度宣言をどこまで下げるか）と DM03『ディメンションの設計』（属性をジャンクディメンションへ逃がす形）で詰める。</p>
 
 <h2>7. 演習</h2>
 
@@ -418,7 +441,7 @@ Reis はこの順を飛ばすと、部門ごとに「顧客」の定義が食い
 </tbody>
 </table>
 </div>
-<p>落とした候補: 「カスタマーサクセス」（部門名）、「月次経営レポート」（レポート名）、「会員」（プロセスではなくエンティティ＝ディメンション候補）。<code>scouts</code> の insert と update を別プロセスに分けたのは、前者がトランザクション、後者が累積スナップショットになり<strong>粒度も更新頻度も違う</strong>ため（<code>fct_scout</code> と <code>fct_scout_funnel</code>）。</p>
+<p>除外した候補: 「カスタマーサクセス」（部門名）、「月次経営レポート」（レポート名）、「会員」（プロセスではなくエンティティ＝ディメンション候補）。<code>scouts</code> の insert と update を別プロセスに分けたのは、前者がトランザクション、後者が累積スナップショットになり<strong>粒度も更新頻度も違う</strong>ため（<code>fct_scout</code> と <code>fct_scout_funnel</code>）。</p>
 </details>
 
 <h3>(b) <code>reviews.status</code> の遷移を分類する</h3>
@@ -435,7 +458,7 @@ Reis はこの順を飛ばすと、部門ごとに「顧客」の定義が食い
 <tr><td><code>screening</code> → <code>published</code></td><td>ファクト（日付キー + メジャー）</td><td><code>published_date_key</code>, <code>is_published</code>(0/1)</td><td>同上。到達したか否かは 0/1 の加法メジャー</td></tr>
 <tr><td><code>screening</code> → <code>rejected</code></td><td>ファクト（日付キー + メジャー）</td><td><code>rejected_date_key</code>, <code>is_rejected</code></td><td>同上</td></tr>
 <tr><td>遷移の所要時間</td><td>ファクト（メジャー）</td><td><code>hours_to_screening</code>, <code>hours_to_decision</code></td><td>数値の測定値。粒度（1クチコミの審査ライフサイクル）と整合する</td></tr>
-<tr><td>審査ラウンド数</td><td>ファクト（メジャー）</td><td><code>moderation_rounds</code></td><td><code>review_moderation_events</code> のうち<strong>審査担当者が判定を下した遷移の数</strong>を数えた加法メジャー（イベント行数そのものではない）。差し戻し（<code>screening</code> → <code>submitted</code>）も判定なので数える — 正典 §5 の <code>R001</code> に差し戻し1回を固定した（01回）</td></tr>
+<tr><td>審査ラウンド数</td><td>ファクト（メジャー）</td><td><code>moderation_rounds</code></td><td><code>review_moderation_events</code> のうち<strong>審査担当者が判定を下した遷移の数</strong>を数えた加法メジャー（イベント行数そのものではない）。差し戻し（<code>screening</code> → <code>submitted</code>）も判定なので数える — <code>R001</code> は差し戻しの判定と公開の判定を合わせて <code>moderation_rounds</code> = 2 になる</td></tr>
 <tr><td>却下理由 <code>reason_code</code></td><td><strong>ディメンション</strong></td><td><code>dim_moderation_reason</code>（<code>reason_name</code>, <code>severity</code>）</td><td>フィルタ・グループ化に使う記述的な文脈。コードのままファクトに置かない（10 Rules #7）</td></tr>
 <tr><td>投稿時の会員属性<br>(<code>employment_status</code> ほか)</td><td><strong>ディメンション</strong></td><td><code>dim_review_attributes</code>（2×3×5 = 30行）</td><td>低カーディナリティの組合せ。ジャンクディメンションにまとめる</td></tr>
 <tr><td>現在の <code>status</code> そのもの</td><td>どちらでもない</td><td>—</td><td>4つの日付キーと <code>is_published</code> / <code>is_rejected</code> で完全に表現できる。状態列を別に持つと二重管理になる</td></tr>
@@ -443,7 +466,7 @@ Reis はこの順を飛ばすと、部門ごとに「顧客」の定義が食い
 </table>
 </div>
 <p><code>R001</code> は <code>submitted_date_key</code>=20260310, <code>published_date_key</code>=20260312, <code>rejected_date_key</code>=<code>-1</code>, <code>moderation_reason_key</code>=<code>'-1'</code>（<code>dim_moderation_reason</code> の自然キー <code>reason_code</code> は STRING なのでセンチネルも STRING）, <code>is_published</code>=1。<code>R002</code> は <code>rejected_date_key</code> に却下日、<code>published_date_key</code>=<code>-1</code>, <code>moderation_reason_key</code>=<code>defamation</code> の代理キー、<code>is_rejected</code>=1。<strong>未達マイルストーンを NULL ではなく <code>-1</code> にする</strong>のは §6 の固定判断（DT#43）で、<code>dim_date</code> 側に <code>full_date</code> = NULL・表示名「未到達」の行を1本置く。</p>
-<p>判断の分かれ目は「時点か、記述か」の一点。時点を持つものはファクト、フィルタ軸になるものはディメンション。<code>status</code> のような<strong>状態そのものはどちらでもない</strong> — 累積スナップショットでは到達済みマイルストーンの集合が状態を含意する。</p>
+<p>判断の分かれ目は「時点か、記述か」の一点にある。時点を持つものはファクト、フィルタ軸になるものはディメンション。<code>status</code> のような<strong>状態そのものはどちらでもない</strong> — 累積スナップショットでは到達済みマイルストーンの集合が状態を含意する。</p>
 </details>
 
 <h2>8. 参考: 手元の基盤ではどうか</h2>
@@ -451,7 +474,7 @@ Reis はこの順を飛ばすと、部門ごとに「顧客」の定義が食い
 <div class="aside">
 <code>dbt_logs_analysis</code> はマートを<strong>データソース起点</strong>で切っている。<code>mart_url_performance</code> はプロセス名ではなくソーステーブル（アクセスログ）に対する集計軸の名前で、DT#3 の基準では行が「プロセス」ではなく「レポートの見出し」になっている状態にあたる。<br>
 <code>news_pipeline</code> は逆で、収集（<code>raw_articles</code>）・要約と採点（<code>summaries</code>）・通知（<code>notified_at</code>）・お気に入り（<code>favorites</code>）がそれぞれ別プロセスに対応する。<strong>アプリの処理境界がプロセス境界と一致していると、マートの行も自然に揃う。</strong><br>
-チュートリアルの種: アクセスログを「ページ表示」という1プロセスとして粒度宣言し直すと、01回の粒度テストと 08回のドリルアクロスがそのまま試せる。
+チュートリアルの種: アクセスログを「ページ表示」という1プロセスとして粒度宣言し直すと、DM01『粒度を宣言する』の粒度テストと、DM08『コンフォームドとドリルアクロス』の横断集計（ドリルアクロス）がそのまま試せる。
 </div>
 
 <h2>参照文献</h2>
