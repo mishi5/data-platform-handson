@@ -69,7 +69,7 @@
 </table>
 </div>
 
-<p>この資料で使う主なテーブルは次のとおり。<code>fct_*</code> がファクト（数値を持つ明細）、<code>dim_*</code> がディメンション（切り口となる属性）、<code>agg_*</code> がファクトを事前に集計した集約表、<code>br_*</code> が多対多をつなぐブリッジ表を表す。</p>
+<p>この資料で使う主なテーブルは次のとおり。<code>fct_*</code> がファクト（数値を持つ明細）、<code>dim_*</code> がディメンション（切り口となる属性）、<code>agg_*</code> がファクトを事前に集計した集約表、<code>br_*</code> が多対多をつなぐブリッジテーブルを表す。</p>
 
 <div class="table-wrap">
 <table>
@@ -86,8 +86,8 @@
 <tr><td><code>dim_company</code></td><td>企業。SCD2（属性が変わるたびに新しい行を足し、過去の版も残す方式）なので、1企業が複数行になりうる。現行の行は <code>is_current</code> が真</td></tr>
 <tr><td><code>dim_date</code></td><td>1日。<code>year</code>・<code>month</code>・<code>iso_week</code> などの日付ラベルを持つ</td></tr>
 <tr><td><code>dim_scout_sender</code></td><td>スカウトの送信主体（企業またはエージェント担当者）。こちらも SCD2</td></tr>
-<tr><td><code>br_company_hierarchy</code></td><td>企業グループの祖先と子孫の組。親会社への足し上げに使うブリッジ表</td></tr>
-<tr><td><code>br_member_desired_job_category</code></td><td>会員と希望職種（最大3件）の組。多値属性のブリッジ表</td></tr>
+<tr><td><code>br_company_hierarchy</code></td><td>企業グループの祖先と子孫の組。親会社への足し上げに使うブリッジテーブル</td></tr>
+<tr><td><code>br_member_desired_job_category</code></td><td>会員と希望職種（最大3件）の組。多値属性のブリッジテーブル</td></tr>
 </table>
 </div>
 </div>
@@ -151,7 +151,7 @@
 
 <h3>(a) 平均の平均 — <code>agg_company_rating_daily</code> に <code>avg_overall_score</code> を持つ</h3>
 
-<p><code>C002</code>（ネクスト技研）の3日分。日次の集約表が件数と一緒に平均も持っていて、月次レポートがその平均をさらに <code>AVG</code> する。</p>
+<p><code>C002</code>（ネクスト技研）の3日分を例にする。日次の集約表が件数と一緒に平均も持っていて、月次レポートがその平均をさらに <code>AVG</code> する。</p>
 
 <div class="table-wrap">
 <table>
@@ -188,7 +188,7 @@
 
 <p>3列のうち2列は足してよい。<code>SUM(scouts_sent) = 160</code> は「1〜3月に送った総数」、<code>SUM(scout_quota) = 600</code> は「1〜3月に付与された総枠」で、どちらも加法な<strong>フロー</strong>の量。</p>
 
-<p>誤りなのは <code>SUM(scouts_remaining) = 440</code> だけである。この 440 は<strong>存在しない枠</strong>で、上限まで積んでも <code>200 × 3 = 600</code> にしかならない量を「残枠」として報告している。実在するのは 3月末の 120 だけ。</p>
+<p>誤りなのは <code>SUM(scouts_remaining) = 440</code> だけである。この 440 は<strong>存在しない枠</strong>で、上限まで積んでも <code>200 × 3 = 600</code> にしかならない量を「残枠」として報告している。実在するのは 3月末の 120 だけである。</p>
 
 <p>企業軸では足せる。<code>C001</code> と <code>C003</code> の同月の残枠を足した「グループ全体の残枠」は意味がある。<strong>足せない軸が時間だけ</strong>、というのが半加法の定義そのもの。</p>
 
@@ -548,9 +548,9 @@ WHERE a.rating_date BETWEEN DATE '2026-03-01' AND DATE '2026-03-31'
 GROUP BY d.year, d.month, c.company_id
 </code></pre>
 
-<p><code>C002</code> の3日分に対して <code>33.5 / 12 = 2.79</code>。<code>a.company_key</code> でグループ化しないのは、<code>C002</code> が 2026-05-01 に <code>employee_size_band</code> を変えて2版になるため。SCD2 版で束ねると年内の集計がその境で2行に割れる（<strong>足し上げの単位は企業という実体</strong>）。</p>
+<p><code>C002</code> の3日分に対しては <code>33.5 / 12 = 2.79</code> が返る。<code>a.company_key</code> でグループ化しないのは、<code>C002</code> が 2026-05-01 に <code>employee_size_band</code> を変えて2版になるためである。SCD2 版で束ねると年内の集計がその境で2行に割れる（<strong>足し上げの単位は企業という実体</strong>）。</p>
 
-<p><code>SAFE_DIVIDE</code> は素の集計では出番が無い（この表は 0 件の日に行を立てないので <code>review_count &gt;= 1</code> が保証される）。有効になるのは後段で <code>dim_date</code> 側から 0 件月を <code>LEFT JOIN</code> で埋めたときで、分母 0 をエラーではなく <code>NULL</code> にして通す保険。</p>
+<p><code>SAFE_DIVIDE</code> は素の集計では出番が無い（この表は 0 件の日に行を立てないので <code>review_count &gt;= 1</code> が保証される）。有効になるのは後段で <code>dim_date</code> 側から 0 件月を <code>LEFT JOIN</code> で埋めたときで、分母 0 をエラーではなく <code>NULL</code> にして通す保険である。</p>
 
 <h3>企業グループへ再集約する（<code>br_company_hierarchy</code> 経由）</h3>
 
@@ -571,7 +571,7 @@ WHERE a.rating_date BETWEEN DATE '2026-01-01' AND DATE '2026-12-31'
 GROUP BY group_company_id, d.year
 </code></pre>
 
-<p><code>C001</code>（アオゾラ商事）を <code>ancestor</code> とする行には、自分自身（<code>depth = 0</code>）と子会社 <code>C003</code>（ヒノデ物流、<code>depth = 1</code>）が入る。<strong>集計式（<code>SUM</code> と <code>SAFE_DIVIDE</code>）が月次のときと1文字も変わらない</strong>のが、和と件数で持つことの実利。</p>
+<p><code>C001</code>（アオゾラ商事）を <code>ancestor</code> とする行には、自分自身（<code>depth = 0</code>）と子会社 <code>C003</code>（ヒノデ物流、<code>depth = 1</code>）が入る。<strong>集計式（<code>SUM</code> と <code>SAFE_DIVIDE</code>）が月次のときと1文字も変わらない</strong>のが、和と件数で持つことの実利である。</p>
 
 <p>ただしキーの扱いには前提が要る。<code>agg_company_rating_daily.company_key</code> は投稿時点の SCD2 版なので、<code>br_company_hierarchy</code> の子孫側は <strong><code>dim_company</code> の全 SCD2 版に展開して作る</strong>（<code>br_member_desired_job_category</code> と同じ理由）。現行版のキーしか持たないブリッジだと、<code>C002</code> のように年内に属性が変わった企業の投稿が、結合で静かに除外される。</p>
 
@@ -780,7 +780,7 @@ GROUP BY company_key, year, month
 
 <details>
 <summary>解答例</summary>
-<p>分子分母は<strong>同じ行から出す</strong>のが原則。<code>fct_scout_funnel</code>（1行 = 1スカウトの送信→開封→返信→応募）は <code>scout_sender_key</code> を FK に持ち、<code>is_replied</code> を 0/1 で持つので、分母 = 行数、分子 = <code>SUM(is_replied)</code> で足りる。</p>
+<p>分子分母は<strong>同じ行から出す</strong>のが原則である。<code>fct_scout_funnel</code>（1行 = 1スカウトの送信→開封→返信→応募）は <code>scout_sender_key</code> を外部キーに持ち、<code>is_replied</code> を 0/1 で持つので、分母 = 行数、分子 = <code>SUM(is_replied)</code> で足りる。</p>
 
 <p>集約表を作るなら粒度は <code>sent_date_key × scout_sender_key</code>、列は「送信件数」と「返信件数」の2つだけにする。<strong>率の列は作らない。</strong></p>
 <pre><code>SELECT
