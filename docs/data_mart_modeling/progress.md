@@ -133,3 +133,4 @@ progress.md 内の `Ruling:` 行を参照。主要なもの: dim_agency 追加 /
 - 2026-09-11 DM00〜07 の書き直し版を上書き公開（URL 不変、Slack なし）。図中ラベルの『畳まれる/as-of/効く』を修正、検査スクリプト canon/check_readability.py を追加。DM08〜10 は完了次第公開
 - DM09 書き直し完了・上書き公開
 - DM08 書き直し完了・上書き公開
+- DM10 書き直し完了・上書き公開。全11本の書き直し版が family-share に反映済み（check_readability 全本 OK、01 の 2 件は Kimball 原文引用＋和訳付き）
