@@ -129,7 +129,7 @@
 <tr><td><code>fct_page_view</code></td><td>トランザクション（イベント型ファクトレス）</td><td>1ページ表示</td><td>しない</td><td>1</td><td>閲覧数、閲覧されなかったクチコミ</td></tr>
 <tr><td><code>fct_job_posting_daily</code></td><td>定期スナップショット</td><td>1求人 × 掲載中の1日</td><td>しない</td><td>1</td><td>任意の日の掲載中件数、掲載日数の分布</td></tr>
 <tr><td><code>fct_scout</code></td><td>トランザクション</td><td>1送信</td><td>しない</td><td>1</td><td>日別・送信主体別の送信数</td></tr>
-<tr><td><code>fct_scout_funnel</code></td><td>累積スナップショット</td><td>1スカウトの送信→応募</td><td><strong>する</strong></td><td>4</td><td>開封率・返信率、開封までの時間</td></tr>
+<tr><td><code>fct_scout_funnel</code></td><td>累積スナップショット</td><td>1スカウトの送信→応募（エージェントスカウトで応募が複数あるときは最初の応募日を採る）</td><td><strong>する</strong></td><td>4</td><td>開封率・返信率、開封までの時間</td></tr>
 <tr><td><code>fct_selection_event</code></td><td>トランザクション（原子）</td><td>1ステージ遷移</td><td>しない</td><td>1</td><td>いつどのステージが何件起きたか</td></tr>
 <tr><td><code>fct_application_pipeline</code></td><td>累積スナップショット</td><td>1応募のパイプライン</td><td><strong>する</strong></td><td>8</td><td>リードタイム、ステージ別歩留まり</td></tr>
 <tr><td><code>fct_contract_monthly</code></td><td>定期スナップショット</td><td>1契約 × 1月</td><td>しない</td><td>1</td><td>枠消化率、MRR、使わなかった企業</td></tr>
