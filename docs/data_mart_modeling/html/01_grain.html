@@ -36,6 +36,10 @@
   svg { max-width:100%; height:auto; display:block; margin:20px 0; }
   ul, ol { padding-left:1.3em; }
   .ref li { font-size:.88rem; }
+  td { overflow-wrap:anywhere; }
+  th { white-space:nowrap; }
+  .bus-matrix td:nth-child(3) { min-width:7em; }
+  .bus-matrix td:nth-child(4) { min-width:14em; }
 </style>
 </head>
 <body>
@@ -233,7 +237,7 @@ Grain（2003）: <em>“Declaring the grain means saying exactly what a fact tab
 <p>列については <em>“a column in the matrix is a map of where the dimension is required”</em>（The Matrix, 1999）。同じ列に ✓ が2つ以上あるディメンションは<strong>コンフォームドでなければならない</strong>（完全に同一か、一方が他方の完全な部分集合）。このマトリクスがこの題材の設計の基準表になる。以降の資料では各セル・各列を1本ずつ掘り下げるが、行と列の対応そのものはここで決まる。</p>
 
 <div class="table-wrap">
-<table>
+<table class="bus-matrix">
 <thead><tr>
 <th>プロセス</th><th>ファクト</th><th>型</th><th>粒度宣言</th>
 <th>date</th><th>member</th><th>company</th><th>job_posting</th><th>agent</th><th>job_category</th><th>channel/junk</th>
@@ -667,7 +671,7 @@ GROUP BY view_date_key, company_key
 <p><strong>粒度宣言</strong>: 「1行 = 1会員による1クチコミへの1『参考になった』投票」。型は<strong>トランザクション（ファクトレス）</strong>。メジャーは <code>vote_count</code> = 1 のみ、退化ディメンションに <code>review_id</code>。</p>
 
 <div class="table-wrap">
-<table>
+<table class="bus-matrix">
 <thead><tr><th>プロセス</th><th>ファクト</th><th>型</th><th>粒度宣言</th><th>date</th><th>member</th><th>company</th><th>job_posting</th><th>agent</th><th>job_category</th><th>channel/junk</th></tr></thead>
 <tbody>
 <tr><td>クチコミ投票</td><td><code>fct_review_vote</code>（題材への追加提案）</td><td>トランザクション（ファクトレス）</td><td>1行 = 1会員による1クチコミへの1投票</td><td>投票日</td><td>✓</td><td>✓</td><td>✗</td><td>✗</td><td>✓</td><td><code>dim_page_context</code></td></tr>

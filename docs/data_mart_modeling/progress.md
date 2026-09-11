@@ -135,3 +135,4 @@ progress.md 内の `Ruling:` 行を参照。主要なもの: dim_agency 追加 /
 - DM08 書き直し完了・上書き公開
 - DM10 書き直し完了・上書き公開。全11本の書き直し版が family-share に反映済み（check_readability 全本 OK、01 の 2 件は Kimball 原文引用＋和訳付き）
 - 2026-09-12 DM00 のソースモデル表に『説明』列を追加（17 テーブル）、正典 §2 にも追記。上書き公開
+- 2026-09-12 表の列幅調整: 全本に td{overflow-wrap:anywhere} th{nowrap}、DM00 ソースモデル表は説明列 min-width 15em・値リストの / に空白、バスマトリクスは型/粒度宣言列に min-width（横スクロールは .table-wrap 内）。全11本を上書き公開

@@ -37,6 +37,14 @@
   ul, ol { padding-left:1.3em; }
   .ref li { font-size:.88rem; }
   .cap { color:var(--muted); font-size:.85rem; margin:-8px 0 20px; }
+  .src-model td:nth-child(1) { white-space:nowrap; }
+  .src-model td:nth-child(2) { min-width:15em; }
+  .src-model td:nth-child(3) code { white-space:nowrap; }
+  .src-model td:nth-child(4) { overflow-wrap:break-word; }
+  td { overflow-wrap:anywhere; }
+  th { white-space:nowrap; }
+  .bus-matrix td:nth-child(3) { min-width:7em; }
+  .bus-matrix td:nth-child(4) { min-width:14em; }
 </style>
 </head>
 <body>
@@ -122,13 +130,13 @@
 
 <h3>会員・企業（マスタ）</h3>
 <div class="table-wrap">
-<table>
+<table class="src-model">
 <thead><tr><th>テーブル</th><th>説明</th><th>主キー</th><th>列</th></tr></thead>
 <tbody>
-<tr><td><code>members</code></td><td>会員（求職者）。登録者1人が1行。現職・年収帯・転職意欲は変わるたびに上書きされる</td><td><code>member_id</code></td><td><code>email_hash</code>, <code>birth_year</code>, <code>gender</code>, <code>prefecture_code</code>, <code>current_company_id</code>(nullable), <code>current_job_category_code</code>, <code>annual_income_band</code>(<code>lt400</code>/<code>400_600</code>/<code>600_800</code>/<code>800_1000</code>/<code>ge1000</code>), <code>job_change_intent</code>(<code>active</code>/<code>passive</code>/<code>none</code>), <code>registered_at</code>, <code>updated_at</code>, <code>deleted_at</code></td></tr>
+<tr><td><code>members</code></td><td>会員（求職者）。登録者1人が1行。現職・年収帯・転職意欲は変わるたびに上書きされる</td><td><code>member_id</code></td><td><code>email_hash</code>, <code>birth_year</code>, <code>gender</code>, <code>prefecture_code</code>, <code>current_company_id</code>(nullable), <code>current_job_category_code</code>, <code>annual_income_band</code>(<code>lt400</code> / <code>400_600</code> / <code>600_800</code> / <code>800_1000</code> / <code>ge1000</code>), <code>job_change_intent</code>(<code>active</code> / <code>passive</code> / <code>none</code>), <code>registered_at</code>, <code>updated_at</code>, <code>deleted_at</code></td></tr>
 <tr><td><code>member_desired_job_categories</code></td><td>会員が希望する職種（最大3件、優先順位つき）。会員1人に複数行</td><td>(<code>member_id</code>,<code>job_category_code</code>)</td><td><code>priority</code>(1..3), <code>updated_at</code></td></tr>
-<tr><td><code>companies</code></td><td>企業。クチコミの対象であり、求人掲載・直接スカウトの主体でもある。親会社があれば自己参照で持つ</td><td><code>company_id</code></td><td><code>name</code>, <code>corporate_number</code>(法人番号13桁), <code>industry_code</code>, <code>employee_size_band</code>(<code>lt50</code>/<code>50_299</code>/<code>300_999</code>/<code>ge1000</code>), <code>listing_status</code>(<code>listed</code>/<code>unlisted</code>), <code>hq_prefecture_code</code>, <code>parent_company_id</code>(nullable, 自己参照), <code>founded_year</code>, <code>updated_at</code></td></tr>
-<tr><td><code>agencies</code></td><td>転職エージェント会社。契約ランク（tier）で成果報酬の条件が変わる</td><td><code>agency_id</code></td><td><code>name</code>, <code>tier</code>(<code>gold</code>/<code>silver</code>/<code>standard</code>), <code>contract_start_date</code>, <code>updated_at</code></td></tr>
+<tr><td><code>companies</code></td><td>企業。クチコミの対象であり、求人掲載・直接スカウトの主体でもある。親会社があれば自己参照で持つ</td><td><code>company_id</code></td><td><code>name</code>, <code>corporate_number</code>(法人番号13桁), <code>industry_code</code>, <code>employee_size_band</code>(<code>lt50</code> / <code>50_299</code> / <code>300_999</code> / <code>ge1000</code>), <code>listing_status</code>(<code>listed</code> / <code>unlisted</code>), <code>hq_prefecture_code</code>, <code>parent_company_id</code>(nullable, 自己参照), <code>founded_year</code>, <code>updated_at</code></td></tr>
+<tr><td><code>agencies</code></td><td>転職エージェント会社。契約ランク（tier）で成果報酬の条件が変わる</td><td><code>agency_id</code></td><td><code>name</code>, <code>tier</code>(<code>gold</code> / <code>silver</code> / <code>standard</code>), <code>contract_start_date</code>, <code>updated_at</code></td></tr>
 <tr><td><code>agents</code></td><td>エージェント会社に所属する担当者。所属先の移籍・退職を持つ</td><td><code>agent_id</code></td><td><code>agency_id</code>, <code>name</code>, <code>joined_at</code>, <code>left_at</code>(nullable), <code>updated_at</code></td></tr>
 <tr><td><code>job_categories</code></td><td>職種の分類マスタ。親子関係で最大3階層だが、2階層で終わる枝もある</td><td><code>job_category_code</code></td><td><code>name</code>, <code>parent_code</code>(nullable), <code>level</code>(1..3) — <strong>不揃い階層</strong>（level 2 で終わる枝がある）</td></tr>
 <tr><td><code>industries</code></td><td>業種マスタ。企業の分類に使う</td><td><code>industry_code</code></td><td><code>name</code>, <code>sector_code</code></td></tr>
@@ -139,24 +147,24 @@
 
 <h3>クチコミ</h3>
 <div class="table-wrap">
-<table>
+<table class="src-model">
 <thead><tr><th>テーブル</th><th>説明</th><th>主キー</th><th>列</th></tr></thead>
 <tbody>
-<tr><td><code>reviews</code></td><td>クチコミ本体。会員が在籍／退職した企業を8軸で採点し本文を書く。審査の状態（status）を1列で持つ</td><td><code>review_id</code></td><td><code>company_id</code>, <code>member_id</code>, <code>employment_status</code>(<code>current</code>/<code>former</code>), <code>employment_type</code>(<code>fulltime</code>/<code>contract</code>/<code>parttime</code>), <code>job_category_code</code>, <code>years_of_service_band</code>(<code>lt1</code>/<code>1_3</code>/<code>3_5</code>/<code>5_10</code>/<code>ge10</code>), 8軸スコア(各1.0〜5.0, 0.5刻み) <code>score_compensation</code>, <code>score_morale</code>, <code>score_openness</code>, <code>score_respect</code>, <code>score_growth_20s</code>, <code>score_long_term_dev</code>, <code>score_compliance</code>, <code>score_eval_fairness</code>, <code>overall_score</code>(8軸平均ではなく別入力), <code>title</code>, <code>body_text</code>, <code>submitted_at</code>, <code>status</code>(<code>submitted</code>/<code>screening</code>/<code>published</code>/<code>rejected</code>), <code>published_at</code>(nullable), <code>updated_at</code></td></tr>
-<tr><td><code>review_moderation_events</code></td><td>クチコミ審査の状態遷移ログ。投稿→一次審査→公開／却下の各遷移が1行</td><td><code>event_id</code></td><td><code>review_id</code>, <code>from_status</code>, <code>to_status</code>, <code>moderator_id</code>, <code>reason_code</code>(nullable: <code>defamation</code>/<code>pii</code>/<code>duplicate</code>/<code>low_quality</code>), <code>occurred_at</code></td></tr>
+<tr><td><code>reviews</code></td><td>クチコミ本体。会員が在籍／退職した企業を8軸で採点し本文を書く。審査の状態（status）を1列で持つ</td><td><code>review_id</code></td><td><code>company_id</code>, <code>member_id</code>, <code>employment_status</code>(<code>current</code> / <code>former</code>), <code>employment_type</code>(<code>fulltime</code> / <code>contract</code> / <code>parttime</code>), <code>job_category_code</code>, <code>years_of_service_band</code>(<code>lt1</code> / <code>1_3</code> / <code>3_5</code> / <code>5_10</code> / <code>ge10</code>), 8軸スコア(各1.0〜5.0, 0.5刻み) <code>score_compensation</code>, <code>score_morale</code>, <code>score_openness</code>, <code>score_respect</code>, <code>score_growth_20s</code>, <code>score_long_term_dev</code>, <code>score_compliance</code>, <code>score_eval_fairness</code>, <code>overall_score</code>(8軸平均ではなく別入力), <code>title</code>, <code>body_text</code>, <code>submitted_at</code>, <code>status</code>(<code>submitted</code> / <code>screening</code> / <code>published</code> / <code>rejected</code>), <code>published_at</code>(nullable), <code>updated_at</code></td></tr>
+<tr><td><code>review_moderation_events</code></td><td>クチコミ審査の状態遷移ログ。投稿→一次審査→公開／却下の各遷移が1行</td><td><code>event_id</code></td><td><code>review_id</code>, <code>from_status</code>, <code>to_status</code>, <code>moderator_id</code>, <code>reason_code</code>(nullable: <code>defamation</code> / <code>pii</code> / <code>duplicate</code> / <code>low_quality</code>), <code>occurred_at</code></td></tr>
 </tbody>
 </table>
 </div>
 
 <h3>求人・スカウト・応募</h3>
 <div class="table-wrap">
-<table>
+<table class="src-model">
 <thead><tr><th>テーブル</th><th>説明</th><th>主キー</th><th>列</th></tr></thead>
 <tbody>
-<tr><td><code>job_postings</code></td><td>求人。企業が直接掲載するものと、エージェント経由（agency_id あり）のものがある</td><td><code>job_posting_id</code></td><td><code>company_id</code>, <code>agency_id</code>(nullable=エージェント経由求人), <code>job_category_code</code>, <code>title</code>, <code>salary_min</code>, <code>salary_max</code>, <code>prefecture_code</code>, <code>employment_type</code>, <code>posted_at</code>, <code>closed_at</code>(nullable), <code>status</code>(<code>open</code>/<code>closed</code>), <code>updated_at</code></td></tr>
-<tr><td><code>scouts</code></td><td>会員へ送られたスカウト。送信主体は企業（採用担当）またはエージェント担当者。開封・返信の日時を同じ行に持つ</td><td><code>scout_id</code></td><td><code>member_id</code>, <code>job_posting_id</code>(nullable), <code>sender_type</code>(<code>company</code>/<code>agent</code>), <code>sender_company_id</code>(nullable), <code>sender_agent_id</code>(nullable), <code>template_id</code>, <code>sent_at</code>, <code>opened_at</code>(nullable), <code>replied_at</code>(nullable), <code>reply_type</code>(nullable: <code>interested</code>/<code>declined</code>)</td></tr>
-<tr><td><code>applications</code></td><td>応募。検索から直接応募したものと、スカウトへの返信から応募に進んだもの（scout_id あり）を区別する</td><td><code>application_id</code></td><td><code>member_id</code>, <code>job_posting_id</code>, <code>scout_id</code>(nullable), <code>source_channel</code>(<code>search</code>/<code>scout_company</code>/<code>scout_agent</code>/<code>agent_referral</code>), <code>applied_at</code></td></tr>
-<tr><td><code>selection_events</code></td><td>選考の進行ログ。書類→一次面接→最終面接→内定→承諾→入社、または不採用・辞退の各ステージ到達が1行</td><td><code>event_id</code></td><td><code>application_id</code>, <code>stage</code>(<code>document</code>/<code>first_interview</code>/<code>final_interview</code>/<code>offer</code>/<code>accepted</code>/<code>hired</code>/<code>rejected</code>/<code>withdrawn</code>), <code>occurred_at</code>, <code>note</code></td></tr>
+<tr><td><code>job_postings</code></td><td>求人。企業が直接掲載するものと、エージェント経由（agency_id あり）のものがある</td><td><code>job_posting_id</code></td><td><code>company_id</code>, <code>agency_id</code>(nullable=エージェント経由求人), <code>job_category_code</code>, <code>title</code>, <code>salary_min</code>, <code>salary_max</code>, <code>prefecture_code</code>, <code>employment_type</code>, <code>posted_at</code>, <code>closed_at</code>(nullable), <code>status</code>(<code>open</code> / <code>closed</code>), <code>updated_at</code></td></tr>
+<tr><td><code>scouts</code></td><td>会員へ送られたスカウト。送信主体は企業（採用担当）またはエージェント担当者。開封・返信の日時を同じ行に持つ</td><td><code>scout_id</code></td><td><code>member_id</code>, <code>job_posting_id</code>(nullable), <code>sender_type</code>(<code>company</code> / <code>agent</code>), <code>sender_company_id</code>(nullable), <code>sender_agent_id</code>(nullable), <code>template_id</code>, <code>sent_at</code>, <code>opened_at</code>(nullable), <code>replied_at</code>(nullable), <code>reply_type</code>(nullable: <code>interested</code> / <code>declined</code>)</td></tr>
+<tr><td><code>applications</code></td><td>応募。検索から直接応募したものと、スカウトへの返信から応募に進んだもの（scout_id あり）を区別する</td><td><code>application_id</code></td><td><code>member_id</code>, <code>job_posting_id</code>, <code>scout_id</code>(nullable), <code>source_channel</code>(<code>search</code> / <code>scout_company</code> / <code>scout_agent</code> / <code>agent_referral</code>), <code>applied_at</code></td></tr>
+<tr><td><code>selection_events</code></td><td>選考の進行ログ。書類→一次面接→最終面接→内定→承諾→入社、または不採用・辞退の各ステージ到達が1行</td><td><code>event_id</code></td><td><code>application_id</code>, <code>stage</code>(<code>document</code> / <code>first_interview</code> / <code>final_interview</code> / <code>offer</code> / <code>accepted</code> / <code>hired</code> / <code>rejected</code> / <code>withdrawn</code>), <code>occurred_at</code>, <code>note</code></td></tr>
 <tr><td><code>placements</code></td><td>エージェント経由で入社が決まった案件。年収と料率から成果報酬額を持つ</td><td><code>placement_id</code></td><td><code>application_id</code>, <code>agency_id</code>, <code>hired_at</code>, <code>annual_income</code>, <code>fee_rate</code>, <code>fee_amount</code></td></tr>
 </tbody>
 </table>
@@ -164,11 +172,11 @@
 
 <h3>契約・閲覧</h3>
 <div class="table-wrap">
-<table>
+<table class="src-model">
 <thead><tr><th>テーブル</th><th>説明</th><th>主キー</th><th>列</th></tr></thead>
 <tbody>
-<tr><td><code>contracts</code></td><td>企業との契約。掲載プランと月次スカウト枠、月額を持つ</td><td><code>contract_id</code></td><td><code>company_id</code>, <code>plan_code</code>(<code>basic</code>/<code>standard</code>/<code>premium</code>), <code>scout_quota_monthly</code>, <code>monthly_fee</code>, <code>start_date</code>, <code>end_date</code>(nullable), <code>status</code>, <code>updated_at</code></td></tr>
-<tr><td><code>page_views</code></td><td>閲覧ログ。企業ページ・クチコミ・求人の表示1回が1行。未ログイン閲覧は member_id が空</td><td><code>event_id</code></td><td><code>member_id</code>(nullable=未ログイン), <code>session_id</code>, <code>page_type</code>(<code>company_top</code>/<code>company_review</code>/<code>job_posting</code>), <code>company_id</code>(nullable), <code>job_posting_id</code>(nullable), <code>review_id</code>(nullable), <code>device</code>(<code>ios</code>/<code>android</code>/<code>web</code>), <code>referrer_type</code>(<code>organic</code>/<code>paid</code>/<code>direct</code>/<code>email</code>), <code>is_unlocked</code>(閲覧権限あり), <code>viewed_at</code></td></tr>
+<tr><td><code>contracts</code></td><td>企業との契約。掲載プランと月次スカウト枠、月額を持つ</td><td><code>contract_id</code></td><td><code>company_id</code>, <code>plan_code</code>(<code>basic</code> / <code>standard</code> / <code>premium</code>), <code>scout_quota_monthly</code>, <code>monthly_fee</code>, <code>start_date</code>, <code>end_date</code>(nullable), <code>status</code>, <code>updated_at</code></td></tr>
+<tr><td><code>page_views</code></td><td>閲覧ログ。企業ページ・クチコミ・求人の表示1回が1行。未ログイン閲覧は member_id が空</td><td><code>event_id</code></td><td><code>member_id</code>(nullable=未ログイン), <code>session_id</code>, <code>page_type</code>(<code>company_top</code> / <code>company_review</code> / <code>job_posting</code>), <code>company_id</code>(nullable), <code>job_posting_id</code>(nullable), <code>review_id</code>(nullable), <code>device</code>(<code>ios</code> / <code>android</code> / <code>web</code>), <code>referrer_type</code>(<code>organic</code> / <code>paid</code> / <code>direct</code> / <code>email</code>), <code>is_unlocked</code>(閲覧権限あり), <code>viewed_at</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -347,7 +355,7 @@ Manifesto がディメンショナルモデルの強みとして挙げるのは5
 <p>行＝ビジネスプロセス、列＝コンフォームドディメンション（複数のファクトで共有する同一定義のディメンション）。この表の読み方と作り方は DM01『粒度を宣言する』で扱う。ここでは「これから11本でこの10行を埋めていく」という地図として置く。</p>
 
 <div class="table-wrap">
-<table>
+<table class="bus-matrix">
 <thead><tr><th>プロセス</th><th>ファクト</th><th>型</th><th>粒度宣言</th><th>date</th><th>member</th><th>company</th><th>job_posting</th><th>agent</th><th>job_category</th><th>channel/junk</th></tr></thead>
 <tbody>
 <tr><td>クチコミ投稿</td><td><code>fct_review</code></td><td>トランザクション</td><td>1行 = 投稿された1クチコミ</td><td>投稿日</td><td>✗（§6参照）</td><td>✓</td><td></td><td></td><td>✓</td><td><code>dim_review_attributes</code></td></tr>
