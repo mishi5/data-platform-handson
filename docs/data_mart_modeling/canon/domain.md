@@ -29,40 +29,40 @@ BigQuery には Datastream（CDC）で `src_careervoice` データセットに�
 
 ### 会員・企業（マスタ）
 
-| テーブル | 主キー | 列 |
-|---|---|---|
-| `members` | `member_id` | `email_hash`, `birth_year`, `gender`, `prefecture_code`, `current_company_id`(nullable), `current_job_category_code`, `annual_income_band`(`lt400`/`400_600`/`600_800`/`800_1000`/`ge1000`), `job_change_intent`(`active`/`passive`/`none`), `registered_at`, `updated_at`, `deleted_at` |
-| `member_desired_job_categories` | (`member_id`,`job_category_code`) | `priority`(1..3), `updated_at` |
-| `companies` | `company_id` | `name`, `corporate_number`(法人番号13桁), `industry_code`, `employee_size_band`(`lt50`/`50_299`/`300_999`/`ge1000`), `listing_status`(`listed`/`unlisted`), `hq_prefecture_code`, `parent_company_id`(nullable, 自己参照), `founded_year`, `updated_at` |
-| `agencies` | `agency_id` | `name`, `tier`(`gold`/`silver`/`standard`), `contract_start_date`, `updated_at` |
-| `agents` | `agent_id` | `agency_id`, `name`, `joined_at`, `left_at`(nullable), `updated_at` |
-| `job_categories` | `job_category_code` | `name`, `parent_code`(nullable), `level`(1..3) — **不揃い階層**（level 2 で終わる枝がある） |
-| `industries` | `industry_code` | `name`, `sector_code` |
-| `prefectures` | `prefecture_code` | `name`, `region` |
+| テーブル | 説明 | 主キー | 列 |
+|---|---|---|---|
+| `members` | 会員（求職者）。登録者1人が1行 | `member_id` | `email_hash`, `birth_year`, `gender`, `prefecture_code`, `current_company_id`(nullable), `current_job_category_code`, `annual_income_band`(`lt400`/`400_600`/`600_800`/`800_1000`/`ge1000`), `job_change_intent`(`active`/`passive`/`none`), `registered_at`, `updated_at`, `deleted_at` |
+| `member_desired_job_categories` | 会員の希望職種（最大3件、優先順位つき） | (`member_id`,`job_category_code`) | `priority`(1..3), `updated_at` |
+| `companies` | 企業。クチコミ対象かつ求人・直接スカウトの主体。親会社は自己参照 | `company_id` | `name`, `corporate_number`(法人番号13桁), `industry_code`, `employee_size_band`(`lt50`/`50_299`/`300_999`/`ge1000`), `listing_status`(`listed`/`unlisted`), `hq_prefecture_code`, `parent_company_id`(nullable, 自己参照), `founded_year`, `updated_at` |
+| `agencies` | 転職エージェント会社 | `agency_id` | `name`, `tier`(`gold`/`silver`/`standard`), `contract_start_date`, `updated_at` |
+| `agents` | エージェント会社の担当者 | `agent_id` | `agency_id`, `name`, `joined_at`, `left_at`(nullable), `updated_at` |
+| `job_categories` | 職種マスタ（最大3階層、2階層で終わる枝あり） | `job_category_code` | `name`, `parent_code`(nullable), `level`(1..3) — **不揃い階層**（level 2 で終わる枝がある） |
+| `industries` | 業種マスタ | `industry_code` | `name`, `sector_code` |
+| `prefectures` | 都道府県マスタ | `prefecture_code` | `name`, `region` |
 
 ### クチコミ
 
-| テーブル | 主キー | 列 |
-|---|---|---|
-| `reviews` | `review_id` | `company_id`, `member_id`, `employment_status`(`current`/`former`), `employment_type`(`fulltime`/`contract`/`parttime`), `job_category_code`, `years_of_service_band`(`lt1`/`1_3`/`3_5`/`5_10`/`ge10`), 8軸スコア(各1.0〜5.0, 0.5刻み) `score_compensation`, `score_morale`, `score_openness`, `score_respect`, `score_growth_20s`, `score_long_term_dev`, `score_compliance`, `score_eval_fairness`, `overall_score`(8軸平均ではなく別入力), `title`, `body_text`, `submitted_at`, `status`(`submitted`/`screening`/`published`/`rejected`), `published_at`(nullable), `updated_at` |
-| `review_moderation_events` | `event_id` | `review_id`, `from_status`, `to_status`, `moderator_id`, `reason_code`(nullable: `defamation`/`pii`/`duplicate`/`low_quality`), `occurred_at` |
+| テーブル | 説明 | 主キー | 列 |
+|---|---|---|---|
+| `reviews` | クチコミ本体（8軸採点＋本文、審査状態を1列で持つ） | `review_id` | `company_id`, `member_id`, `employment_status`(`current`/`former`), `employment_type`(`fulltime`/`contract`/`parttime`), `job_category_code`, `years_of_service_band`(`lt1`/`1_3`/`3_5`/`5_10`/`ge10`), 8軸スコア(各1.0〜5.0, 0.5刻み) `score_compensation`, `score_morale`, `score_openness`, `score_respect`, `score_growth_20s`, `score_long_term_dev`, `score_compliance`, `score_eval_fairness`, `overall_score`(8軸平均ではなく別入力), `title`, `body_text`, `submitted_at`, `status`(`submitted`/`screening`/`published`/`rejected`), `published_at`(nullable), `updated_at` |
+| `review_moderation_events` | クチコミ審査の状態遷移ログ | `event_id` | `review_id`, `from_status`, `to_status`, `moderator_id`, `reason_code`(nullable: `defamation`/`pii`/`duplicate`/`low_quality`), `occurred_at` |
 
 ### 求人・スカウト・応募
 
-| テーブル | 主キー | 列 |
-|---|---|---|
-| `job_postings` | `job_posting_id` | `company_id`, `agency_id`(nullable=エージェント経由求人), `job_category_code`, `title`, `salary_min`, `salary_max`, `prefecture_code`, `employment_type`, `posted_at`, `closed_at`(nullable), `status`(`open`/`closed`), `updated_at` |
-| `scouts` | `scout_id` | `member_id`, `job_posting_id`(nullable), `sender_type`(`company`/`agent`), `sender_company_id`(nullable), `sender_agent_id`(nullable), `template_id`, `sent_at`, `opened_at`(nullable), `replied_at`(nullable), `reply_type`(nullable: `interested`/`declined`) |
-| `applications` | `application_id` | `member_id`, `job_posting_id`, `scout_id`(nullable), `source_channel`(`search`/`scout_company`/`scout_agent`/`agent_referral`), `applied_at` |
-| `selection_events` | `event_id` | `application_id`, `stage`(`document`/`first_interview`/`final_interview`/`offer`/`accepted`/`hired`/`rejected`/`withdrawn`), `occurred_at`, `note` |
-| `placements` | `placement_id` | `application_id`, `agency_id`, `hired_at`, `annual_income`, `fee_rate`, `fee_amount` |
+| テーブル | 説明 | 主キー | 列 |
+|---|---|---|---|
+| `job_postings` | 求人（直接掲載／エージェント経由） | `job_posting_id` | `company_id`, `agency_id`(nullable=エージェント経由求人), `job_category_code`, `title`, `salary_min`, `salary_max`, `prefecture_code`, `employment_type`, `posted_at`, `closed_at`(nullable), `status`(`open`/`closed`), `updated_at` |
+| `scouts` | 会員へのスカウト（送信主体は企業 or エージェント担当者） | `scout_id` | `member_id`, `job_posting_id`(nullable), `sender_type`(`company`/`agent`), `sender_company_id`(nullable), `sender_agent_id`(nullable), `template_id`, `sent_at`, `opened_at`(nullable), `replied_at`(nullable), `reply_type`(nullable: `interested`/`declined`) |
+| `applications` | 応募（検索から／スカウト経由） | `application_id` | `member_id`, `job_posting_id`, `scout_id`(nullable), `source_channel`(`search`/`scout_company`/`scout_agent`/`agent_referral`), `applied_at` |
+| `selection_events` | 選考の進行ログ（ステージ到達が1行） | `event_id` | `application_id`, `stage`(`document`/`first_interview`/`final_interview`/`offer`/`accepted`/`hired`/`rejected`/`withdrawn`), `occurred_at`, `note` |
+| `placements` | エージェント経由の入社成約（成果報酬） | `placement_id` | `application_id`, `agency_id`, `hired_at`, `annual_income`, `fee_rate`, `fee_amount` |
 
 ### 契約・閲覧
 
-| テーブル | 主キー | 列 |
-|---|---|---|
-| `contracts` | `contract_id` | `company_id`, `plan_code`(`basic`/`standard`/`premium`), `scout_quota_monthly`, `monthly_fee`, `start_date`, `end_date`(nullable), `status`, `updated_at` |
-| `page_views` | `event_id` | `member_id`(nullable=未ログイン), `session_id`, `page_type`(`company_top`/`company_review`/`job_posting`), `company_id`(nullable), `job_posting_id`(nullable), `review_id`(nullable), `device`(`ios`/`android`/`web`), `referrer_type`(`organic`/`paid`/`direct`/`email`), `is_unlocked`(閲覧権限あり), `viewed_at` |
+| テーブル | 説明 | 主キー | 列 |
+|---|---|---|---|
+| `contracts` | 企業との契約（プラン・月次スカウト枠・月額） | `contract_id` | `company_id`, `plan_code`(`basic`/`standard`/`premium`), `scout_quota_monthly`, `monthly_fee`, `start_date`, `end_date`(nullable), `status`, `updated_at` |
+| `page_views` | 閲覧ログ（表示1回が1行、未ログインあり） | `event_id` | `member_id`(nullable=未ログイン), `session_id`, `page_type`(`company_top`/`company_review`/`job_posting`), `company_id`(nullable), `job_posting_id`(nullable), `review_id`(nullable), `device`(`ios`/`android`/`web`), `referrer_type`(`organic`/`paid`/`direct`/`email`), `is_unlocked`(閲覧権限あり), `viewed_at` |
 
 ## 3. ビジネスプロセスとバスマトリクス
 
