@@ -49,13 +49,14 @@
 <p><strong>この資料で使う題材</strong></p>
 <p>CareerVoice は、社員・元社員による企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントからのスカウト・応募から入社までを1つのプラットフォームで扱う架空のサービスである。ソースは OLTP のテーブル群で、BigQuery の <code>src_careervoice</code> データセットに Datastream（CDC）で複製されている前提とする。</p>
 <p>本文に出るサンプル ID は次がすべて。日付は全て 2026 年、時刻は JST。</p>
+<p>サンプルの日付はすべて 2026 年で、<strong>基準日 2026-09-01</strong> より前に起きた事実。会員・企業の行は「登録時点の値 → その後の変化」の順で書いている。</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr></thead>
 <tbody>
 <tr><td><code>C001</code></td><td>企業</td><td>アオゾラ商事（商社、従業員規模 <code>ge1000</code>、上場、親会社なし）。スカウト <code>S001</code> の送信元で、<code>M001</code> が 08-01 に入社した先</td></tr>
 <tr><td><code>C002</code></td><td>企業</td><td>ネクスト技研（IT、非上場）。従業員規模が <strong>05-01 に <code>50_299</code> から <code>300_999</code> へ変化</strong>。クチコミ <code>R001</code> の対象企業で、<code>M001</code> の 08-01 までの現職</td></tr>
-<tr><td><code>M001</code></td><td>会員</td><td>1991年生・東京・現職 <code>C002</code>・年収帯 <code>400_600</code>・転職意欲 <code>passive</code>。<strong>06-15 09:12 に <code>active</code> / <code>600_800</code> へ変化</strong>し、<strong>08-01 に <code>C001</code> へ入社</strong>（<code>current_company_id</code> が <code>C002</code> → <code>C001</code>）</td></tr>
+<tr><td><code>M001</code></td><td>会員</td><td>2026-01-05 登録。登録時は 1991年生・東京・現職 <code>C002</code>・年収帯 <code>400_600</code>・転職意欲 <code>passive</code>。<strong>06-15 09:12 に <code>active</code> / <code>600_800</code> へ変化</strong>し、<strong>08-01 に <code>C001</code> へ転職</strong>（<code>current_company_id</code> が <code>C002</code> → <code>C001</code>）</td></tr>
 <tr><td><code>R001</code></td><td>クチコミ</td><td><code>M001</code> が <code>C002</code> について 03-10 に投稿し 03-12 に公開。<code>overall_score</code> = 3.5</td></tr>
 <tr><td><code>S001</code></td><td>スカウト</td><td>送信者は <code>C001</code>（企業）、宛先は <code>M001</code>。06-20 11:30 送信、06-21 開封、06-22 返信 <code>interested</code></td></tr>
 <tr><td><code>P001</code></td><td>応募</td><td><code>M001</code> の応募。06-23 応募、07-20 内定、08-01 入社</td></tr>

@@ -48,6 +48,7 @@
 <div class="aside">
 <p><strong>この資料で使う題材</strong>／CareerVoice は、社員・元社員による企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントのスカウト・応募から入社までの選考を 1 つのプラットフォームで扱う架空のサービスである。業務データベースは Datastream（CDC）で BigQuery の <code>src_careervoice</code> データセットに複製され、dbt が staging → marts の順に変換して <code>dim_*</code>（ディメンション）・<code>fct_*</code>（ファクト）・<code>agg_*</code>（集約）・<code>br_*</code>（ブリッジ）を作る。</p>
 
+<p>サンプルの日付はすべて 2026 年で、<strong>基準日 2026-09-01</strong> より前に起きた事実。会員・企業の行は「登録時点の値 → その後の変化」の順で書いている。</p>
 <div class="table-wrap">
 <table>
 <caption style="text-align:left;color:var(--muted);font-size:.85rem;padding-bottom:6px;">この資料に出るサンプル ID</caption>
@@ -56,7 +57,7 @@
 <tr><td><code>C001</code></td><td>企業「アオゾラ商事」</td><td>商社・従業員規模 <code>ge1000</code>・上場・親会社なし。<code>C003</code> の親会社。§2(b) では 2026-06 にクチコミ 3 件・送信スカウト 5 件があるとする</td></tr>
 <tr><td><code>C002</code></td><td>企業「ネクスト技研」</td><td>IT・従業員規模 <code>50_299</code>・非上場。<strong>2026-05-01 に <code>employee_size_band</code> が <code>300_999</code> へ変化</strong>したため、<code>dim_company</code> に版が 2 行ある</td></tr>
 <tr><td><code>C003</code></td><td>企業「ヒノデ物流」</td><td>物流・従業員規模 <code>300_999</code>・非上場。<code>parent_company_id</code> が <code>C001</code>（§5-2 のグループ集計の題材）</td></tr>
-<tr><td><code>M001</code></td><td>会員</td><td>1991 年生・東京・現職 <code>C002</code>。2026-06-15 に転職意欲が <code>passive</code> から <code>active</code> へ、年収帯が <code>400_600</code> から <code>600_800</code> へ変化。2026-08-01 に <code>C001</code> へ入社</td></tr>
+<tr><td><code>M001</code></td><td>会員</td><td>1991 年生・東京・登録時の現職 <code>C002</code>。2026-06-15 に転職意欲が <code>passive</code> から <code>active</code> へ、年収帯が <code>400_600</code> から <code>600_800</code> へ変化。2026-08-01 に <code>C001</code> へ転職（現職が <code>C002</code> → <code>C001</code>）</td></tr>
 <tr><td><code>R001</code></td><td>クチコミ</td><td><code>M001</code> が <code>C002</code> に投稿。2026-03-10 投稿・03-12 公開、<code>overall_score</code> は 3.5</td></tr>
 <tr><td><code>R002</code></td><td>クチコミ</td><td>ある会員が <code>C001</code> に投稿。2026-04-02 投稿、名誉毀損（<code>defamation</code>）を理由に却下されており公開されていない</td></tr>
 <tr><td><code>S001</code></td><td>スカウト</td><td><code>C001</code> が企業として <code>M001</code> へ送信。2026-06-20 送信・06-21 開封・06-22 に <code>interested</code> で返信</td></tr>

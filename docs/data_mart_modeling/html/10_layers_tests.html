@@ -49,11 +49,12 @@
 <p><strong>この資料で使う題材</strong></p>
 <p>CareerVoice は、社員・元社員による企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントからのスカウト・応募と選考を 1 つのプラットフォームで扱う架空のサービスである。分析側は OLTP の複製（BigQuery の <code>src_careervoice</code> データセット）を dbt で変換し、ディメンショナルモデル（数値を持つファクトと、文脈を与えるディメンションで組む分析用のデータモデル）として配布する。</p>
 
+<p>サンプルの日付はすべて 2026 年で、<strong>基準日 2026-09-01</strong> より前に起きた事実。会員・企業の行は「登録時点の値 → その後の変化」の順で書いている。</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr></thead>
 <tbody>
-<tr><td><code>M001</code></td><td>会員</td><td>1991 年生・東京・現職は <code>C002</code>。2026-06-15 に転職意欲と年収帯が変わる。この属性変化の前後どちらの版に結ぶかが §5(b) の時点結合の題材になる</td></tr>
+<tr><td><code>M001</code></td><td>会員</td><td>1991 年生・東京・登録時の現職は <code>C002</code>。2026-06-15 に転職意欲と年収帯が変わる。この属性変化の前後どちらの版に結ぶかが §5(b) の時点結合の題材になる</td></tr>
 <tr><td><code>C002</code></td><td>企業</td><td>ネクスト技研（IT、従業員 50〜299 人、非上場）。§2(c) ではこの企業のクチコミ件数を数える</td></tr>
 <tr><td><code>R001</code></td><td>クチコミ</td><td><code>M001</code> が <code>C002</code> に 2026-03-10 に投稿。<code>overall_score</code> は 3.5。03-11 に <code>low_quality</code> で 1 度差し戻され、03-12 に公開。審査イベントは 3 行（<code>submitted→screening</code> / <code>screening→submitted</code> / <code>submitted→published</code>）</td></tr>
 <tr><td><code>J001</code></td><td>求人</td><td>データエンジニア職（職種コード <code>ENG-DATA</code>）、2026-04-01 掲載。<code>P001</code> の応募先</td></tr>

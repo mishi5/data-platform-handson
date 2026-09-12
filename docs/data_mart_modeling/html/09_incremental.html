@@ -48,10 +48,11 @@
 <p><strong>この資料で使う題材。</strong> CareerVoice は、社員・元社員の企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントからのスカウト・応募から入社までの選考を1つのプラットフォームで扱う架空のサービスである。業務データベースは CDC（変更データキャプチャ）で BigQuery に複製され、dbt で、業務イベントを1行ずつ記録する<strong>ファクト</strong>テーブル（<code>fct_*</code>）と、その相手方の属性を説明する<strong>ディメンション</strong>テーブル（<code>dim_*</code>）へ組み替えられる。</p>
 
 <p><strong>この資料に出るサンプル ID</strong></p>
+<p>サンプルの日付はすべて 2026 年で、<strong>基準日 2026-09-01</strong> より前に起きた事実。会員・企業の行は「登録時点の値 → その後の変化」の順で書いている。</p>
 <div class="table-wrap">
 <table>
 <tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr>
-<tr><td><code>M001</code></td><td>会員</td><td>1991年生・東京・現職 <code>C002</code>。2026-06-15 に転職意欲が <code>passive</code> から <code>active</code> へ、年収帯が <code>400_600</code> から <code>600_800</code> へ変化。2026-08-01 に <code>C001</code> へ入社</td></tr>
+<tr><td><code>M001</code></td><td>会員</td><td>1991年生・東京・登録時の現職 <code>C002</code>。2026-06-15 に転職意欲が <code>passive</code> から <code>active</code> へ、年収帯が <code>400_600</code> から <code>600_800</code> へ変化。2026-08-01 に <code>C001</code> へ転職（現職が <code>C002</code> → <code>C001</code>）</td></tr>
 <tr><td><code>M002</code></td><td>会員</td><td>1985年生・大阪・現職 <code>C001</code>。<code>S003</code> の宛先</td></tr>
 <tr><td><code>C001</code></td><td>企業</td><td>アオゾラ商事（商社、従業員 1000人以上、上場）。求人 <code>J001</code> の掲載元、スカウト <code>S001</code> の送信主体、契約 <code>K001</code> の契約先</td></tr>
 <tr><td><code>C002</code></td><td>企業</td><td>ネクスト技研（IT、非上場）。2026-05-01 に <code>employee_size_band</code> が <code>50_299</code> から <code>300_999</code> へ変わり、その変更が DWH に届いたのは 5/3（§2(c) の題材）</td></tr>

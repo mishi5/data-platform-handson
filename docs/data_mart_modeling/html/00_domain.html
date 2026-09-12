@@ -307,22 +307,22 @@ Manifesto がディメンショナルモデルの強みとして挙げるのは5
 
 <h3>サンプルデータ（シリーズ全体で使う ID）</h3>
 
-<p>以降の説明と演習は、下記の固定サンプルだけを使う。ID の接頭辞は <code>M</code>=会員、<code>C</code>=企業、<code>R</code>=クチコミ、<code>J</code>=求人、<code>S</code>=スカウト、<code>P</code>=応募、<code>K</code>=契約、<code>A</code>=エージェント会社、<code>AG</code>=エージェント担当者を表す。日付は全て 2026 年、時刻は JST。</p>
+<p>以降の説明と演習は、下記の固定サンプルだけを使う。ID の接頭辞は <code>M</code>=会員、<code>C</code>=企業、<code>R</code>=クチコミ、<code>J</code>=求人、<code>S</code>=スカウト、<code>P</code>=応募、<code>K</code>=契約、<code>A</code>=エージェント会社、<code>AG</code>=エージェント担当者を表す。日付は全て 2026 年、時刻は JST。<strong>基準日は 2026-09-01</strong>で、表の日付はすべてそれより前に起きた事実である。会員・企業の行は「登録（または初回観測）時点の値 → その後の変化」の順に書いており、基準日の値は最後の変化のあとの状態になる。</p>
 
 <div class="table-wrap">
 <table>
 <thead><tr><th>ID</th><th>種類</th><th>内容と日付</th></tr></thead>
 <tbody>
 <tr><td><code>C001</code></td><td>企業</td><td>アオゾラ商事。<code>industry</code>=商社、<code>employee_size_band</code>=<code>ge1000</code>、<code>listed</code>、親会社なし</td></tr>
-<tr><td><code>C002</code></td><td>企業</td><td>ネクスト技研。IT、<code>50_299</code>、<code>unlisted</code>、親会社なし。<strong>2026-05-01 に <code>employee_size_band</code> が <code>300_999</code> へ変化</strong></td></tr>
+<tr><td><code>C002</code></td><td>企業</td><td>ネクスト技研。IT、<code>unlisted</code>、親会社なし。<code>employee_size_band</code> は当初 <code>50_299</code>、<strong>2026-05-01 に <code>300_999</code> へ変化</strong>（基準日時点は <code>300_999</code>）</td></tr>
 <tr><td><code>C003</code></td><td>企業</td><td>ヒノデ物流。物流、<code>300_999</code>、<code>unlisted</code>。<strong><code>parent_company_id</code> = <code>C001</code></strong></td></tr>
-<tr><td><code>M001</code></td><td>会員</td><td><code>registered_at</code>=2026-01-05、1991年生、東京、現職 <code>C002</code>、<code>annual_income_band</code>=<code>400_600</code>、<code>job_change_intent</code>=<code>passive</code>。<strong>2026-06-15 に <code>active</code>・<code>600_800</code> へ変化</strong>。2026-08-01 に <code>C001</code> へ入社</td></tr>
-<tr><td><code>M002</code></td><td>会員</td><td>1985年生、大阪、現職 <code>C001</code>、<code>800_1000</code>、<code>none</code>。希望職種 2 件（<code>ENG-BE</code>, <code>ENG-DATA</code>）</td></tr>
-<tr><td><code>M003</code></td><td>会員</td><td>1998年生、福岡、現職なし、<code>lt400</code>、<code>active</code></td></tr>
+<tr><td><code>M001</code></td><td>会員</td><td>2026-01-05 登録。登録時: 1991年生、東京、現職 <code>C002</code>、<code>annual_income_band</code>=<code>400_600</code>、<code>job_change_intent</code>=<code>passive</code>。<strong>2026-06-15 に <code>active</code>・<code>600_800</code> へ変化</strong>。2026-08-01 に <code>C001</code> へ転職（<code>current_company_id</code> が <code>C002</code> → <code>C001</code>）。基準日 9/1 時点の現職は <code>C001</code></td></tr>
+<tr><td><code>M002</code></td><td>会員</td><td>1985年生、大阪、現職 <code>C001</code>、<code>800_1000</code>、<code>none</code>。希望職種 2 件（<code>ENG-BE</code>, <code>ENG-DATA</code>）。属性の変化なし</td></tr>
+<tr><td><code>M003</code></td><td>会員</td><td>1998年生、福岡、現職なし、<code>lt400</code>、<code>active</code>。属性の変化なし</td></tr>
 <tr><td><code>A01</code> / <code>AG01</code></td><td>エージェント会社 / 担当者</td><td>キャリアブリッジ（<code>tier</code>=<code>gold</code>）/ 担当 佐藤</td></tr>
 <tr><td><code>A02</code> / <code>AG02</code></td><td>エージェント会社 / 担当者</td><td>ワークリンク（<code>standard</code>）/ 担当 鈴木</td></tr>
 <tr><td><code>ENG</code> 系</td><td>職種コード</td><td><code>ENG</code> → <code>ENG-BE</code> → <code>ENG-BE-JAVA</code>（level 3 まで）と、<code>ENG</code> → <code>ENG-DATA</code>（level 2 で終端）。<strong>枝ごとに深さが違う不揃い階層</strong>の題材</td></tr>
-<tr><td><code>J001</code></td><td>求人</td><td><code>C001</code> のデータエンジニア（<code>ENG-DATA</code>）。2026-04-01 掲載、企業の直接掲載</td></tr>
+<tr><td><code>J001</code></td><td>求人</td><td><code>C001</code> のデータエンジニア（<code>ENG-DATA</code>）。2026-04-01 掲載、企業の直接掲載。基準日時点も掲載中（<code>closed_at</code> は空）</td></tr>
 <tr><td><code>J002</code></td><td>求人</td><td><code>C002</code> のバックエンド（<code>ENG-BE-JAVA</code>）。<code>A01</code> 経由</td></tr>
 <tr><td><code>R001</code></td><td>クチコミ</td><td><code>M001</code> → <code>C002</code>。2026-03-10 投稿、<code>former</code>/<code>fulltime</code>/<code>1_3</code>、<code>overall_score</code>=3.5。<strong>03-11 に <code>low_quality</code> で差し戻し</strong>（<code>screening</code> → <code>submitted</code>）、2026-03-12 公開。<code>review_moderation_events</code> は 3 行（<code>submitted→screening</code> 3/10、<code>screening→submitted</code> 3/11、<code>submitted→published</code> 3/12）で <code>moderation_rounds</code>=2（審査担当者が判定を下した数）</td></tr>
 <tr><td><code>R002</code></td><td>クチコミ</td><td><code>M002</code> → <code>C001</code>。2026-04-02 投稿、<code>defamation</code> で却下</td></tr>
@@ -330,7 +330,7 @@ Manifesto がディメンショナルモデルの強みとして挙げるのは5
 <tr><td><code>S002</code></td><td>スカウト</td><td><code>AG01</code>（<code>agent</code>）→ <code>M003</code>、求人 <code>J002</code>。2026-06-25 送信、未開封</td></tr>
 <tr><td><code>S003</code></td><td>スカウト</td><td><code>AG02</code>（<code>agent</code>）→ <code>M002</code>、求人 <code>J001</code>。2026-06-18 送信、未開封。宛先が希望職種 2 件の会員なので、多値の関係を仲介するブリッジテーブルでの二重計上の題材になる</td></tr>
 <tr><td><code>P001</code></td><td>応募</td><td><code>M001</code> → <code>J001</code>、<code>source_channel</code>=<code>scout_company</code>。2026-06-23 応募 → 07-01 書類 → 07-08 一次 → 07-15 最終 → 07-20 内定 → 07-22 承諾 → 08-01 入社</td></tr>
-<tr><td><code>K001</code></td><td>契約</td><td><code>C001</code> の <code>premium</code> プラン（スカウト枠 200/月、月額 300,000円）。2026-01-01 開始</td></tr>
+<tr><td><code>K001</code></td><td>契約</td><td><code>C001</code> の <code>premium</code> プラン（スカウト枠 200/月、月額 300,000円）。2026-01-01 開始、基準日時点も継続中</td></tr>
 </tbody>
 </table>
 </div>

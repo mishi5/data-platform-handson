@@ -137,7 +137,7 @@ SCD2 のディメンション（`dim_member` / `dim_company` / `dim_agent` / `di
 | 企業 | `C001` | アオゾラ商事（`industry`=商社, `employee_size_band`=`ge1000`, `listed`, 親会社なし） |
 | 企業 | `C002` | ネクスト技研（IT, `50_299`, `unlisted`, 親なし）。**2026-05-01 に `employee_size_band` が `300_999` に変化**（SCD2 の題材） |
 | 企業 | `C003` | ヒノデ物流（物流, `300_999`, `unlisted`, **`parent_company_id`=`C001`**） |
-| 会員 | `M001` | `registered_at`=2026-01-05 / 1991年生 / 東京 / 現職 `C002` / `annual_income_band`=`400_600`, `job_change_intent`=`passive`。**2026-06-15 に `active`・`600_800` に変化**（＝`dim_member_profile_mini` 側の Type4。`dim_member` の行は増えない）、2026-08-01 に `C001` へ入社（＝`dim_member.current_company_id` の Type2。`dim_member` は 2 行になる） |
+| 会員 | `M001` | `registered_at`=2026-01-05 / 1991年生 / 東京 / 現職 `C002` / `annual_income_band`=`400_600`, `job_change_intent`=`passive`。**2026-06-15 に `active`・`600_800` に変化**（＝`dim_member_profile_mini` 側の Type4。`dim_member` の行は増えない）、2026-08-01 に `C001` へ転職（`current_company_id` が `C002`→`C001`。＝`dim_member` の Type2。`dim_member` は 2 行になる）。基準日 9/1 の現職は `C001` |
 | 会員 | `M002` | 1985年生 / 大阪 / 現職 `C001` / `800_1000` / `none`。希望職種 2件（`ENG-BE`, `ENG-DATA`） |
 | 会員 | `M003` | 1998年生 / 福岡 / 現職なし / `lt400` / `active` |
 | エージェント | `A01` / `AG01` | キャリアブリッジ（`gold`）/ 担当 佐藤 |
@@ -155,7 +155,7 @@ SCD2 のディメンション（`dim_member` / `dim_company` / `dim_agent` / `di
 
 **想定規模**（コスト・物理設計の議論で使う。断定ではなく前提）: 会員 300 万、企業 5 万、エージェント 2 千、クチコミ累計 500 万、`page_views` 日次 2,000 万行、スカウト日次 10 万件、応募日次 5 千件。
 
-日付は全て 2026 年。時刻は JST。`M001` が 6/15 に属性変化 → 6/20 にスカウト受信 → 6/23 応募、という並びが **as-of join（05回）の核**になる。
+日付は全て 2026 年。時刻は JST。**基準日は 2026-09-01**（表の日付は全て過去の事実。会員・企業は「登録時点の値 → その後の変化」の順で書き、基準日の値は最後の変化後の状態）。`M001` が 6/15 に属性変化 → 6/20 にスカウト受信 → 6/23 応募、という並びが **as-of join（05回）の核**になる。
 
 ## 6. 設計上の固定判断（回をまたいで守る）
 

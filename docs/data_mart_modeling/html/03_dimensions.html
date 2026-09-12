@@ -52,10 +52,11 @@
 
 <p>本文に出るサンプル ID は次の6つ。</p>
 
+<p>サンプルの日付はすべて 2026 年で、<strong>基準日 2026-09-01</strong> より前に起きた事実。会員・企業の行は「登録時点の値 → その後の変化」の順で書いている。</p>
 <div class="table-wrap">
 <table>
 <tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr>
-<tr><td><code>M001</code></td><td>会員</td><td>1991年生・東京在住・現職は <code>C002</code>。登録は 2026-01-05。<strong>2026-06-15</strong> に転職意欲 <code>job_change_intent</code> が <code>passive</code> → <code>active</code>、年収帯 <code>annual_income_band</code> が <code>400_600</code> → <code>600_800</code> へ変化。<strong>2026-08-01</strong> に <code>C001</code> へ入社し <code>current_company_id</code> が変わる</td></tr>
+<tr><td><code>M001</code></td><td>会員</td><td>2026-01-05 登録。登録時は 1991年生・東京在住・現職 <code>C002</code>。<strong>2026-06-15</strong> に転職意欲 <code>job_change_intent</code> が <code>passive</code> → <code>active</code>、年収帯 <code>annual_income_band</code> が <code>400_600</code> → <code>600_800</code> へ変化。<strong>2026-08-01</strong> に <code>C001</code> へ転職し <code>current_company_id</code> が <code>C002</code> → <code>C001</code> に変わる</td></tr>
 <tr><td><code>C001</code></td><td>企業</td><td>アオゾラ商事（商社・従業員 1000人以上・上場）。求人 <code>J001</code> の掲載元であり、スカウト <code>S001</code> の送信主体であり、<code>M001</code> の 8/1 の入社先</td></tr>
 <tr><td><code>C002</code></td><td>企業</td><td>ネクスト技研（IT・従業員 50〜299人・非上場）。<code>M001</code> が現在在籍している企業である。クチコミの匿名性を論じるときの「小規模企業」の例として出る</td></tr>
 <tr><td><code>J001</code></td><td>求人</td><td><code>C001</code> のデータエンジニア求人。2026-04-01 掲載、エージェントを介さない直接掲載</td></tr>

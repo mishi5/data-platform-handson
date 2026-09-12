@@ -48,11 +48,12 @@
 <div class="aside">
 <p><strong>この資料で使う題材。</strong>CareerVoice は、社員・元社員の企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェント経由のスカウト・応募から入社までの選考を 1 つのプラットフォームで扱う架空のサービスである。業務データベース（OLTP）は CDC で BigQuery に複製され、dbt で staging → marts（<code>dim_*</code> ディメンション / <code>fct_*</code> ファクト / <code>br_*</code> ブリッジ）に変換する前提で書く。</p>
 
+<p>サンプルの日付はすべて 2026 年で、<strong>基準日 2026-09-01</strong> より前に起きた事実。会員・企業の行は「登録時点の値 → その後の変化」の順で書いている。</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr></thead>
 <tbody>
-<tr><td><code>M001</code></td><td>会員</td><td>1991年生・東京。2026-08-01 に <code>C001</code> へ入社したため <code>dim_member</code> に 2 つの版（2 行）を持つ</td></tr>
+<tr><td><code>M001</code></td><td>会員</td><td>1991年生・東京、登録時の現職は <code>C002</code>。2026-08-01 に <code>C001</code> へ転職したため <code>dim_member</code> に 2 つの版（2 行）を持つ</td></tr>
 <tr><td><code>M002</code></td><td>会員</td><td>1985年生・大阪。<strong>希望職種が <code>ENG-BE</code> と <code>ENG-DATA</code> の 2 件</strong>＝多値ディメンションの題材</td></tr>
 <tr><td><code>C001</code></td><td>企業（アオゾラ商事）</td><td>商社・従業員 1000 人以上・上場・親会社なし。企業グループの頂点で、<code>J001</code> の掲載元であり <code>S001</code> の送信主体</td></tr>
 <tr><td><code>C003</code></td><td>企業（ヒノデ物流）</td><td>物流・従業員 300〜999 人。<code>companies.parent_company_id</code> が <code>C001</code>＝<code>C001</code> の子会社</td></tr>
