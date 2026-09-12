@@ -45,6 +45,7 @@
   th { white-space:nowrap; }
   .bus-matrix td:nth-child(3) { min-width:7em; }
   .bus-matrix td:nth-child(4) { min-width:14em; }
+  .sample-ids td:nth-child(1), .sample-ids td:nth-child(2) { white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -310,7 +311,7 @@ Manifesto がディメンショナルモデルの強みとして挙げるのは5
 <p>以降の説明と演習は、下記の固定サンプルだけを使う。ID の接頭辞は <code>M</code>=会員、<code>C</code>=企業、<code>R</code>=クチコミ、<code>J</code>=求人、<code>S</code>=スカウト、<code>P</code>=応募、<code>K</code>=契約、<code>A</code>=エージェント会社、<code>AG</code>=エージェント担当者を表す。日付は全て 2026 年、時刻は JST。<strong>基準日は 2026-09-01</strong>で、表の日付はすべてそれより前に起きた事実である。会員・企業の行は「登録（または初回観測）時点の値 → その後の変化」の順に書いており、基準日の値は最後の変化のあとの状態になる。</p>
 
 <div class="table-wrap">
-<table>
+<table class="sample-ids">
 <thead><tr><th>ID</th><th>種類</th><th>内容と日付</th></tr></thead>
 <tbody>
 <tr><td><code>C001</code></td><td>企業</td><td>アオゾラ商事。<code>industry</code>=商社、<code>employee_size_band</code>=<code>ge1000</code>、<code>listed</code>、親会社なし</td></tr>
@@ -485,7 +486,7 @@ Reis はこの順を飛ばすと、部門ごとに「顧客」の定義が食い
 <tr><td><code>screening</code> → <code>rejected</code></td><td>ファクト（日付キー + メジャー）</td><td><code>rejected_date_key</code>, <code>is_rejected</code></td><td>同上</td></tr>
 <tr><td>遷移の所要時間</td><td>ファクト（メジャー）</td><td><code>hours_to_screening</code>, <code>hours_to_decision</code></td><td>数値の測定値。粒度（1クチコミの審査ライフサイクル）と整合する</td></tr>
 <tr><td>審査ラウンド数</td><td>ファクト（メジャー）</td><td><code>moderation_rounds</code></td><td><code>review_moderation_events</code> のうち<strong>審査担当者が判定を下した遷移の数</strong>を数えた加法メジャー（イベント行数そのものではない）。差し戻し（<code>screening</code> → <code>submitted</code>）も判定なので数える — <code>R001</code> は差し戻しの判定と公開の判定を合わせて <code>moderation_rounds</code> = 2 になる</td></tr>
-<tr><td>却下理由 <code>reason_code</code></td><td><strong>ディメンション</strong></td><td><code>dim_moderation_reason</code>（<code>reason_name</code>, <code>severity</code>）</td><td>フィルタ・グループ化に使う記述的な文脈。コードのままファクトに置かない（10 Rules #7）</td></tr>
+<tr><td>却下理由 <code>reason_code</code></td><td><strong>ディメンション</strong></td><td><code>dim_moderation_reason</code>（<code>reason_name</code>, <code>severity</code>）</td><td>フィルタ・グループ化に使う記述的な文脈。ファクトには <code>reason_code</code> の文字列（<code>'defamation'</code> 等）を直接置かず、<code>dim_moderation_reason</code> を作って（1 行 = 1 理由コード。<code>reason_code</code> を自然キーとし、<code>reason_name</code>=「名誉毀損」のような表示名と <code>severity</code> を持つ）、ファクトにはそのキー <code>moderation_reason_key</code> だけを置く。表示名や重大度を変えるときにファクト全行を書き換えずに済み、BI 側は「理由別」をディメンション経由で切れる（10 Rules #7）</td></tr>
 <tr><td>投稿時の会員属性<br>(<code>employment_status</code> ほか)</td><td><strong>ディメンション</strong></td><td><code>dim_review_attributes</code>（2×3×5 = 30行）</td><td>低カーディナリティの組合せ。ジャンクディメンションにまとめる</td></tr>
 <tr><td>現在の <code>status</code> そのもの</td><td>どちらでもない</td><td>—</td><td>4つの日付キーと <code>is_published</code> / <code>is_rejected</code> で完全に表現できる。状態列を別に持つと二重管理になる</td></tr>
 </tbody>

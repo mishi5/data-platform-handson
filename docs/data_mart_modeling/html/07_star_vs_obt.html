@@ -38,6 +38,7 @@
   .ref li { font-size:.88rem; }
   td { overflow-wrap:anywhere; }
   th { white-space:nowrap; }
+  .sample-ids td:nth-child(1), .sample-ids td:nth-child(2) { white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -51,7 +52,7 @@
 <p>本文に出るサンプル ID は次の 5 つである。</p>
 <p>サンプルの日付はすべて 2026 年で、<strong>基準日 2026-09-01</strong> より前に起きた事実。会員・企業の行は「登録時点の値 → その後の変化」の順で書いている。</p>
 <div class="table-wrap">
-<table>
+<table class="sample-ids">
 <tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr>
 <tr><td><code>C001</code></td><td>企業「アオゾラ商事」</td><td>商社、従業員 <code>ge1000</code>、上場、親会社なし。<code>S001</code> の送信主体で、<code>M001</code> の 2026-08-01 の入社先</td></tr>
 <tr><td><code>C002</code></td><td>企業「ネクスト技研」</td><td>IT、従業員 <code>50_299</code>、非上場。2026-05-01 に <code>employee_size_band</code> が <code>300_999</code> に変化したので <code>dim_company</code> に SCD2 の版が 2 行ある。§2(a) では社名変更（Type1 の上書き）の題材にする</td></tr>
