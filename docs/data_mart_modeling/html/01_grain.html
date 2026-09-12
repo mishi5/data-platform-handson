@@ -36,11 +36,8 @@
   svg { max-width:100%; height:auto; display:block; margin:20px 0; }
   ul, ol { padding-left:1.3em; }
   .ref li { font-size:.88rem; }
-  td { overflow-wrap:anywhere; }
-  th { white-space:nowrap; }
-  .bus-matrix td:nth-child(3) { min-width:7em; }
-  .bus-matrix td:nth-child(4) { min-width:14em; }
-  .sample-ids td:nth-child(1), .sample-ids td:nth-child(2) { white-space:nowrap; }
+  td, th { overflow-wrap:normal; }
+  td code, th code { white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -723,5 +720,68 @@ GROUP BY view_date_key, company_key
 <li>Joe Reis, <em>Practical Data Modeling</em> Ch.14 <em>The Levels of Data Modeling</em> — <a href="https://practicaldatamodeling.substack.com/p/ch-14-the-levels-of-data-modeling">practicaldatamodeling.substack.com</a></li>
 </ul>
 
+<script>
+/* 表の列幅を内容から決める（外部依存なし）。方針:
+   1. 識別子(code)は途中で折り返さない。折り返しは識別子の間だけ
+   2. 各列の希望幅 = 自然幅(1行で収まる幅)が CAP 以下ならその幅、超えるなら CAP。ただし最長の識別子(min-content)より狭くしない
+   3. 希望幅の合計が本文幅を超えるときは、FLOOR(100px か min-content の大きい方)より広い列を比例して縮める
+   4. それでも収まらない表は .table-wrap 内で横スクロール */
+(function () {
+  var CAP = 260, FLOOR = 100;
+  var tables = Array.prototype.slice.call(document.querySelectorAll('table'));
+  if (!tables.length) return;
+  var probes = [], host = document.createElement('div');
+  host.style.cssText = 'position:absolute;left:-99999px;top:0;visibility:hidden';
+  tables.forEach(function (t) {
+    Array.prototype.slice.call(t.rows).forEach(function (r) {
+      var ci = 0;
+      Array.prototype.slice.call(r.cells).forEach(function (c) {
+        if (c.colSpan === 1) {
+          var pMax = document.createElement('table'); pMax.className = t.className;
+          pMax.style.cssText = 'width:max-content;margin:0;border-collapse:collapse';
+          var pMin = pMax.cloneNode(false); pMin.style.width = 'min-content';
+          pMax.innerHTML = '<tbody><tr>' + c.outerHTML + '</tr></tbody>';
+          pMin.innerHTML = '<tbody><tr>' + c.outerHTML + '</tr></tbody>';
+          host.appendChild(pMax); host.appendChild(pMin);
+          probes.push({ t: t, col: ci, max: pMax, min: pMin });
+        }
+        ci += c.colSpan;
+      });
+    });
+  });
+  document.body.appendChild(host);
+  var need = new Map();
+  probes.forEach(function (p) {
+    if (!need.has(p.t)) need.set(p.t, []);
+    var arr = need.get(p.t), cur = arr[p.col] || { max: 0, min: 0 };
+    cur.max = Math.max(cur.max, p.max.offsetWidth);
+    cur.min = Math.max(cur.min, p.min.offsetWidth);
+    arr[p.col] = cur;
+  });
+  host.parentNode.removeChild(host);
+  function apply() {
+    need.forEach(function (arr, t) {
+      var first = t.rows[0]; if (!first) return;
+      var W = (t.parentNode && t.parentNode.clientWidth) || t.clientWidth || 0;
+      var want = arr.map(function (w) { return w ? Math.max(Math.min(w.max, CAP), w.min) : 0; });
+      var floor = arr.map(function (w) { return w ? Math.max(FLOOR, w.min) : 0; });
+      var sum = want.reduce(function (a, b) { return a + b; }, 0);
+      if (W && sum > W) {
+        var slack = want.map(function (v, i) { return Math.max(0, v - floor[i]); });
+        var slackSum = slack.reduce(function (a, b) { return a + b; }, 0);
+        var over = Math.min(sum - W, slackSum);
+        if (slackSum > 0) want = want.map(function (v, i) { return v - over * slack[i] / slackSum; });
+      }
+      var ci = 0;
+      Array.prototype.slice.call(first.cells).forEach(function (c) {
+        if (arr[ci] && c.colSpan === 1 && arr[ci].max > 0) c.style.minWidth = Math.round(want[ci]) + 'px';
+        ci += c.colSpan;
+      });
+    });
+  }
+  apply();
+  var tm; window.addEventListener('resize', function () { clearTimeout(tm); tm = setTimeout(apply, 120); });
+})();
+</script>
 </body>
 </html>

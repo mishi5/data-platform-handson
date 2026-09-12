@@ -36,9 +36,8 @@
   svg { max-width:100%; height:auto; display:block; margin:20px 0; }
   ul, ol { padding-left:1.3em; }
   .ref li { font-size:.88rem; }
-  td { overflow-wrap:anywhere; }
-  th { white-space:nowrap; }
-  .sample-ids td:nth-child(1), .sample-ids td:nth-child(2) { white-space:nowrap; }
+  td, th { overflow-wrap:normal; }
+  td code, th code { white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -132,7 +131,7 @@
 </div>
 
 <p><code>fct_review</code> が <code>member_key</code> を持たないのは技法の帰結ではなく、匿名性のためにこの題材で固定した設計判断だ。投稿者の属性は <code>dim_review_attributes</code> にジャンク化して移す。つまりここでは<strong>ジャンクディメンションが匿名化装置を兼ねている</strong>。</p>
-<p>ただし 30 行の粗い帯でも小規模企業では特定されうる（<code>C002</code> の <code>former</code>/<code>fulltime</code>/<code>1_3</code> が1人しか居ない場合）。会員×クチコミの結合が要る分析は <code>int_review_member_link</code> に隔離する。</p>
+<p>ただし 30 行の粗い帯でも小規模企業では特定されうる（<code>C002</code> の <code>former</code> / <code>fulltime</code> / <code>1_3</code> が1人しか居ない場合）。会員×クチコミの結合が要る分析は <code>int_review_member_link</code> に隔離する。</p>
 <p>「1人しか居ない組合せ」は感覚ではなく数える。準識別子（<code>company_key</code> × <code>dim_review_attributes</code> の3属性 × <code>job_category_key</code>）ごとの行数の最小値が <em>k</em>-匿名性の <em>k</em> で、<code>GROUP BY</code> して <code>HAVING COUNT(*) &lt; 5</code> を出せば危ない組合せが列挙できる。Google Cloud の Sensitive Data Protection（旧 Cloud DLP）の Risk analysis は同じ計算を <em>l</em>-多様性まで含めてジョブとして回せる（DMBOK07 の「分類の自動化」）。<em>k</em> が小さい組合せは <code>years_of_service_band</code> を粗くするか、その企業のクチコミを件数閾値未満なら非公開にする——どちらもジャンクディメンションの帯の設計に戻ってくる。</p>
 
 <h2>2. よくある失敗</h2>
@@ -141,7 +140,7 @@
 
 <p>以下、規模は<strong>題材の想定値</strong>（会員 300 万人、<code>page_views</code> 日次 2,000 万行）を使う。断定ではなく前提で、この資料の判断のいくつかはこの桁に乗っている。</p>
 
-<p><code>annual_income_band</code> と <code>job_change_intent</code> を <code>dim_member</code> の Type2 属性にしたとする。<code>M001</code> は 2026-06-15 に <code>passive</code>/<code>400_600</code> → <code>active</code>/<code>600_800</code> へ変わるので、この日に新しい <code>member_key</code> が発行される。この形では次の3つの問題が起きる。</p>
+<p><code>annual_income_band</code> と <code>job_change_intent</code> を <code>dim_member</code> の Type2 属性にしたとする。<code>M001</code> は 2026-06-15 に <code>passive</code> / <code>400_600</code> → <code>active</code> / <code>600_800</code> へ変わるので、この日に新しい <code>member_key</code> が発行される。この形では次の3つの問題が起きる。</p>
 
 <ul>
 <li><strong>行数</strong>: 転職意欲は求人を見た会員が数か月単位で切り替える。会員 300 万人 × 年2回の変化で、ディメンションは年 600 万行ずつ伸びる。5年で 3,000 万行超のディメンションを、<code>fct_page_view</code>（日次 2,000 万行）に毎日結合することになる。</li>
@@ -763,5 +762,68 @@ FROM {{ ref('stg_careervoice__scouts') }} AS s
 <li>dbt, <em>Snapshots</em> — <a href="https://docs.getdbt.com/docs/build/snapshots">docs.getdbt.com</a></li>
 </ul>
 
+<script>
+/* 表の列幅を内容から決める（外部依存なし）。方針:
+   1. 識別子(code)は途中で折り返さない。折り返しは識別子の間だけ
+   2. 各列の希望幅 = 自然幅(1行で収まる幅)が CAP 以下ならその幅、超えるなら CAP。ただし最長の識別子(min-content)より狭くしない
+   3. 希望幅の合計が本文幅を超えるときは、FLOOR(100px か min-content の大きい方)より広い列を比例して縮める
+   4. それでも収まらない表は .table-wrap 内で横スクロール */
+(function () {
+  var CAP = 260, FLOOR = 100;
+  var tables = Array.prototype.slice.call(document.querySelectorAll('table'));
+  if (!tables.length) return;
+  var probes = [], host = document.createElement('div');
+  host.style.cssText = 'position:absolute;left:-99999px;top:0;visibility:hidden';
+  tables.forEach(function (t) {
+    Array.prototype.slice.call(t.rows).forEach(function (r) {
+      var ci = 0;
+      Array.prototype.slice.call(r.cells).forEach(function (c) {
+        if (c.colSpan === 1) {
+          var pMax = document.createElement('table'); pMax.className = t.className;
+          pMax.style.cssText = 'width:max-content;margin:0;border-collapse:collapse';
+          var pMin = pMax.cloneNode(false); pMin.style.width = 'min-content';
+          pMax.innerHTML = '<tbody><tr>' + c.outerHTML + '</tr></tbody>';
+          pMin.innerHTML = '<tbody><tr>' + c.outerHTML + '</tr></tbody>';
+          host.appendChild(pMax); host.appendChild(pMin);
+          probes.push({ t: t, col: ci, max: pMax, min: pMin });
+        }
+        ci += c.colSpan;
+      });
+    });
+  });
+  document.body.appendChild(host);
+  var need = new Map();
+  probes.forEach(function (p) {
+    if (!need.has(p.t)) need.set(p.t, []);
+    var arr = need.get(p.t), cur = arr[p.col] || { max: 0, min: 0 };
+    cur.max = Math.max(cur.max, p.max.offsetWidth);
+    cur.min = Math.max(cur.min, p.min.offsetWidth);
+    arr[p.col] = cur;
+  });
+  host.parentNode.removeChild(host);
+  function apply() {
+    need.forEach(function (arr, t) {
+      var first = t.rows[0]; if (!first) return;
+      var W = (t.parentNode && t.parentNode.clientWidth) || t.clientWidth || 0;
+      var want = arr.map(function (w) { return w ? Math.max(Math.min(w.max, CAP), w.min) : 0; });
+      var floor = arr.map(function (w) { return w ? Math.max(FLOOR, w.min) : 0; });
+      var sum = want.reduce(function (a, b) { return a + b; }, 0);
+      if (W && sum > W) {
+        var slack = want.map(function (v, i) { return Math.max(0, v - floor[i]); });
+        var slackSum = slack.reduce(function (a, b) { return a + b; }, 0);
+        var over = Math.min(sum - W, slackSum);
+        if (slackSum > 0) want = want.map(function (v, i) { return v - over * slack[i] / slackSum; });
+      }
+      var ci = 0;
+      Array.prototype.slice.call(first.cells).forEach(function (c) {
+        if (arr[ci] && c.colSpan === 1 && arr[ci].max > 0) c.style.minWidth = Math.round(want[ci]) + 'px';
+        ci += c.colSpan;
+      });
+    });
+  }
+  apply();
+  var tm; window.addEventListener('resize', function () { clearTimeout(tm); tm = setTimeout(apply, 120); });
+})();
+</script>
 </body>
 </html>

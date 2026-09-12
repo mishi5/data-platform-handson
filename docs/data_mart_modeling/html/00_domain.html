@@ -37,15 +37,8 @@
   ul, ol { padding-left:1.3em; }
   .ref li { font-size:.88rem; }
   .cap { color:var(--muted); font-size:.85rem; margin:-8px 0 20px; }
-  .src-model td:nth-child(1) { white-space:nowrap; }
-  .src-model td:nth-child(2) { min-width:15em; }
-  .src-model td:nth-child(3) code { white-space:nowrap; }
-  .src-model td:nth-child(4) { overflow-wrap:break-word; }
-  td { overflow-wrap:anywhere; }
-  th { white-space:nowrap; }
-  .bus-matrix td:nth-child(3) { min-width:7em; }
-  .bus-matrix td:nth-child(4) { min-width:14em; }
-  .sample-ids td:nth-child(1), .sample-ids td:nth-child(2) { white-space:nowrap; }
+  td, th { overflow-wrap:normal; }
+  td code, th code { white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -297,7 +290,7 @@
 
 <p>この正規化された形は、アプリケーションの都合では正しい。<code>job_categories</code> は <code>parent_code</code> による自己参照で階層を持ち、<code>industries</code> や <code>prefectures</code> はコード表に切り出されている。重複を消して更新を1箇所に閉じる、正規化の教科書どおりの形だ。</p>
 
-<p>状態は列で持つ。<code>reviews.status</code>、<code>job_postings.status</code>、<code>contracts.status</code>、<code>scouts.opened_at</code>/<code>replied_at</code> はいずれも行を上書きして遷移する。<code>members</code> の削除も <code>deleted_at</code> を立てるだけで、行は消えない。</p>
+<p>状態は列で持つ。<code>reviews.status</code>、<code>job_postings.status</code>、<code>contracts.status</code>、<code>scouts.opened_at</code> / <code>replied_at</code> はいずれも行を上書きして遷移する。<code>members</code> の削除も <code>deleted_at</code> を立てるだけで、行は消えない。</p>
 
 <p><strong>つまり OLTP を素直に読むと「今」しか分からない</strong>。<code>C002</code> の <code>employee_size_band</code> が 2026-05-01 に <code>50_299</code> から <code>300_999</code> へ変わったとき、その前に投稿された <code>R001</code> を「当時の規模」で集計する手段はソース側に無い。</p>
 
@@ -325,7 +318,7 @@ Manifesto がディメンショナルモデルの強みとして挙げるのは5
 <tr><td><code>ENG</code> 系</td><td>職種コード</td><td><code>ENG</code> → <code>ENG-BE</code> → <code>ENG-BE-JAVA</code>（level 3 まで）と、<code>ENG</code> → <code>ENG-DATA</code>（level 2 で終端）。<strong>枝ごとに深さが違う不揃い階層</strong>の題材</td></tr>
 <tr><td><code>J001</code></td><td>求人</td><td><code>C001</code> のデータエンジニア（<code>ENG-DATA</code>）。2026-04-01 掲載、企業の直接掲載。基準日時点も掲載中（<code>closed_at</code> は空）</td></tr>
 <tr><td><code>J002</code></td><td>求人</td><td><code>C002</code> のバックエンド（<code>ENG-BE-JAVA</code>）。<code>A01</code> 経由</td></tr>
-<tr><td><code>R001</code></td><td>クチコミ</td><td><code>M001</code> → <code>C002</code>。2026-03-10 投稿、<code>former</code>/<code>fulltime</code>/<code>1_3</code>、<code>overall_score</code>=3.5。<strong>03-11 に <code>low_quality</code> で差し戻し</strong>（<code>screening</code> → <code>submitted</code>）、2026-03-12 公開。<code>review_moderation_events</code> は 3 行（<code>submitted→screening</code> 3/10、<code>screening→submitted</code> 3/11、<code>submitted→published</code> 3/12）で <code>moderation_rounds</code>=2（審査担当者が判定を下した数）</td></tr>
+<tr><td><code>R001</code></td><td>クチコミ</td><td><code>M001</code> → <code>C002</code>。2026-03-10 投稿、<code>former</code> / <code>fulltime</code> / <code>1_3</code>、<code>overall_score</code>=3.5。<strong>03-11 に <code>low_quality</code> で差し戻し</strong>（<code>screening</code> → <code>submitted</code>）、2026-03-12 公開。<code>review_moderation_events</code> は 3 行（<code>submitted→screening</code> 3/10、<code>screening→submitted</code> 3/11、<code>submitted→published</code> 3/12）で <code>moderation_rounds</code>=2（審査担当者が判定を下した数）</td></tr>
 <tr><td><code>R002</code></td><td>クチコミ</td><td><code>M002</code> → <code>C001</code>。2026-04-02 投稿、<code>defamation</code> で却下</td></tr>
 <tr><td><code>S001</code></td><td>スカウト</td><td><code>C001</code>（<code>sender_type</code>=<code>company</code>）→ <code>M001</code>、求人 <code>J001</code>。2026-06-20 送信、06-21 開封、06-22 に <code>interested</code> で返信</td></tr>
 <tr><td><code>S002</code></td><td>スカウト</td><td><code>AG01</code>（<code>agent</code>）→ <code>M003</code>、求人 <code>J002</code>。2026-06-25 送信、未開封</td></tr>
@@ -486,7 +479,7 @@ Reis はこの順を飛ばすと、部門ごとに「顧客」の定義が食い
 <tr><td><code>screening</code> → <code>rejected</code></td><td>ファクト（日付キー + メジャー）</td><td><code>rejected_date_key</code>, <code>is_rejected</code></td><td>同上</td></tr>
 <tr><td>遷移の所要時間</td><td>ファクト（メジャー）</td><td><code>hours_to_screening</code>, <code>hours_to_decision</code></td><td>数値の測定値。粒度（1クチコミの審査ライフサイクル）と整合する</td></tr>
 <tr><td>審査ラウンド数</td><td>ファクト（メジャー）</td><td><code>moderation_rounds</code></td><td><code>review_moderation_events</code> のうち<strong>審査担当者が判定を下した遷移の数</strong>を数えた加法メジャー（イベント行数そのものではない）。差し戻し（<code>screening</code> → <code>submitted</code>）も判定なので数える — <code>R001</code> は差し戻しの判定と公開の判定を合わせて <code>moderation_rounds</code> = 2 になる</td></tr>
-<tr><td>却下理由 <code>reason_code</code></td><td><strong>ディメンション</strong></td><td><code>dim_moderation_reason</code>（<code>reason_name</code>, <code>severity</code>）</td><td>フィルタ・グループ化に使う記述的な文脈。ファクトには <code>reason_code</code> の文字列（<code>'defamation'</code> 等）を直接置かず、<code>dim_moderation_reason</code> を作って（1 行 = 1 理由コード。<code>reason_code</code> を自然キーとし、<code>reason_name</code>=「名誉毀損」のような表示名と <code>severity</code> を持つ）、ファクトにはそのキー <code>moderation_reason_key</code> だけを置く。表示名や重大度を変えるときにファクト全行を書き換えずに済み、BI 側は「理由別」をディメンション経由で切れる（10 Rules #7）</td></tr>
+<tr><td>却下理由 <code>reason_code</code></td><td><strong>ディメンション</strong></td><td><code>dim_moderation_reason</code>（<code>reason_name</code>, <code>severity</code>）</td><td>フィルタ・グループ化に使う記述的な文脈。<code>dim_moderation_reason</code> を作り（1 行 = 1 理由コード。<code>reason_code</code> が自然キーで、<code>reason_name</code>=「名誉毀損」のような表示名と <code>severity</code> を属性に持つ）、ファクトには外部キー <code>moderation_reason_key</code> だけを置く。このキーはサロゲートキーではなく <code>reason_code</code> の値そのもの（Type 0 のディメンションは自然キーを <code>_key</code> 列にする — DM03『ディメンションの設計』）。10 Rules #7 の要点はキーの値を変えることではなく、表示名や重大度のような記述属性をファクトに書かずディメンション側に持つこと。表示名を変えてもファクト全行を書き換えずに済み、BI は「理由別」をディメンション経由で切れる</td></tr>
 <tr><td>投稿時の会員属性<br>(<code>employment_status</code> ほか)</td><td><strong>ディメンション</strong></td><td><code>dim_review_attributes</code>（2×3×5 = 30行）</td><td>低カーディナリティの組合せ。ジャンクディメンションにまとめる</td></tr>
 <tr><td>現在の <code>status</code> そのもの</td><td>どちらでもない</td><td>—</td><td>4つの日付キーと <code>is_published</code> / <code>is_rejected</code> で完全に表現できる。状態列を別に持つと二重管理になる</td></tr>
 </tbody>
@@ -518,5 +511,68 @@ Reis はこの順を飛ばすと、部門ごとに「顧客」の定義が食い
 <li>Hightouch, <em>A Guide to Modern Data Warehouse Modelling — Part 1</em> — <a href="https://hightouch.com/blog/data-warehouse-modelling-part-1">hightouch.com</a></li>
 </ul>
 
+<script>
+/* 表の列幅を内容から決める（外部依存なし）。方針:
+   1. 識別子(code)は途中で折り返さない。折り返しは識別子の間だけ
+   2. 各列の希望幅 = 自然幅(1行で収まる幅)が CAP 以下ならその幅、超えるなら CAP。ただし最長の識別子(min-content)より狭くしない
+   3. 希望幅の合計が本文幅を超えるときは、FLOOR(100px か min-content の大きい方)より広い列を比例して縮める
+   4. それでも収まらない表は .table-wrap 内で横スクロール */
+(function () {
+  var CAP = 260, FLOOR = 100;
+  var tables = Array.prototype.slice.call(document.querySelectorAll('table'));
+  if (!tables.length) return;
+  var probes = [], host = document.createElement('div');
+  host.style.cssText = 'position:absolute;left:-99999px;top:0;visibility:hidden';
+  tables.forEach(function (t) {
+    Array.prototype.slice.call(t.rows).forEach(function (r) {
+      var ci = 0;
+      Array.prototype.slice.call(r.cells).forEach(function (c) {
+        if (c.colSpan === 1) {
+          var pMax = document.createElement('table'); pMax.className = t.className;
+          pMax.style.cssText = 'width:max-content;margin:0;border-collapse:collapse';
+          var pMin = pMax.cloneNode(false); pMin.style.width = 'min-content';
+          pMax.innerHTML = '<tbody><tr>' + c.outerHTML + '</tr></tbody>';
+          pMin.innerHTML = '<tbody><tr>' + c.outerHTML + '</tr></tbody>';
+          host.appendChild(pMax); host.appendChild(pMin);
+          probes.push({ t: t, col: ci, max: pMax, min: pMin });
+        }
+        ci += c.colSpan;
+      });
+    });
+  });
+  document.body.appendChild(host);
+  var need = new Map();
+  probes.forEach(function (p) {
+    if (!need.has(p.t)) need.set(p.t, []);
+    var arr = need.get(p.t), cur = arr[p.col] || { max: 0, min: 0 };
+    cur.max = Math.max(cur.max, p.max.offsetWidth);
+    cur.min = Math.max(cur.min, p.min.offsetWidth);
+    arr[p.col] = cur;
+  });
+  host.parentNode.removeChild(host);
+  function apply() {
+    need.forEach(function (arr, t) {
+      var first = t.rows[0]; if (!first) return;
+      var W = (t.parentNode && t.parentNode.clientWidth) || t.clientWidth || 0;
+      var want = arr.map(function (w) { return w ? Math.max(Math.min(w.max, CAP), w.min) : 0; });
+      var floor = arr.map(function (w) { return w ? Math.max(FLOOR, w.min) : 0; });
+      var sum = want.reduce(function (a, b) { return a + b; }, 0);
+      if (W && sum > W) {
+        var slack = want.map(function (v, i) { return Math.max(0, v - floor[i]); });
+        var slackSum = slack.reduce(function (a, b) { return a + b; }, 0);
+        var over = Math.min(sum - W, slackSum);
+        if (slackSum > 0) want = want.map(function (v, i) { return v - over * slack[i] / slackSum; });
+      }
+      var ci = 0;
+      Array.prototype.slice.call(first.cells).forEach(function (c) {
+        if (arr[ci] && c.colSpan === 1 && arr[ci].max > 0) c.style.minWidth = Math.round(want[ci]) + 'px';
+        ci += c.colSpan;
+      });
+    });
+  }
+  apply();
+  var tm; window.addEventListener('resize', function () { clearTimeout(tm); tm = setTimeout(apply, 120); });
+})();
+</script>
 </body>
 </html>

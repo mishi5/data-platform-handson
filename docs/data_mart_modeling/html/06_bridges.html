@@ -36,9 +36,8 @@
   svg { max-width:100%; height:auto; display:block; margin:20px 0; }
   ul, ol { padding-left:1.3em; }
   .ref li { font-size:.88rem; }
-  td { overflow-wrap:anywhere; }
-  th { white-space:nowrap; }
-  .sample-ids td:nth-child(1), .sample-ids td:nth-child(2) { white-space:nowrap; }
+  td, th { overflow-wrap:normal; }
+  td code, th code { white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -101,7 +100,7 @@
 <tbody>
 <tr><td>多値</td><td>会員の希望職種。<code>member_desired_job_categories</code>、<code>M002</code> は 2 件</td><td><code>br_member_desired_job_category</code> + <code>weighting_factor</code></td><td><code>dim_member</code> に <code>desired_job_categories ARRAY&lt;STRUCT&lt;…&gt;&gt;</code> を内包</td><td><strong>ブリッジ</strong>。ARRAY は §4・§6 の条件下での対案</td></tr>
 <tr><td>不揃い階層（企業グループ）</td><td><code>companies.parent_company_id</code>。<code>C003</code>（ヒノデ物流）→ <code>C001</code>（アオゾラ商事）</td><td><code>br_company_hierarchy</code>（祖先-子孫 + <code>depth</code>）</td><td>固定深さの位置属性に平坦化</td><td><strong>階層ブリッジ</strong>。深さが不定で、買収で伸びる</td></tr>
-<tr><td>不揃い階層（職種）</td><td><code>job_categories.level</code>。<code>ENG</code>→<code>ENG-BE</code>→<code>ENG-BE-JAVA</code> と <code>ENG</code>→<code>ENG-DATA</code></td><td>階層ブリッジ</td><td><code>dim_job_category</code> に <code>level1_name</code>/<code>level2_name</code>/<code>level3_name</code> を平坦化</td><td><strong>平坦化</strong>。深さ 1〜3 で幅が狭く、レベル名が合意されている</td></tr>
+<tr><td>不揃い階層（職種）</td><td><code>job_categories.level</code>。<code>ENG</code>→<code>ENG-BE</code>→<code>ENG-BE-JAVA</code> と <code>ENG</code>→<code>ENG-DATA</code></td><td>階層ブリッジ</td><td><code>dim_job_category</code> に <code>level1_name</code> / <code>level2_name</code> / <code>level3_name</code> を平坦化</td><td><strong>平坦化</strong>。深さ 1〜3 で幅が狭く、レベル名が合意されている</td></tr>
 <tr><td>異種</td><td>スカウト送信主体。<code>scouts.sender_type</code> = <code>company</code> / <code>agent</code></td><td><code>dim_scout_sender</code>（異種ディメンション。<code>sender_type</code> + 固有属性 NULL 許容）</td><td><code>fct_scout</code> に <code>sender_company_key</code> と <code>sender_agent_key</code> の 2 本 + <code>-1</code></td><td><strong>異種ディメンション 1 本</strong></td></tr>
 </tbody>
 </table>
@@ -663,7 +662,7 @@ GROUP BY jc.level2_name
 <tr><td>不定。買収で伸びる（企業グループ）</td><td>「<code>C001</code> 配下の全社を合計」</td><td><strong>階層ブリッジ</strong></td><td>全経路 1 行。<code>depth</code> でレベル別にも切れる</td></tr>
 <tr><td>不定だが「祖先の集合」しか要らない</td><td>「<code>C001</code> 傘下かどうか」</td><td><strong>経路文字列（pathstring）／ 祖先 ARRAY</strong></td><td>ブリッジより軽い。代替階層の差し替えは捨てる</td></tr>
 <tr><td>共有所有（1 社が複数の親を持つ）</td><td>任意</td><td><strong>ブリッジ一択</strong></td><td>クエリ時に親子表を辿るだけでは解けず（経路文字列も同じ）、あり得る全経路を持つ表が要る。再帰 CTE は §5(b) と同じくその<strong>生成手段</strong>としては使える。経路が複数になるので重み付けも要る</td></tr>
-<tr><td>階層自体が時間変化する</td><td>「2026-01 時点のグループで集計」</td><td><strong>ブリッジ + 有効期間</strong></td><td>祖先-子孫の行に <code>valid_from</code>/<code>valid_to</code>。§7(b) で扱う</td></tr>
+<tr><td>階層自体が時間変化する</td><td>「2026-01 時点のグループで集計」</td><td><strong>ブリッジ + 有効期間</strong></td><td>祖先-子孫の行に <code>valid_from</code> / <code>valid_to</code>。§7(b) で扱う</td></tr>
 </tbody>
 </table>
 </div>
@@ -762,5 +761,68 @@ GROUP BY jc.level2_name
 <li>Google Cloud, BigQuery 再帰 CTE（<code>WITH RECURSIVE</code>）— <a href="https://cloud.google.com/bigquery/docs/recursive-ctes">cloud.google.com</a>（自己参照 1 回・<code>UNION ALL</code>・反復上限 500）</li>
 </ul>
 
+<script>
+/* 表の列幅を内容から決める（外部依存なし）。方針:
+   1. 識別子(code)は途中で折り返さない。折り返しは識別子の間だけ
+   2. 各列の希望幅 = 自然幅(1行で収まる幅)が CAP 以下ならその幅、超えるなら CAP。ただし最長の識別子(min-content)より狭くしない
+   3. 希望幅の合計が本文幅を超えるときは、FLOOR(100px か min-content の大きい方)より広い列を比例して縮める
+   4. それでも収まらない表は .table-wrap 内で横スクロール */
+(function () {
+  var CAP = 260, FLOOR = 100;
+  var tables = Array.prototype.slice.call(document.querySelectorAll('table'));
+  if (!tables.length) return;
+  var probes = [], host = document.createElement('div');
+  host.style.cssText = 'position:absolute;left:-99999px;top:0;visibility:hidden';
+  tables.forEach(function (t) {
+    Array.prototype.slice.call(t.rows).forEach(function (r) {
+      var ci = 0;
+      Array.prototype.slice.call(r.cells).forEach(function (c) {
+        if (c.colSpan === 1) {
+          var pMax = document.createElement('table'); pMax.className = t.className;
+          pMax.style.cssText = 'width:max-content;margin:0;border-collapse:collapse';
+          var pMin = pMax.cloneNode(false); pMin.style.width = 'min-content';
+          pMax.innerHTML = '<tbody><tr>' + c.outerHTML + '</tr></tbody>';
+          pMin.innerHTML = '<tbody><tr>' + c.outerHTML + '</tr></tbody>';
+          host.appendChild(pMax); host.appendChild(pMin);
+          probes.push({ t: t, col: ci, max: pMax, min: pMin });
+        }
+        ci += c.colSpan;
+      });
+    });
+  });
+  document.body.appendChild(host);
+  var need = new Map();
+  probes.forEach(function (p) {
+    if (!need.has(p.t)) need.set(p.t, []);
+    var arr = need.get(p.t), cur = arr[p.col] || { max: 0, min: 0 };
+    cur.max = Math.max(cur.max, p.max.offsetWidth);
+    cur.min = Math.max(cur.min, p.min.offsetWidth);
+    arr[p.col] = cur;
+  });
+  host.parentNode.removeChild(host);
+  function apply() {
+    need.forEach(function (arr, t) {
+      var first = t.rows[0]; if (!first) return;
+      var W = (t.parentNode && t.parentNode.clientWidth) || t.clientWidth || 0;
+      var want = arr.map(function (w) { return w ? Math.max(Math.min(w.max, CAP), w.min) : 0; });
+      var floor = arr.map(function (w) { return w ? Math.max(FLOOR, w.min) : 0; });
+      var sum = want.reduce(function (a, b) { return a + b; }, 0);
+      if (W && sum > W) {
+        var slack = want.map(function (v, i) { return Math.max(0, v - floor[i]); });
+        var slackSum = slack.reduce(function (a, b) { return a + b; }, 0);
+        var over = Math.min(sum - W, slackSum);
+        if (slackSum > 0) want = want.map(function (v, i) { return v - over * slack[i] / slackSum; });
+      }
+      var ci = 0;
+      Array.prototype.slice.call(first.cells).forEach(function (c) {
+        if (arr[ci] && c.colSpan === 1 && arr[ci].max > 0) c.style.minWidth = Math.round(want[ci]) + 'px';
+        ci += c.colSpan;
+      });
+    });
+  }
+  apply();
+  var tm; window.addEventListener('resize', function () { clearTimeout(tm); tm = setTimeout(apply, 120); });
+})();
+</script>
 </body>
 </html>

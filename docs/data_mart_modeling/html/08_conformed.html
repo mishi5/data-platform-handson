@@ -36,9 +36,8 @@
   svg { max-width:100%; height:auto; display:block; margin:20px 0; }
   ul, ol { padding-left:1.3em; }
   .ref li { font-size:.88rem; }
-  td { overflow-wrap:anywhere; }
-  th { white-space:nowrap; }
-  .sample-ids td:nth-child(1), .sample-ids td:nth-child(2) { white-space:nowrap; }
+  td, th { overflow-wrap:normal; }
+  td code, th code { white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -73,9 +72,9 @@
 <li><code>dim_member</code> — 会員。<code>dim_company</code> と同じく SCD2 で版を持つ。<code>dim_member_profile_mini</code> は年収帯 × 転職意欲の 15 通りを別テーブルに分離したミニディメンション</li>
 <li><code>dim_date</code> — 日付。<code>date_key</code>（INT64 の <code>YYYYMMDD</code>）と <code>full_date</code>, <code>month</code>, <code>iso_week</code>, <code>fiscal_year</code>。未到達を表す <code>-1</code> 行を持つ</li>
 <li><code>dim_job_category</code> — 職種。深さの不揃いな階層を <code>level1_name</code>〜<code>level3_name</code> の固定 3 段に平坦化してある</li>
-<li><code>dim_agent</code> / <code>dim_agency</code> — 転職エージェントの担当者 / 会社。<code>agency_tier</code> は <code>gold</code>/<code>silver</code>/<code>standard</code></li>
-<li><code>dim_scout_sender</code> — スカウトの送信主体。企業と担当者を 1 本にまとめたディメンションで、<code>sender_type</code>（<code>company</code>/<code>agent</code>）と <code>sender_id</code>（企業なら <code>company_id</code>、担当者なら <code>agent_id</code>）を持つ</li>
-<li><code>dim_channel</code> — 応募経路（<code>search</code>/<code>scout_company</code>/<code>scout_agent</code>/<code>agent_referral</code>）</li>
+<li><code>dim_agent</code> / <code>dim_agency</code> — 転職エージェントの担当者 / 会社。<code>agency_tier</code> は <code>gold</code> / <code>silver</code> / <code>standard</code></li>
+<li><code>dim_scout_sender</code> — スカウトの送信主体。企業と担当者を 1 本にまとめたディメンションで、<code>sender_type</code>（<code>company</code> / <code>agent</code>）と <code>sender_id</code>（企業なら <code>company_id</code>、担当者なら <code>agent_id</code>）を持つ</li>
+<li><code>dim_channel</code> — 応募経路（<code>search</code> / <code>scout_company</code> / <code>scout_agent</code> / <code>agent_referral</code>）</li>
 <li><code>dim_audit</code> — ロードのバッチ ID・読み込み時刻・品質フラグ。全ファクトが <code>audit_key</code> でこれを参照する</li>
 <li><code>br_company_hierarchy</code> — 企業グループの階層を祖先・子孫の組で持つブリッジ。<code>ancestor_company_key</code>, <code>descendant_company_key</code>, <code>depth</code>, <code>is_root</code>, <code>is_leaf</code></li>
 <li><code>br_member_desired_job_category</code> — 会員の希望職種（最大 3 件）を持つ多値ブリッジ。<code>priority</code> と重み <code>weighting_factor</code></li>
@@ -123,7 +122,7 @@
 <tbody>
 <tr><td>同じ意味</td><td>同じ値が同じ実体を指す</td><td><code>dim_company</code> の 1 行は法人 1 社。<code>corporate_number</code> が同一なら同一企業</td><td>片方が「掲載主体」、片方が「採用法人」を company と呼ぶ</td></tr>
 <tr><td>同じキー</td><td>行ヘッダに使うキーの採番が一致</td><td><code>fct_scout</code> / <code>fct_scout_funnel</code> を除く全ファクトが <code>dim_company</code> 由来の <code>company_key</code> を持つ。この 2 本は <code>dim_scout_sender</code> 経由で企業に戻す（<code>sender_type</code> が <code>company</code> の行では <code>sender_id</code> が <code>company_id</code> にあたる）</td><td>片方がイベント時点版、片方が現在値版</td></tr>
-<tr><td>同じ属性名</td><td>列名と値の集合が一致</td><td><code>employee_size_band</code> は <code>lt50</code>/<code>50_299</code>/<code>300_999</code>/<code>ge1000</code> の 4 値だけ</td><td>片方だけ <code>lt300</code> という区分を足す</td></tr>
+<tr><td>同じ属性名</td><td>列名と値の集合が一致</td><td><code>employee_size_band</code> は <code>lt50</code> / <code>50_299</code> / <code>300_999</code> / <code>ge1000</code> の 4 値だけ</td><td>片方だけ <code>lt300</code> という区分を足す</td></tr>
 </tbody>
 </table>
 </div>
@@ -566,7 +565,7 @@ models:
 
 <h3>5-4. マテリアライズド・ビューで自動維持する選択肢</h3>
 
-<p>BigQuery のマテリアライズド・ビューは、ベーステーブルの変更を検知して差分更新し、ベーステーブルへのクエリを自動で書き換える。dbt では <code>materialized='materialized_view'</code> で扱える。<code>agg_company_rating_daily</code> は単一ファクト・<code>SUM</code>/<code>COUNT</code> のみ・パーティション整合という条件を満たすので候補になる。</p>
+<p>BigQuery のマテリアライズド・ビューは、ベーステーブルの変更を検知して差分更新し、ベーステーブルへのクエリを自動で書き換える。dbt では <code>materialized='materialized_view'</code> で扱える。<code>agg_company_rating_daily</code> は単一ファクト・<code>SUM</code> / <code>COUNT</code> のみ・パーティション整合という条件を満たすので候補になる。</p>
 
 <pre><code>-- models/marts/agg_company_rating_daily.sql を MV にする場合
 {{ config(
@@ -600,7 +599,7 @@ GROUP BY 1, 2, 3
 <table>
 <thead><tr><th>MV の制約</th><th>この資料のモデルへの影響</th></tr></thead>
 <tbody>
-<tr><td><code>RIGHT</code>/<code>FULL OUTER JOIN</code> と自己結合が不可（<code>LEFT OUTER JOIN</code> と <code>UNION ALL</code> はプレビュー）</td><td>§5-1 のドリルアクロスは MV にできない。<code>company_map</code>（<code>dim_company</code> の自己結合）も不可</td></tr>
+<tr><td><code>RIGHT</code> / <code>FULL OUTER JOIN</code> と自己結合が不可（<code>LEFT OUTER JOIN</code> と <code>UNION ALL</code> はプレビュー）</td><td>§5-1 のドリルアクロスは MV にできない。<code>company_map</code>（<code>dim_company</code> の自己結合）も不可</td></tr>
 <tr><td>集約は出力そのものでなければならない。集約値をさらに計算・フィルタ・結合できない</td><td><code>SAFE_DIVIDE(sum, count)</code> を MV 内に持てない。DM04『加法性と派生指標』の「和と件数だけ持つ」方針と一致する</td></tr>
 <tr><td>使える集約関数は限定（<code>SUM</code>, <code>COUNT</code>, <code>COUNTIF</code>, <code>AVG</code>, <code>MIN</code>, <code>MAX</code>, <code>APPROX_COUNT_DISTINCT</code>, <code>HLL_COUNT.INIT</code> ほか）</td><td>一覧外の <code>COUNT(DISTINCT ...)</code> は不可。近似でよければ <code>APPROX_COUNT_DISTINCT</code>（内部はスケッチ）</td></tr>
 <tr><td>非決定的関数（<code>CURRENT_DATE()</code> など）と UDF、ウィンドウ関数が不可</td><td><code>agg_company_entity</code> の <code>_30d</code> / <code>_90d</code> 窓は <code>CURRENT_TIMESTAMP()</code> 起点なので MV にできない</td></tr>
@@ -642,7 +641,7 @@ GROUP BY 1, 2, 3
 <tr><td>時間窓</td><td>固定窓で足り、列名に窓が現れる（<code>scouts_sent_30d</code>）</td><td>任意期間の指定が要る（ドリルアクロスへ）</td></tr>
 <tr><td>再集約</td><td>この表の上で再集約しない契約が書ける（<code>schema.yml</code> の description に明記）</td><td>企業をまたいで足し直す用途がある</td></tr>
 <tr><td>正本</td><td>元ファクトから毎回作り直せ、この表を消しても復元できる</td><td>この表にしか無い値がある</td></tr>
-<tr><td>非加法指標</td><td><code>sum</code>/<code>count</code> から算出し、0 件は <code>NULL</code> にする</td><td>上流で平均に計算済みの値を持ち込む</td></tr>
+<tr><td>非加法指標</td><td><code>sum</code> / <code>count</code> から算出し、0 件は <code>NULL</code> にする</td><td>上流で平均に計算済みの値を持ち込む</td></tr>
 <tr><td>機微</td><td>公開データセットの結合だけで作れる</td><td><code>int_review_member_link</code> のような制限データセットの再結合が要る</td></tr>
 <tr><td>列数</td><td>この資料で列挙した範囲。追加は題材の定義の改訂として審査</td><td>問いのたびに列を足す（ECM の言う "column overload"）</td></tr>
 </tbody>
@@ -688,7 +687,7 @@ WINDOW w AS (PARTITION BY company_key ORDER BY month_key)
 <thead><tr><th>働いている条件</th><th>成立の仕方</th><th>破れたら</th></tr></thead>
 <tbody>
 <tr><td>1 エンティティ 1 行の終端テーブル</td><td>スパインが <code>dim_company</code> の <code>is_current</code>。企業をまたぐ再集約の用途を持たせない</td><td>業界別平均を <code>AVG(avg_overall_score_90d)</code> で出され、企業ごとの件数差が消える</td></tr>
-<tr><td>算出は <code>sum</code>/<code>count</code> から</td><td><code>SAFE_DIVIDE(sum_overall_score_90d, review_count_90d)</code>。日次平均の平均を取らない</td><td>1 件の日と 50 件の日が同じ重みになる</td></tr>
+<tr><td>算出は <code>sum</code> / <code>count</code> から</td><td><code>SAFE_DIVIDE(sum_overall_score_90d, review_count_90d)</code>。日次平均の平均を取らない</td><td>1 件の日と 50 件の日が同じ重みになる</td></tr>
 <tr><td>窓が固定で列名に現れる</td><td><code>_90d</code>。任意期間の平均は <code>agg_company_rating_daily</code> から作る</td><td>「平均」が何期間かの合意が失われる</td></tr>
 </tbody>
 </table>
@@ -713,7 +712,7 @@ WINDOW w AS (PARTITION BY company_key ORDER BY month_key)
 <tr><td>閲覧企業数（30 日）</td><td><code>fct_page_view</code></td><td>△ <code>COUNT(DISTINCT company_key)</code> は再集約不能。持つなら会員単位の終端値と割り切る</td></tr>
 <tr><td>投稿クチコミ数・平均スコア</td><td><code>fct_review</code></td><td>✗ <code>member_key</code> が無い。<code>int_review_member_link</code> の再結合は制限データセット外に出せない</td></tr>
 <tr><td>希望職種</td><td><code>br_member_desired_job_category</code></td><td>△ 多値。そのまま持つと 1 行 1 会員という粒度が成立しなくなるので、<code>priority = 1</code> の 1 件だけを属性として持つ</td></tr>
-<tr><td>現在の年収帯・転職意欲</td><td><code>dim_member_profile_mini</code></td><td>✓ 指標ではなく属性。<code>M001</code> は 6/15 以降 <code>600_800</code>/<code>active</code></td></tr>
+<tr><td>現在の年収帯・転職意欲</td><td><code>dim_member_profile_mini</code></td><td>✓ 指標ではなく属性。<code>M001</code> は 6/15 以降 <code>600_800</code> / <code>active</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -742,5 +741,68 @@ WINDOW w AS (PARTITION BY company_key ORDER BY month_key)
 <li>Google Cloud, マテリアライズド・ビューの概要 — <a href="https://cloud.google.com/bigquery/docs/materialized-views-intro">cloud.google.com</a> ／ 作成（増分 MV の対応集約関数と禁止構文） — <a href="https://cloud.google.com/bigquery/docs/materialized-views-create">cloud.google.com</a></li>
 </ul>
 
+<script>
+/* 表の列幅を内容から決める（外部依存なし）。方針:
+   1. 識別子(code)は途中で折り返さない。折り返しは識別子の間だけ
+   2. 各列の希望幅 = 自然幅(1行で収まる幅)が CAP 以下ならその幅、超えるなら CAP。ただし最長の識別子(min-content)より狭くしない
+   3. 希望幅の合計が本文幅を超えるときは、FLOOR(100px か min-content の大きい方)より広い列を比例して縮める
+   4. それでも収まらない表は .table-wrap 内で横スクロール */
+(function () {
+  var CAP = 260, FLOOR = 100;
+  var tables = Array.prototype.slice.call(document.querySelectorAll('table'));
+  if (!tables.length) return;
+  var probes = [], host = document.createElement('div');
+  host.style.cssText = 'position:absolute;left:-99999px;top:0;visibility:hidden';
+  tables.forEach(function (t) {
+    Array.prototype.slice.call(t.rows).forEach(function (r) {
+      var ci = 0;
+      Array.prototype.slice.call(r.cells).forEach(function (c) {
+        if (c.colSpan === 1) {
+          var pMax = document.createElement('table'); pMax.className = t.className;
+          pMax.style.cssText = 'width:max-content;margin:0;border-collapse:collapse';
+          var pMin = pMax.cloneNode(false); pMin.style.width = 'min-content';
+          pMax.innerHTML = '<tbody><tr>' + c.outerHTML + '</tr></tbody>';
+          pMin.innerHTML = '<tbody><tr>' + c.outerHTML + '</tr></tbody>';
+          host.appendChild(pMax); host.appendChild(pMin);
+          probes.push({ t: t, col: ci, max: pMax, min: pMin });
+        }
+        ci += c.colSpan;
+      });
+    });
+  });
+  document.body.appendChild(host);
+  var need = new Map();
+  probes.forEach(function (p) {
+    if (!need.has(p.t)) need.set(p.t, []);
+    var arr = need.get(p.t), cur = arr[p.col] || { max: 0, min: 0 };
+    cur.max = Math.max(cur.max, p.max.offsetWidth);
+    cur.min = Math.max(cur.min, p.min.offsetWidth);
+    arr[p.col] = cur;
+  });
+  host.parentNode.removeChild(host);
+  function apply() {
+    need.forEach(function (arr, t) {
+      var first = t.rows[0]; if (!first) return;
+      var W = (t.parentNode && t.parentNode.clientWidth) || t.clientWidth || 0;
+      var want = arr.map(function (w) { return w ? Math.max(Math.min(w.max, CAP), w.min) : 0; });
+      var floor = arr.map(function (w) { return w ? Math.max(FLOOR, w.min) : 0; });
+      var sum = want.reduce(function (a, b) { return a + b; }, 0);
+      if (W && sum > W) {
+        var slack = want.map(function (v, i) { return Math.max(0, v - floor[i]); });
+        var slackSum = slack.reduce(function (a, b) { return a + b; }, 0);
+        var over = Math.min(sum - W, slackSum);
+        if (slackSum > 0) want = want.map(function (v, i) { return v - over * slack[i] / slackSum; });
+      }
+      var ci = 0;
+      Array.prototype.slice.call(first.cells).forEach(function (c) {
+        if (arr[ci] && c.colSpan === 1 && arr[ci].max > 0) c.style.minWidth = Math.round(want[ci]) + 'px';
+        ci += c.colSpan;
+      });
+    });
+  }
+  apply();
+  var tm; window.addEventListener('resize', function () { clearTimeout(tm); tm = setTimeout(apply, 120); });
+})();
+</script>
 </body>
 </html>
