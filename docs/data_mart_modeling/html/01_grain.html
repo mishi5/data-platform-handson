@@ -186,13 +186,14 @@
 <table>
 <thead><tr><th>答えられない問い</th><th>なぜ</th></tr></thead>
 <tbody>
-<tr><td>2026年7月に発生した選考イベントは全部で何件か</td><td>パイプライン行は応募単位で1行。イベント発生日を軸にした件数を数える対象が存在しない</td></tr>
 <tr><td>同じ応募で <code>first_interview</code> が2回起きた（再面接）のは何件か</td><td><code>first_interview_date_key</code> は1列。2回目は上書きされるか無視される</td></tr>
 <tr><td><code>rejected</code> / <code>withdrawn</code> の直前ステージは何か</td><td>持っているのは <code>current_stage</code> と <code>is_rejected</code> / <code>is_withdrawn</code> フラグだけ。そこに至る経路は残らない</td></tr>
 <tr><td>ステージ間を行き来した応募（差し戻し・保留）の比率</td><td>マイルストーンが単調に進む前提の構造なので、逆行そのものが表現できない</td></tr>
 </tbody>
 </table>
 </div>
+
+<p>「2026年7月に発生した選考イベントは全部で何件か」のような件数は、パイプラインの8本の日付キー列を縦に展開すれば数えられる。ただしマイルストーンが増えるたびに展開する部分を書き直すことになり、原子ファクトなら <code>event_date_key</code> で絞るだけで済む。</p>
 
 <div class="aside kimball">
 DT#77（Margy Ross）: <em>“you can’t magically explode summary data into its underlying components.”</em> 集約は原子データの <em>“performance-tuning complements to the atomic level, not replacements.”</em> — サマリーは補完であって代替ではない。

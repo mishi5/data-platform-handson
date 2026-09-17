@@ -85,7 +85,7 @@
 
 <p>同じソースイベントから、どの型のファクトを作るか。<strong>型は問いで決まる。ソースの形では決まらない。</strong></p>
 
-<p><code>selection_events</code> という1本のテーブルから、トランザクションファクト（<code>fct_selection_event</code>）と累積スナップショット（<code>fct_application_pipeline</code>）の両方が出る。逆に <code>job_postings</code> という1本のマスタからは、定期スナップショット（<code>fct_job_posting_daily</code>）を毎日書き足さない限り「4/15 時点の掲載中件数」は二度と再現できない。</p>
+<p><code>selection_events</code> という1本のテーブルから、トランザクションファクト（<code>fct_selection_event</code>）と累積スナップショット（<code>fct_application_pipeline</code>）の両方が出る。逆に <code>job_postings</code> という1本のマスタから「4/15 時点の掲載中件数」を出すには、<code>posted_at</code> と <code>closed_at</code> から当時の掲載状態を組み立てることになる。この方法で再現できないのは、論理削除・物理削除された求人、再掲載で <code>status</code> が往復した履歴、そして当時の掲載内容（タイトル・給与レンジ）である。定期スナップショット（<code>fct_job_posting_daily</code>）を毎日書き足しておけば、これらを含めてその日の姿が残る。</p>
 
 <div class="table-wrap">
 <table>

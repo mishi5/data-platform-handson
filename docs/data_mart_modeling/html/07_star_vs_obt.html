@@ -198,7 +198,7 @@ GROUP BY b.job_category_key;
 <tr><th>技法</th><th>定義</th><th>使う条件（2026 年の BigQuery で）</th></tr>
 <tr><td>スタースキーマ</td><td>1 つのファクトを中心に、非正規化されたディメンションを 1 段で囲む</td><td>常に。ただし理由は結合コストではなく「属性の時点を 1 箇所で決める」ため</td></tr>
 <tr><td>ディメンションの非正規化（雪片化しない）</td><td><code>dim_agent</code> に <code>agency_name</code> / <code>agency_tier</code> を平坦化して持つ</td><td>常に。この題材で固定した設計判断。列指向では結合コストは理由にならないが、可読性の理由は残る</td></tr>
-<tr><td>コンフォームドディメンション（複数のファクトで共有する同一定義のディメンション）</td><td>同じ <code>company_key</code> を <code>fct_review</code> / <code>fct_scout</code> / <code>fct_placement</code> が共有する</td><td>常に。OBT はこの技法を<strong>破壊する</strong>（表ごとに企業属性のコピーが分岐する）</td></tr>
+<tr><td>コンフォームドディメンション（複数のファクトで共有する同一定義のディメンション）</td><td>同じ <code>company_key</code> を <code>fct_review</code> / <code>fct_scout</code> / <code>fct_placement</code> が共有する</td><td>常に。OBT ではこの技法が<strong>成立しない</strong>（表ごとに企業属性のコピーが分岐する）</td></tr>
 <tr><td>粒度の宣言</td><td>1 行が何を意味するかをモデル定義の最初に固定する</td><td>常に。OBT でも宣言は必要で、宣言できない OBT は作らない</td></tr>
 <tr><td>拡張への耐性</td><td>属性追加・ディメンション追加を既存レポートを壊さずに行える</td><td>star では列追加のみ。OBT では属性追加が全行の再生成になる</td></tr>
 </table>

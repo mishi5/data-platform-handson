@@ -696,7 +696,7 @@ limit 10;</code></pre>
 <ul>
 <li>粒度が「1行 = 1求人 × 掲載中の1日」で、パーティション列が <code>snapshot_date</code>。置換単位と粒度の日次側が一致し、FDE の「1タスク実行 → 1パーティション」に収まる。</li>
 <li>「求人」単位にすると1回の実行が <code>J001</code> の全掲載日パーティションに書き込むことになり、<code>insert_overwrite</code> が使えず <code>merge</code>（<code>unique_key=['job_posting_id','snapshot_date']</code>）になる。冪等ではあるがターゲット全体が更新対象になり、パーティションの絞り込みを自前で設計することになる。</li>
-<li>ソース（<code>job_postings</code> の現在値）は過去日の <code>status</code> を再現できない。過去パーティションは不変にし、当日ぶんだけ作る＝ルックバック0日（判断基準の表の5行目）。掲載終了の反映が1日遅れる経路があるなら、前日ぶんの再生成だけを許す。</li>
+<li>ソース（<code>job_postings</code> の現在値）から過去日の掲載状態を組み立てられるのは <code>posted_at</code> / <code>closed_at</code> の範囲までで、削除された求人と再掲載の往復は残っていない。過去パーティションは不変にし、当日ぶんだけ作る＝ルックバック0日（判断基準の表の5行目）。掲載終了の反映が1日遅れる経路があるなら、前日ぶんの再生成だけを許す。</li>
 </ul>
 
 <p>ただし <code>application_count_cum</code> / <code>scout_count_cum</code> は累計なので、過去日を作り直さない代わりに「その日の時点で観測できた累計」を持つことになる。この定義を <code>description</code> に書いておかないと、あとから遡って数えた累計と一致しないという問い合わせになる。</p>
