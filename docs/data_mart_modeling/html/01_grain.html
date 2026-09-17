@@ -142,25 +142,28 @@
 
 <h3>(b) <code>fct_scout</code> と <code>fct_scout_funnel</code> を1表にする</h3>
 
-<p>スカウトは <code>S001</code>（<code>C001</code> → <code>M001</code>、<code>J001</code>、06-20 送信 → 06-21 開封 → 06-22 返信 <code>interested</code>）と <code>S002</code>（<code>AG01</code> → <code>M003</code>、<code>J002</code>、06-25 送信、未開封）の2件。統合表 <code>fct_scout</code> に日付キーを1本だけ置くと、「送信日で集計したい」と「返信日で集計したい」が同じ列を奪い合う。</p>
+<p>スカウトは <code>S001</code>（<code>C001</code> → <code>M001</code>、<code>J001</code>、06-20 送信 → 06-21 開封 → 06-22 返信 <code>interested</code>）と <code>S002</code>（<code>AG01</code> → <code>M003</code>、<code>J002</code>、06-25 送信、未開封）の2件。この2つを1表にまとめるなら、送信・開封・返信をそれぞれ行にして、イベント種別の区分値を持たせる形になる。中身は次のようになる。</p>
 
 <div class="table-wrap">
 <table>
-<thead><tr><th>統合表での置き方</th><th>6/20 の送信数（真値 1）</th><th>6/22 の返信数（真値 1）</th><th>6月の送信数（真値 2）</th></tr></thead>
+<thead><tr><th><code>scout_id</code></th><th><code>event_type</code></th><th><code>event_date</code></th><th>宛先</th><th>送信主体</th><th><code>reply_type</code></th><th><code>scout_count</code></th></tr></thead>
 <tbody>
-<tr><td>A: 送信日で1行だけ作る</td><td>1 ✓</td><td><strong>0 ✗</strong>（返信日が行の日付でない）</td><td>2 ✓</td></tr>
-<tr><td>B: 返信日で1行だけ作る</td><td><strong>0 ✗</strong></td><td>1 ✓</td><td><strong>1 ✗</strong>（<code>S002</code> は未返信なので行が作れず消える）</td></tr>
-<tr><td>C: 送信行と返信行の両方を作る</td><td>1 ✓</td><td>1 ✓</td><td>全行に <code>scout_count = 1</code> を置くと <strong>3 ✗</strong>、送信行だけに置くか <code>event_type</code> で絞れば 2 ✓</td></tr>
+<tr><td><code>S001</code></td><td><code>sent</code></td><td>2026-06-20</td><td><code>M001</code></td><td><code>C001</code></td><td>—</td><td>1</td></tr>
+<tr><td><code>S001</code></td><td><code>opened</code></td><td>2026-06-21</td><td><code>M001</code></td><td><code>C001</code></td><td>—</td><td>0</td></tr>
+<tr><td><code>S001</code></td><td><code>replied</code></td><td>2026-06-22</td><td><code>M001</code></td><td><code>C001</code></td><td><code>interested</code></td><td>0</td></tr>
+<tr><td><code>S002</code></td><td><code>sent</code></td><td>2026-06-25</td><td><code>M003</code></td><td><code>AG01</code></td><td>—</td><td>1</td></tr>
 </tbody>
 </table>
 </div>
 
-<p>A と B は日付キーが1本しかないことから来る制約で、C はその制約を外した形である。C はイベント種別の区分値を持つので、メジャーをその種別に合わせて置けば3つの問いすべてに答えられる。後述の <code>fct_selection_event</code>（1行 = 1選考ステージ遷移）と同じ構造であり、それ自体は誤りではない。</p>
+<p>実際のファクトでは、宛先と送信主体はサロゲートキー（<code>member_key</code> / <code>scout_sender_key</code>）で持ち、日付は <code>event_date_key</code> と <code>event_date</code> の組で持つ。上の表は中身が分かるように業務上の ID で書いている。</p>
+
+<p>この形なら、送信日でも返信日でも集計できる。6/20 の送信数は <code>event_type = 'sent'</code> で絞って 1、6/22 の返信数は <code>'replied'</code> で絞って 1、6月の送信数は 2 になる。<code>scout_count</code> を送信行だけに 1 で置いているので <code>SUM(scout_count)</code> も 2 で一致する（全行に 1 を置くと 3 になるため、メジャーはイベント種別に合わせて置く）。後述の <code>fct_selection_event</code>（1行 = 1選考ステージ遷移）と同じ構造であり、それ自体は誤りではない。</p>
 
 <p>それでもスカウトを2表に分けるのは、次の2つの利点があるためである。</p>
 
 <ul>
-<li><strong>集計が素朴なままで済む</strong>: 1行 = 1スカウトなら、送信数は <code>COUNT(*)</code>、開封率は <code>SUM(is_opened) / COUNT(*)</code> で書ける。C ではどちらにも <code>event_type</code> の条件が要り、分母と分子で条件が違う指標ほど書き分けが増える。</li>
+<li><strong>集計がシンプルなままで済む</strong>: 1行 = 1スカウトなら、送信数は <code>COUNT(*)</code>、開封率は <code>SUM(is_opened) / COUNT(*)</code> で書ける。統合表ではどちらにも <code>event_type</code> の条件が要り、分母と分子で条件が違う指標ほど書き分けが増える。</li>
 <li><strong>更新の作法を分けられる</strong>: 送信の記録は追加するだけで済み、開封・返信・応募のたびに更新されるのはファネル側だけになる。</li>
 </ul>
 
