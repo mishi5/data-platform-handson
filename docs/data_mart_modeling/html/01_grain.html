@@ -129,11 +129,11 @@
 </table>
 </div>
 
-<p>この表で <code>C002</code> のクチコミ数を出すと、<code>review_count</code> をどう置いても正しい値にならない。</p>
+<p>この表では、指標ごとに違う絞り込みと重み付けが必要になる。</p>
 
 <ul>
 <li><strong>全行に <code>review_count = 1</code> を置く</strong>: <code>SUM(review_count)</code> = 4。真値は 1。<code>R001</code> が「4件のクチコミ」として企業ページの評価件数に出る。</li>
-<li><strong>遷移行を <code>review_count = 0</code> にする</strong>: 件数は 1 に戻るが、二重計上が消えたわけではない。<code>overall_score</code> はクチコミ粒度の値なので4行すべてに複製されており、<code>AVG(overall_score)</code> は<strong>行数＝遷移回数で重み付けされる</strong>。差し戻しの多いクチコミほど企業平均を強く引っ張る、という業務上まったく正当化できない重み付けが入る。</li>
+<li><strong>遷移行を <code>review_count = 0</code> にする</strong>: 件数は 1 に戻るが、二重計上が消えたわけではない。<code>overall_score</code> はクチコミ粒度の値なので4行すべてに複製されており、<code>AVG(overall_score)</code> は<strong>行数＝遷移回数で重み付けされる</strong>。差し戻しの多いクチコミほど企業平均を強く引っ張る、という業務上まったく正当化できない重み付けが入る。正しく 3.5 を出すには <code>SAFE_DIVIDE(SUM(overall_score * review_count), SUM(review_count))</code> のように、集計する側が「どの行が投稿行か」を知って書く必要がある。粒度を宣言した表なら誰も知らなくてよい知識を、利用者全員に要求することになる。</li>
 </ul>
 
 <p>後者の厄介さは、<code>R001</code> 単独では平均が 3.5 のまま正しく見えることにある。<strong>誤った値が出ていても気付けない。</strong>件数の 1→4 と違い、この歪みはテストでも目視でも表面化しない。</p>
