@@ -150,19 +150,28 @@
 <tbody>
 <tr><td>A: 送信日で1行だけ作る</td><td>1 ✓</td><td><strong>0 ✗</strong>（返信日が行の日付でない）</td><td>2 ✓</td></tr>
 <tr><td>B: 返信日で1行だけ作る</td><td><strong>0 ✗</strong></td><td>1 ✓</td><td><strong>1 ✗</strong>（<code>S002</code> は未返信なので行が作れず消える）</td></tr>
-<tr><td>C: 送信行と返信行の両方を作る</td><td>1 ✓</td><td>1 ✓</td><td><strong>3 ✗</strong>（<code>S001</code> が2行、<code>SUM(scout_count)</code> が二重計上）</td></tr>
+<tr><td>C: 送信行と返信行の両方を作る</td><td>1 ✓</td><td>1 ✓</td><td>全行に <code>scout_count = 1</code> を置くと <strong>3 ✗</strong>、送信行だけに置くか <code>event_type</code> で絞れば 2 ✓</td></tr>
 </tbody>
 </table>
 </div>
 
-<p>C の破綻が典型で、「両方の問いに答えたい」から行を足した結果、粒度に合っていない（1行の意味と同じ水準でない）メジャー <code>scout_count</code> が二重に足される。正しい分割は次の2表。</p>
+<p>A と B は日付キーが1本しかないことから来る制約で、C はその制約を外した形である。C はイベント種別の区分値を持つので、メジャーをその種別に合わせて置けば3つの問いすべてに答えられる。後述の <code>fct_selection_event</code>（1行 = 1選考ステージ遷移）と同じ構造であり、それ自体は誤りではない。</p>
+
+<p>それでもスカウトを2表に分けるのは、次の2つの利点があるためである。</p>
+
+<ul>
+<li><strong>集計が素朴なままで済む</strong>: 1行 = 1スカウトなら、送信数は <code>COUNT(*)</code>、開封率は <code>SUM(is_opened) / COUNT(*)</code> で書ける。C ではどちらにも <code>event_type</code> の条件が要り、分母と分子で条件が違う指標ほど書き分けが増える。</li>
+<li><strong>更新の作法を分けられる</strong>: 送信の記録は追加するだけで済み、開封・返信・応募のたびに更新されるのはファネル側だけになる。</li>
+</ul>
+
+<p>この方針で分けた2表は次のとおり。</p>
 
 <ul>
 <li><code>fct_scout</code> — 1行 = 送信された1スカウト。<code>sent_date_key</code> 1本。<strong>行は更新されない</strong>（不変トランザクション）。</li>
 <li><code>fct_scout_funnel</code> — 1行 = 1スカウトの送信→開封→返信→応募。<code>sent_date_key</code> / <code>opened_date_key</code> / <code>replied_date_key</code> / <code>applied_date_key</code> の4本を <code>dim_date</code> のロールプレイングで持ち、<strong>行が更新される</strong>（累積スナップショット）。<code>S002</code> の未達マイルストーンは <code>-1</code>（DT#43、NULL 外部キーを作らない）。</li>
 </ul>
 
-<p>粒度が同じでも、この2表は<strong>更新の作法が違う</strong>ので統合できない。不変な表と更新される表を1つのパーティション再構築ジョブに乗せられない（増分ロードの作法は DM09『増分・遅延到着・冪等性』で扱う）。</p>
+<p>粒度が同じでも、この2表は<strong>更新の作法が違う</strong>。不変な表と更新される表は、1つのパーティション再構築ジョブには乗らない（増分ロードの作法は DM09『増分・遅延到着・冪等性』で扱う）。</p>
 
 <h3>(c) <code>fct_selection_event</code> を作らず <code>fct_application_pipeline</code> だけを作る</h3>
 
