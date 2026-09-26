@@ -1,7 +1,7 @@
 """採点プロンプトのオフライン評価スクリプト。
 
 ユニットテストは Anthropic クライアントをモックするためプロンプトの品質を測れない。
-本番デプロイ前に、実際に Claude を叩いて正解セットに対する判定を確認する。
+本番デプロイ前に、実際に Claude と Jev を叩いて正解セットに対する判定を確認する。
 
 使い方:
     cd news_pipeline
@@ -23,14 +23,17 @@ from google.cloud import bigquery  # noqa: E402
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 from bq_client import BQClient  # noqa: E402
+from relevance import judge_relevance  # noqa: E402
 from summarizer import score_article  # noqa: E402
 
 PROJECT_ID = os.environ["GCP_PROJECT_ID"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
+TYPESAFE_API_KEY = os.environ["TYPESAFE_API_KEY"]
 DATASET = "tech_news"
 
 IMPORTANCE_THRESHOLD = 0.65
-RELEVANCE_THRESHOLD = 0.55
+# relevance は本番と同じく Jev の確率（main._DEFAULT_RELEVANCE_THRESHOLD）
+RELEVANCE_THRESHOLD = 0.2
 
 # 正解セット: (タイトルの部分一致, 期待する判定)
 # "keep" = 通知されるべき / "drop" = 落とされるべき
@@ -93,13 +96,21 @@ def _fetch_sample(client: bigquery.Client, n: int) -> list[dict]:
 
 
 def _score(article: dict, keywords: list[str], favorite_tags: list[str]) -> dict | None:
-    return score_article(
+    """本番と同じく importance は Claude、relevance は Jev で判定する。"""
+    content = article.get("content") or ""
+    scores = score_article(
         title=article["title"],
-        content=article.get("content") or "",
+        content=content,
         api_key=ANTHROPIC_API_KEY,
         keywords=keywords,
         favorite_tags=favorite_tags,
     )
+    if scores is None:
+        return None
+    return {
+        **scores,
+        "relevance_score": judge_relevance(article["title"], content, TYPESAFE_API_KEY),
+    }
 
 
 def _passes(scores: dict) -> bool:

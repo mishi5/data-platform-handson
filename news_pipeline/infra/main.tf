@@ -53,6 +53,16 @@ resource "google_cloud_run_v2_service" "news_collector" {
         }
       }
       env {
+        # 関連度判定（relevance.py）で使う TypeSafe Jev の API キー
+        name = "TYPESAFE_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = "typesafe-api-key"
+            version = "latest"
+          }
+        }
+      }
+      env {
         name = "SLACK_WEBHOOK_URL"
         value_source {
           secret_key_ref {

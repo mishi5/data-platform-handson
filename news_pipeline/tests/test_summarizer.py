@@ -282,34 +282,11 @@ def test_build_scoring_criteria_uses_de_value_axis():
     assert "宣伝" in c
 
 
-def test_scoring_version_is_3():
+def test_scoring_version_is_4():
+    """4 = relevance_score を Jev の確率に切り替えた版。"""
     from collector.summarizer import SCORING_VERSION
 
-    assert SCORING_VERSION == 3
-
-
-@patch("collector.summarizer.anthropic.Anthropic")
-def test_score_slide_relevance_returns_float(mock_anthropic_class):
-    from collector.summarizer import score_slide_relevance
-
-    mock_client = _mock_tool_response(mock_anthropic_class, {"relevance_score": 0.8})
-
-    score = score_slide_relevance("Title", "desc", "key", keywords=["dbt"])
-    assert score == 0.8
-
-    call_kwargs = mock_client.messages.create.call_args.kwargs
-    assert call_kwargs["tool_choice"]["name"] == "record_relevance"
-
-
-@patch("collector.summarizer.anthropic.Anthropic")
-def test_score_slide_relevance_failure_returns_none(mock_anthropic_class):
-    from collector.summarizer import score_slide_relevance
-
-    mock_client = MagicMock()
-    mock_anthropic_class.return_value = mock_client
-    mock_client.messages.create.side_effect = Exception("boom")
-
-    assert score_slide_relevance("Title", "desc", "key") is None
+    assert SCORING_VERSION == 4
 
 
 # --- relevance 軸（データ基盤との関連度）------------------------------------
@@ -389,29 +366,6 @@ def test_scoring_criteria_includes_domain_definition():
     c = _build_scoring_criteria(["BigQuery"])
     assert "適用対象" in c
     assert "スコアの目安" in c
-
-
-def test_relevance_criteria_omits_importance_guidance():
-    """プレフィルタ用の基準には importance の目安を混ぜない（2つのスコア定義の混線防止）。"""
-    from collector.summarizer import _build_relevance_criteria
-
-    c = _build_relevance_criteria(["BigQuery"])
-    assert "適用対象" in c
-    assert "importance_score" not in c
-    assert "スコアの目安" not in c
-    assert "BigQuery" in c
-
-
-@patch("collector.summarizer.anthropic.Anthropic")
-def test_score_slide_relevance_prompt_omits_importance_guidance(mock_anthropic_class):
-    from collector.summarizer import score_slide_relevance
-
-    mock_client = _mock_tool_response(mock_anthropic_class, {"relevance_score": 0.8})
-    score_slide_relevance("Title", "desc", "key", keywords=["dbt"])
-
-    system_prompt = mock_client.messages.create.call_args.kwargs["system"]
-    assert "適用対象" in system_prompt
-    assert "importance_score" not in system_prompt
 
 
 def test_model_id_has_no_date_suffix():

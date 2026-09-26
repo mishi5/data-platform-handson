@@ -13,6 +13,7 @@ dependencies = [
     "python-multipart>=0.0.22",
     "requests==2.32.3",
     "trafilatura==1.12.2",
+    "typesafe-sdk==0.7.1",
     "uvicorn[standard]>=0.42.0",
 ]
 

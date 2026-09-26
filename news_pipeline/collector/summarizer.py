@@ -20,7 +20,10 @@ from anthropic.types import ToolUseBlock
 logger = logging.getLogger(__name__)
 
 # スコアロジックの版。_build_scoring_criteria を変えたら +1 する。
-SCORING_VERSION = 3
+# 4: relevance_score を Claude の 0〜1 スコアから Jev の確率（relevance.py）に変更。
+#    importance の採点は 3 と同じなので、3 の行は scripts/backfill_jev_relevance.py で
+#    relevance だけ付け直して 4 にする（Claude を呼ぶ /recalculate は不要）。
+SCORING_VERSION = 4
 
 # クレジット枯渇・支出上限の到達を示す 400 のメッセージ断片。これらはリトライしても
 # 回復しないので、バッチ処理は次の記事に進まず即座に中断する必要がある。
@@ -96,14 +99,6 @@ _SCORE_PROMPT_TEMPLATE = """あなたはデータエンジニアリングの技�
 {scoring_criteria}"""
 
 
-_SLIDE_PREFILTER_PROMPT_TEMPLATE = """あなたはデータエンジニアリングのスライド資料を、全文(PDF)を読む前にざっくり選別するアシスタントです。
-スライドのタイトルと短い説明だけから、データエンジニアにとって読む価値がありそうかを 0.0〜1.0 で見積もり、record_relevance ツールで記録してください。
-
-{scoring_criteria}
-
-重要: 説明が空・極端に短い等で情報が少ない場合は判断を保留し、高め(0.6以上)に倒してください（PDFを読めば価値があるかもしれず、取りこぼしを避けるため）。"""
-
-
 _SUMMARY_TOOL = {
     "name": "record_summary",
     "description": "記事の要約・タグ・重要度スコアを記録する",
@@ -154,22 +149,6 @@ _SCORE_TOOL = {
     },
 }
 
-_RELEVANCE_TOOL = {
-    "name": "record_relevance",
-    "description": "スライドの関連度スコアを記録する",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "relevance_score": {
-                "type": "number",
-                "description": "関連度スコア（0.0〜1.0）",
-            },
-        },
-        "required": ["relevance_score"],
-    },
-}
-
-
 _DOMAIN_DEFINITION = """このパイプラインの対象領域は「データエンジニアリング／データ基盤」である。
 relevance_score は、その記事の内容が対象領域にどれだけ関わるかを 0.0〜1.0 で表す。
 
@@ -206,7 +185,11 @@ relevance_score は、その記事の内容が対象領域にどれだけ関わ�
 
 
 def _build_domain_definition() -> str:
-    """対象領域（データ基盤）の定義。relevance_score の判定基準として3経路で共有する。"""
+    """対象領域（データ基盤）の定義。importance の判断材料として要約・再採点で共有する。
+
+    保存・ゲートに使う relevance_score は Jev（relevance.py）が別途判定する。定義を
+    変えるときは relevance.DOMAIN_DEFINITION も揃えること。
+    """
     return _DOMAIN_DEFINITION
 
 
@@ -233,21 +216,6 @@ def _build_favorite_hint(favorite_tags: list[str] | None) -> str:
         "また、次はユーザーが過去にお気に入りした記事に多いトピック。"
         "該当する記事は関心が高い可能性があるため加点のヒントにする：\n"
         f"{tag_items}"
-    )
-
-
-def _build_relevance_criteria(
-    keywords: list[str], favorite_tags: list[str] | None = None
-) -> str:
-    """relevance_score のみの判定基準。スライドの1次フィルタ用。
-
-    importance_score の目安を混ぜると2つのスコア定義が1つのプロンプトに同居して
-    混線するため、ドメイン定義とヒントだけで構成する。
-    """
-    return (
-        f"{_build_domain_definition()}\n\n"
-        f"{_build_keyword_hint(keywords)}"
-        f"{_build_favorite_hint(favorite_tags)}"
     )
 
 
@@ -425,39 +393,6 @@ def summarize_article(
         return None
 
 
-def score_slide_relevance(
-    title: str,
-    description: str,
-    api_key: str,
-    keywords: list[str] | None = None,
-    favorite_tags: list[str] | None = None,
-) -> float | None:
-    """スライド(Speaker Deck)の PDF を読む前に、title+description だけで関連度を見積もる。
-
-    PDFビジョン書き起こし(高コスト)の前段フィルタ用。失敗時は None（呼び出し側は
-    None を「判定不能＝通す」として扱う）。情報が少ない場合は高めのスコアを返す。
-    """
-    system_prompt = _SLIDE_PREFILTER_PROMPT_TEMPLATE.format(
-        scoring_criteria=_build_relevance_criteria(keywords or [], favorite_tags)
-    )
-    try:
-        result = _call_tool(
-            system_prompt=system_prompt,
-            user_content=f"タイトル: {title}\n\n説明:\n{(description or '')[:500]}",
-            tool=_RELEVANCE_TOOL,
-            api_key=api_key,
-            max_tokens=128,
-        )
-        if result is None or result.get("relevance_score") is None:
-            return None
-        return float(result["relevance_score"])
-    except Exception as e:
-        if _is_quota_error(e):
-            raise QuotaExceededError(str(e)) from e
-        logger.error("[summarizer] slide prefilter failed: %s", e)
-        return None
-
-
 def score_article(
     title: str,
     content: str,
@@ -469,8 +404,8 @@ def score_article(
     """記事のスコアを再計算する。失敗時は None。
 
     {"importance_score": float, "relevance_score": float | None} を返す。
-    relevance_score が None なのはモデルが返さなかった場合で、呼び出し側は
-    「判定不能＝ゲートを通す」として扱う（取りこぼし防止）。
+    relevance_score は Claude の見立てで、保存前に main._with_jev_relevance が
+    Jev の判定に置き換える。
     """
     try:
         result = _call_tool(

@@ -64,3 +64,5 @@ bigquery-data/
 .serena/memories/
 .serena/logs/
 .serena/db/
+# eval_jev.py の Jev 応答キャッシュ
+news_pipeline/scripts/.jev_cache.json

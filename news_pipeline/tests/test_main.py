@@ -4,15 +4,25 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # main は import 時に環境変数を要求するので先に設定する
 os.environ.setdefault("GCP_PROJECT_ID", "test-project")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
+os.environ.setdefault("TYPESAFE_API_KEY", "test-key")
 os.environ.setdefault("SLACK_WEBHOOK_URL", "https://hooks.slack.com/test")
 
 # main.py は兄弟モジュールを bare import するため collector ディレクトリを path に追加
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "collector"))
 
 from collector import main as main_mod
+
+
+@pytest.fixture(autouse=True)
+def mock_relevance():
+    """Jev への実通信を防ぐ。既定は「データ基盤が対象」の高い確率（ゲートを通る）。"""
+    with patch("collector.main.judge_relevance", return_value=0.9) as m:
+        yield m
 
 
 def _make_article(i: int) -> dict:
@@ -197,7 +207,6 @@ def _speakerdeck_article(i: int, desc: str = "") -> dict:
     }
 
 
-@patch("collector.main.score_slide_relevance")
 @patch("collector.main.summarize_article")
 @patch("collector.main.fetch_content")
 @patch("collector.main.fetch_articles")
@@ -209,7 +218,7 @@ def test_slide_prefilter_skips_low_relevance(
     mock_fetch_articles,
     mock_fetch_content,
     mock_summarize,
-    mock_prefilter,
+    mock_relevance,
 ):
     """関連度が閾値未満の Speaker Deck スライドは PDF を取得せず filtered で保存する。"""
     mock_load_config.return_value = _config(max_summarize="10")
@@ -219,8 +228,8 @@ def test_slide_prefilter_skips_low_relevance(
     bq.get_pending_articles.return_value = []
     bq.get_existing_summary_ids.return_value = set()
 
-    # 1件目=低スコア(弾く), 2件目=高スコア(通す)
-    mock_prefilter.side_effect = [0.1, 0.9]
+    # 1件目=低スコア(弾く), 2件目=高スコア(通す), 3回目は2件目の要約後の判定
+    mock_relevance.side_effect = [0.05, 0.9, 0.9]
     mock_fetch_articles.return_value = [
         _speakerdeck_article(0),
         _speakerdeck_article(1),
@@ -237,12 +246,13 @@ def test_slide_prefilter_skips_low_relevance(
     assert statuses["https://speakerdeck.com/user/talk-1"] == "ok"
     # description はスキーマ外なので保存前に除去される
     assert all("description" not in a for a in saved)
+    # 1次フィルタは title+description だけで判定する
+    assert mock_relevance.call_args_list[0].args[:2] == ("Slide 0", "")
     # 弾いた1件は PDF 取得も要約もされない
     assert mock_fetch_content.call_count == 1
     assert mock_summarize.call_count == 1
 
 
-@patch("collector.main.score_slide_relevance")
 @patch("collector.main.summarize_article")
 @patch("collector.main.fetch_content")
 @patch("collector.main.fetch_articles")
@@ -254,9 +264,9 @@ def test_prefilter_not_applied_to_non_speakerdeck(
     mock_fetch_articles,
     mock_fetch_content,
     mock_summarize,
-    mock_prefilter,
+    mock_relevance,
 ):
-    """通常記事には1次フィルタを適用しない（score_slide_relevance を呼ばない）。"""
+    """通常記事には1次フィルタを適用しない（関連度は要約後に本文で1回だけ判定する）。"""
     mock_load_config.return_value = _config(max_summarize="10")
     bq = MagicMock()
     mock_bqclass.return_value = bq
@@ -270,7 +280,7 @@ def test_prefilter_not_applied_to_non_speakerdeck(
 
     main_mod._run_collect()
 
-    mock_prefilter.assert_not_called()
+    assert [c.args[1] for c in mock_relevance.call_args_list] == ["body", "body"]
     assert mock_summarize.call_count == 2
 
 
@@ -727,9 +737,9 @@ def test_passes_thresholds_handles_non_numeric_relevance():
     assert main_mod.passes_thresholds(s, 0.65, 0.55) is True
 
 
-def test_default_relevance_threshold_avoids_model_mode_value():
-    """モデルは 0.5 のような丸い値を出しがちなので境界をずらす。"""
-    assert main_mod._DEFAULT_RELEVANCE_THRESHOLD == 0.55
+def test_default_relevance_threshold_for_jev_probability():
+    """relevance は Jev の確率。対象外は 0.05 前後に固まるので低めの閾値で足りる。"""
+    assert main_mod._DEFAULT_RELEVANCE_THRESHOLD == 0.2
 
 
 @patch("collector.main.summarize_article")
@@ -743,6 +753,7 @@ def test_offtopic_articles_are_gated_out_of_summaries(
     mock_fetch_articles,
     mock_fetch_content,
     mock_summarize,
+    mock_relevance,
 ):
     """良質でも対象領域外（relevance 低）は summaries に保存せず終端化する。"""
     mock_load_config.return_value = _config(max_summarize="10")
@@ -754,11 +765,13 @@ def test_offtopic_articles_are_gated_out_of_summaries(
 
     mock_fetch_articles.return_value = [_make_article(0), _make_article(1)]
     mock_fetch_content.return_value = ("body", True)
-    # 両方とも importance は高いが、2件目は対象領域外
+    # 両方とも importance は高いが、2件目は Jev が対象領域外と判定。
+    # Claude が返す relevance_score は使わない（どちらも 0.9 でも2件目は落ちる）
     mock_summarize.side_effect = [
         {"summary": "s", "tags": [], "importance_score": 0.82, "relevance_score": 0.9},
-        {"summary": "s", "tags": [], "importance_score": 0.82, "relevance_score": 0.1},
+        {"summary": "s", "tags": [], "importance_score": 0.82, "relevance_score": 0.9},
     ]
+    mock_relevance.side_effect = [0.9, 0.05]
 
     main_mod._run_collect()
 
@@ -783,6 +796,7 @@ def test_relevance_score_is_persisted_to_summaries(
     mock_fetch_articles,
     mock_fetch_content,
     mock_summarize,
+    mock_relevance,
 ):
     """relevance_score は後からチューニング検証できるよう summaries に保存する。"""
     mock_load_config.return_value = _config(max_summarize="10")
@@ -798,13 +812,15 @@ def test_relevance_score_is_persisted_to_summaries(
         "summary": "s",
         "tags": [],
         "importance_score": 0.82,
-        "relevance_score": 0.9,
+        "relevance_score": 0.6,
     }
+    mock_relevance.return_value = 0.93
 
     main_mod._run_collect()
 
+    # 保存されるのは Claude の値ではなく Jev の判定
     saved = bq.insert_summaries.call_args[0][0][0]
-    assert saved["relevance_score"] == 0.9
+    assert saved["relevance_score"] == 0.93
 
 
 @patch("collector.main.summarize_article")
@@ -818,10 +834,11 @@ def test_relevance_threshold_read_from_settings(
     mock_fetch_articles,
     mock_fetch_content,
     mock_summarize,
+    mock_relevance,
 ):
     """relevance_threshold は settings シートで調整でき、再デプロイを不要にする。"""
     config = _config(max_summarize="10")
-    config["settings"]["general"]["relevance_threshold"] = "0.2"
+    config["settings"]["general"]["relevance_threshold"] = "0.05"
     mock_load_config.return_value = config
     bq = MagicMock()
     mock_bqclass.return_value = bq
@@ -831,13 +848,9 @@ def test_relevance_threshold_read_from_settings(
 
     mock_fetch_articles.return_value = [_make_article(0)]
     mock_fetch_content.return_value = ("body", True)
-    # 既定 0.55 なら落ちるが、シートで 0.2 に緩めたので通る
-    mock_summarize.return_value = {
-        "summary": "s",
-        "tags": [],
-        "importance_score": 0.82,
-        "relevance_score": 0.3,
-    }
+    # 既定 0.2 なら落ちるが、シートで 0.05 に緩めたので通る
+    mock_summarize.return_value = {"summary": "s", "tags": [], "importance_score": 0.82}
+    mock_relevance.return_value = 0.1
 
     main_mod._run_collect()
 
@@ -855,8 +868,9 @@ def test_default_relevance_threshold_rejects_borderline_article(
     mock_fetch_articles,
     mock_fetch_content,
     mock_summarize,
+    mock_relevance,
 ):
-    """settings に指定が無ければ既定 0.55 が効き、relevance 0.3 は落ちる。"""
+    """settings に指定が無ければ既定 0.2 が効き、relevance 0.15 は落ちる。"""
     mock_load_config.return_value = _config(max_summarize="10")
     bq = MagicMock()
     mock_bqclass.return_value = bq
@@ -870,8 +884,8 @@ def test_default_relevance_threshold_rejects_borderline_article(
         "summary": "s",
         "tags": [],
         "importance_score": 0.82,
-        "relevance_score": 0.3,
     }
+    mock_relevance.return_value = 0.15
 
     main_mod._run_collect()
 
@@ -882,9 +896,9 @@ def test_default_relevance_threshold_rejects_borderline_article(
 @patch("collector.main.load_config")
 @patch("collector.main.BQClient")
 def test_recalculate_persists_relevance_score(
-    mock_bqclass, mock_load_config, mock_score
+    mock_bqclass, mock_load_config, mock_score, mock_relevance
 ):
-    """再採点は relevance も保存し、既存行の relevance_score を埋める。"""
+    """再採点は Jev の relevance も保存し、既存行の relevance_score を埋める。"""
     mock_load_config.return_value = _config(max_summarize="10")
     bq = MagicMock()
     mock_bqclass.return_value = bq
@@ -892,14 +906,16 @@ def test_recalculate_persists_relevance_score(
     bq.get_outdated_summaries.return_value = [
         {"article_id": "a1", "title": "T", "content": "body"}
     ]
-    mock_score.return_value = {"importance_score": 0.4, "relevance_score": 0.1}
+    mock_score.return_value = {"importance_score": 0.4, "relevance_score": 0.8}
+    mock_relevance.return_value = 0.04
 
     main_mod._run_recalculate()
 
     args, kwargs = bq.update_summary_score.call_args
     assert args[0] == "a1"
     assert args[1] == 0.4
-    assert kwargs["relevance_score"] == 0.1
+    assert kwargs["relevance_score"] == 0.04
+    assert mock_relevance.call_args.args[:2] == ("T", "body")
 
 
 @patch("collector.main.score_article")
@@ -1011,13 +1027,17 @@ def test_raw_articles_payload_fits_bigquery_schema(
     assert payload_keys <= _terraform_schema_fields("raw_articles")
 
 
-def test_slide_prefilter_threshold_lowered_for_stricter_domain_criteria():
-    """ドメイン定義の追加でプレフィルタも厳しくなるため既定を下げる。
+def test_slide_prefilter_threshold_below_relevance_threshold():
+    """title だけの判定は本文ありより低く出るため、relevance_threshold より下げる。
 
     content_status='filtered' は終端で再取得されない（不可逆）ので、
     スライドの取りこぼしを避ける側に倒す。
     """
-    assert main_mod._DEFAULT_SLIDE_PREFILTER_THRESHOLD == 0.2
+    assert main_mod._DEFAULT_SLIDE_PREFILTER_THRESHOLD == 0.1
+    assert (
+        main_mod._DEFAULT_SLIDE_PREFILTER_THRESHOLD
+        < main_mod._DEFAULT_RELEVANCE_THRESHOLD
+    )
 
 
 # --- バッチ系エンドポイントの error_count -----------------------------------

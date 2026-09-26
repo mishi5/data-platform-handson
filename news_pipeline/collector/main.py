@@ -41,6 +41,7 @@ from notifier import (
     send_slack_notification,
 )
 from pydantic import BaseModel
+from relevance import judge_relevance
 from rss_fetcher import fetch_articles
 from speakerdeck import is_speakerdeck_url
 from summarizer import (
@@ -49,7 +50,6 @@ from summarizer import (
     QuotaExceededError,
     _as_float,
     score_article,
-    score_slide_relevance,
     summarize_article,
 )
 
@@ -62,6 +62,7 @@ app = FastAPI()
 
 PROJECT_ID = os.environ["GCP_PROJECT_ID"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
+TYPESAFE_API_KEY = os.environ["TYPESAFE_API_KEY"]
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
 
@@ -70,8 +71,10 @@ _DEFAULT_MAX_SUMMARIZE = 10
 # settings シートの general から取得するデフォルト値
 _DEFAULT_IMPORTANCE_THRESHOLD = 0.65
 # relevance_threshold: データ基盤との関連度の下限。良質でも対象領域外の記事を落とす。
-# モデルは 0.5 のような丸い値を出しやすいため、境界をその上にずらして 0.5 を落とす。
-_DEFAULT_RELEVANCE_THRESHOLD = 0.55
+# relevance は Jev の「データ基盤が対象か」の確率（relevance.judge_relevance）。
+# 対象外の記事は 0.05 前後、対象の記事は 0.9 以上に分かれ、境界の記事だけが中間に来る。
+# Claude の採点との一致が最も高かったのは 0.13〜0.28 で、取りこぼし防止側に寄せて 0.2。
+_DEFAULT_RELEVANCE_THRESHOLD = 0.2
 _DEFAULT_MAX_CONTENT_RETRIES = 3
 _DEFAULT_RECALCULATE_LIMIT = 50
 # batch_budget_usd: 1回のバッチで使う API コストの上限（$）。None で無制限。
@@ -81,10 +84,11 @@ _DEFAULT_BATCH_BUDGET_USD = None
 _DEFAULT_RESUMMARIZE_LIMIT = 50
 _DEFAULT_RESUMMARIZE_DAYS = 7
 # slide_prefilter_threshold: Speaker Deck の PDF を取得する前に title+description で
-# 関連度を見積もり、この値未満なら PDF をスキップする。description が空で title 中心の
-# 判定になりやすく辛めに出るうえ、採点基準にドメイン定義が入って更に辛くなったため、
-# 取りこぼし防止を優先して低めに設定する（filtered は終端で再取得されない）。
-_DEFAULT_SLIDE_PREFILTER_THRESHOLD = 0.2
+# 関連度（Jev）を見積もり、この値未満なら PDF をスキップする。description が空で
+# title だけの判定になりやすく、本文ありの判定より低く出るため relevance_threshold
+# より下げる（filtered は終端で再取得されない）。title だけの判定では 0.1 で関連あり
+# のスライドを落としたのは 68件中1件だった。
+_DEFAULT_SLIDE_PREFILTER_THRESHOLD = 0.1
 # personalize_top_tags: お気に入り記事のタグ頻度上位N個を採点の加点ヒントに使う。
 # 0 で無効（BigQuery クエリ自体をスキップ）。
 _DEFAULT_PERSONALIZE_TOP_TAGS = 5
@@ -160,8 +164,8 @@ def passes_thresholds(
     """サマリーが通知対象かを判定する。
 
     importance（読む価値）と relevance（データ基盤との関連度）の2軸ゲート。
-    relevance が判定不能（None・非数値・キー欠落）の場合は通す。モデルが
-    relevance を返さなかっただけで良記事を落とすと取りこぼしになるため。
+    relevance が判定不能（None・非数値・キー欠落）の場合は通す。Jev の呼び出しに
+    失敗しただけで良記事を落とすと取りこぼしになるため。
     """
     importance = _as_float(summary.get("importance_score"))
     if importance is None or importance < importance_threshold:
@@ -170,6 +174,19 @@ def passes_thresholds(
     if relevance is not None and relevance < relevance_threshold:
         return False
     return True
+
+
+def _with_jev_relevance(result: dict, title: str, content: str) -> dict:
+    """Claude の結果の relevance_score を Jev の判定で置き換える。
+
+    Claude のプロンプトは importance の判断材料として relevance も出力させているが、
+    保存・ゲートには使わない（尺度の違う値が summaries に混ざると閾値を1つに
+    決められなくなるため）。Jev の判定に失敗したら None＝ゲートを通す。
+    """
+    return {
+        **result,
+        "relevance_score": judge_relevance(title, content, TYPESAFE_API_KEY),
+    }
 
 
 def _load_favorite_tags(bq: BQClient, general: dict) -> list[str]:
@@ -295,12 +312,8 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
         prefiltered = 0
         for a in new_articles:
             if is_speakerdeck_url(a["url"]):
-                score = score_slide_relevance(
-                    title=a["title"],
-                    description=a.get("description", ""),
-                    api_key=ANTHROPIC_API_KEY,
-                    keywords=keywords,
-                    favorite_tags=favorite_tags,
+                score = judge_relevance(
+                    a["title"], a.get("description", ""), TYPESAFE_API_KEY
                 )
                 if score is not None and score < slide_prefilter_threshold:
                     a["content"] = None
@@ -387,6 +400,9 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
                 log["error_count"] += 1
                 continue
             if result:
+                result = _with_jev_relevance(
+                    result, article["title"], article["content"] or ""
+                )
                 summaries.append(
                     {
                         "article_id": article["article_id"],
@@ -672,6 +688,9 @@ def _run_recalculate(triggered_by: str = "manual") -> tuple[int, int]:
             if scores is None:
                 log["error_count"] += 1
                 continue
+            scores = _with_jev_relevance(
+                scores, row["title"], row.get("content") or ""
+            )
             try:
                 bq.update_summary_score(
                     row["article_id"],
@@ -810,6 +829,7 @@ def _run_resummarize(
             if not result:
                 log["error_count"] += 1
                 continue
+            result = _with_jev_relevance(result, a["title"], a.get("content") or "")
 
             if passes_thresholds(result, importance_threshold, relevance_threshold):
                 bq.insert_summaries(
