@@ -1,4 +1,10 @@
+import os
+import sys
 from unittest.mock import MagicMock
+
+# rss_fetcher は release_notes を bare import するため collector を path に追加
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "collector"))
+
 from collector.rss_fetcher import _normalize_url, fetch_articles
 
 _DUMMY_FEEDS = {"https://example.com/rss": "Example Source"}
@@ -102,3 +108,64 @@ def test_fetch_articles_normalizes_entry_url(mocker):
 
     articles = fetch_articles(_DUMMY_FEEDS)
     assert articles[0]["url"] == "https://example.com/post"
+
+
+_RELEASE_NOTE_URL = (
+    "https://docs.cloud.google.com/bigquery/docs/release-notes#September_24_2026"
+)
+
+
+def test_normalize_url_keeps_release_notes_fragment():
+    # リリースノートは1ページ内のアンカーが日付ごとの記事。fragment を落とすと
+    # 全エントリが同じ URL になり、2件目以降が dedup で捨てられる
+    assert _normalize_url(_RELEASE_NOTE_URL) == _RELEASE_NOTE_URL
+
+
+def test_normalize_url_release_notes_still_strips_tracking_params():
+    assert _normalize_url(
+        "https://docs.cloud.google.com/bigquery/docs/release-notes"
+        "?utm_source=rss#September_24_2026"
+    ) == _RELEASE_NOTE_URL
+
+
+def test_fetch_articles_release_notes_title_has_feed_title(mocker):
+    # エントリのタイトルは日付だけなので、何の更新か分かるようフィード名を前に付ける
+    _mock_response(mocker)
+    mock_feed = MagicMock()
+    mock_feed.feed = {"title": "BigQuery - Release notes"}
+    mock_feed.entries = [
+        MagicMock(
+            title="September 24, 2026",
+            link=_RELEASE_NOTE_URL,
+            published="Thu, 24 Sep 2026 07:00:00 GMT",
+        ),
+        MagicMock(
+            title="September 22, 2026",
+            link=_RELEASE_NOTE_URL.replace("24", "22"),
+            published="Tue, 22 Sep 2026 07:00:00 GMT",
+        ),
+    ]
+    mocker.patch("collector.rss_fetcher.feedparser.parse", return_value=mock_feed)
+
+    articles = fetch_articles(_DUMMY_FEEDS)
+
+    assert articles[0]["title"] == "BigQuery - Release notes: September 24, 2026"
+    assert articles[0]["url"] == _RELEASE_NOTE_URL
+    # 日付ごとに別の記事として扱われる
+    assert articles[0]["article_id"] != articles[1]["article_id"]
+
+
+def test_fetch_articles_other_titles_unchanged(mocker):
+    _mock_response(mocker)
+    mock_feed = MagicMock()
+    mock_feed.feed = {"title": "Some Blog"}
+    mock_feed.entries = [
+        MagicMock(
+            title="Post",
+            link="https://example.com/post",
+            published="Sat, 08 Mar 2026 09:00:00 GMT",
+        )
+    ]
+    mocker.patch("collector.rss_fetcher.feedparser.parse", return_value=mock_feed)
+
+    assert fetch_articles(_DUMMY_FEEDS)[0]["title"] == "Post"

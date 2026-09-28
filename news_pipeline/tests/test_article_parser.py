@@ -75,3 +75,15 @@ def test_fetch_content_speakerdeck_without_key_is_skip(mocker):
     assert text is None
     assert ok is True
     mock_slide.assert_not_called()
+
+
+def test_fetch_content_routes_release_notes(mocker):
+    url = "https://docs.cloud.google.com/bigquery/docs/release-notes#September_24_2026"
+    mock_rn = mocker.patch(
+        "collector.article_parser.release_notes.fetch_release_note",
+        return_value=("day body", True),
+    )
+    mock_get = mocker.patch("collector.article_parser.requests.get")
+    assert fetch_content(url) == ("day body", True)
+    mock_rn.assert_called_once_with(url)
+    mock_get.assert_not_called()

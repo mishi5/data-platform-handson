@@ -2,6 +2,8 @@
 
 Speaker Deck の記事はスライド画像のため trafilatura では取得できない。
 URL を判定して speakerdeck モジュール（PDF→Claudeビジョン書き起こし）へ委譲する。
+Google Cloud のリリースノートはページ全体ではなく日付アンカーの区間だけが本文なので
+release_notes モジュールへ委譲する。
 """
 
 import logging
@@ -9,6 +11,7 @@ import logging
 import requests
 import trafilatura  # type: ignore[import-untyped]
 
+import release_notes
 import speakerdeck
 
 logger = logging.getLogger(__name__)
@@ -37,6 +40,8 @@ def fetch_content(url: str, api_key: str | None = None) -> tuple[str | None, boo
             # api_key 無しでは書き起こせない。リトライ不要のスキップ。
             return None, True
         return speakerdeck.fetch_slide_text(url, api_key)
+    if release_notes.is_release_notes_url(url):
+        return release_notes.fetch_release_note(url)
     try:
         response = requests.get(url, headers=_HEADERS, timeout=30)
         response.raise_for_status()
