@@ -143,6 +143,7 @@ news_pipeline/
 │   ├── article_parser.py # 本文取得（requests + trafilatura）
 │   ├── summarizer.py   # Claude API要約
 │   ├── relevance.py    # データ基盤との関連度判定（TypeSafe Jev）
+│   ├── note_fetcher.py # note のハッシュタグに付いた記事一覧の取得（非公式 API）
 │   ├── notifier.py     # Slack Incoming Webhook通知
 │   └── bq_client.py    # BigQuery書き込み
 └── infra/              # Terraform（Cloud Run・Scheduler・BigQuery）
@@ -168,6 +169,10 @@ news_pipeline/
 - **収集の繰り越し（取りこぼし防止）**: `/collect` は新着を**全件 `raw_articles` に保存**する（切り捨てない）。`max_summarize` は「1実行の要約バジェット＝繰り越し（pending）＋新着の合算上限」。バジェットは古い順に pending を優先消化し、残り枠で新着を即時要約。超過した新着は `content_status='pending'`・`retry_count=0` で繰り越し、次回以降に処理される（本文取得失敗の pending と同じキューを再利用）。
 - **Speaker Deck（スライド）**: feeds に `https://speakerdeck.com/<user>.rss`（ユーザー/組織単位のRSS）を追加すると収集対象になる。本文はスライド画像のため trafilatura では取れない。`article_parser.fetch_content` が Speaker Deck URL を判定し、`speakerdeck.fetch_slide_text` に委譲＝記事ページから PDF を取得し Claude のビジョン入力（`document` ブロック・Haiku 4.5）でプレーンテキストに**書き起こして** content として返す。以降（要約・再採点・deepdive・繰り越し/リトライ）は通常記事と同じ。PDF未発見やAPI 400（ページ超過等）はリトライ不要のスキップ、通信エラーは pending で繰り越す。pypdf 等のテキスト抽出は日本語スライドで文字化けするため不可。
   - **1次フィルタ（コスト最適化）**: PDF取得の前に RSS の `title`+`description` だけで関連度を Jev で見積もり（`relevance.judge_relevance`）、`general/slide_prefilter_threshold`（既定0.1）未満なら PDFビジョン書き起こし(~$0.05)をスキップする。弾いた記事は `raw_articles` に `content_status='filtered'` で記録され再取得されない。description は空の item が多いため title 中心の判定で、判定不能(None)・閾値以上は通す（取りこぼし防止）。Speaker Deck 以外には適用しない。`description` は1次フィルタ専用の一時情報で raw_articles には保存しない。
+- **note のハッシュタグ経路（note_fetcher）**: `note_tags` シートに書いたタグの新着を、非公式 API `GET https://note.com/api/v3/hashtags/{tag}/notes?order=new&page=N`（ログイン不要・1ページ50件）で取得する。note のハッシュタグ RSS は最新25件しか返さず、1日1回の収集では取りこぼすため API を使う。`publish_at` が `note_lookback_days` 日より前の記事・`is_last_page`・`note_max_pages` のいずれかでページ送りを止める。source 名は `note #<tag>`（`note_fetcher.source_name`）。URL は `https://note.com/<urlname>/n/<key>` に組み立て、`rss_fetcher` と同じ正規化・article_id 計算を通すので、著者 RSS 経由の同じ記事とも dedup で一致する。設計は `docs/superpowers/specs/2026-09-29-note-tag-collector-design.md`。
+  - **非公式 API への依存は一覧だけ**: 本文は記事ページから通常どおり trafilatura で取る。認証が必要なエンドポイントは使わず、リクエスト間に1秒待つ。一覧 API にハッシュタグは含まれない（個別記事 API にはあるが1件1リクエストになる）。仕様変更で失敗してもタグ単位で warning を出して続行し、RSS の収集は止めない。有料記事（`price > 0`、無料部分しか取れない）と `TextNote` 以外は取り込まない。
+  - **1次フィルタ**: タグ経路は著者を選んでいない流入なので、本文取得の前に一覧 API の `body`（本文冒頭240字）と title を Jev で判定し、`general/note_prefilter_threshold`（既定0.1）未満は `content_status='filtered'`（終端）で保存する。記事 dict の一時情報 `origin="note_tag"` で見分けるため、feeds に登録した note の著者 RSS の記事には適用しない。実測では `#データエンジニアリング` の新着50件中30件が 0.5 以上、競艇予想などの対象外は 0.01〜0.10 に分かれた。
+  - **タグの選び方**: 流量の多いタグ（`#データ分析` 約3,000件/日、`#ClaudeCode` 約400件/日）は入れていない。1日のリクエストが数十回に増えるうえ、命中は新着50件中0〜1件だった。`order=popular` / `order=hot` は note の読者層での人気順で技術的な関連度とは無関係なので使わない。タグの総件数と関連タグは `GET https://note.com/api/v2/hashtags/{tag}` の `count` / `relatedHashtags` で調べられる。`#DBT` は弁証法的行動療法と衝突する（Jev で落ちる）。
 - **要約のリテラル `\n` 対策**: tool use 出力でモデルが改行を二重エスケープすることがあり、そのままだと Slack に「\n」が表示される。`summarizer._unescape_literal_newlines` が保存前に summary のリテラル `\n` を実改行へ置換する（対象は summary のみ）。ただし記事が改行文字自体を扱うケース（`'\n'`・`「\n」`・`(\n)` などクォート/カッコ囲み）は正規表現の lookbehind/lookahead で除外して保持する。既存37件は 2026-08-10 に BigQuery の `REPLACE(summary, '\n\\n', '\n\n')` で backfill 済み（BigQuery の REGEXP_REPLACE は RE2 で lookaround 不可のため単純置換）。
 - **対象領域ゲート（relevance_score）**: 採点は「読む価値（importance_score）」と「データ基盤との関連度（relevance_score）」の2軸。良質でも対象領域外（AWS の IAM/セキュリティ、ネットワーク運用、開発環境Tips、データ基盤に紐づかない AI コーディング論など）の記事を落とすための軸で、これが無いと importance だけでは 0.7〜0.8 に大量のノイズが混ざる。判定原理は「AI・IaC・クラウドという技法が登場するか」ではなく**その技法の適用対象がデータ／データ基盤か**の一点で、`relevance.DOMAIN_DEFINITION`（Jev 用・英語）に対象/対象外と対比例を置く。Claude の importance 判断用に同じ原理の日本語版 `summarizer._DOMAIN_DEFINITION` もあり、定義を変えるときは両方を揃える。
   - **キャップではなくゲート**: relevance で importance を減点・上限クリップする方式は採らない。閾値を変えるたびに全件再採点が必要になり、importance の意味（質が低いのか領域外なのか）も判別できなくなるため。relevance は素のまま `summaries.relevance_score` に保存し、`main.passes_thresholds` が2軸で足切りする。閾値調整は settings シートの1セル編集だけで済む。
@@ -218,12 +223,19 @@ news_pipeline/
   - 著者slugがURLに無いサイト（一般メディア等）はブロック不可。`block_users` を書いても一致しなければ無視されるだけで無害。
   - Zenn の organization 記事（`zenn.dev/<org>/...`）は第1セグメントが org slug なので org 単位のブロックになる。
   - ブロックは収集時（RSS取得直後）と通知時（保存済みサマリーの通知前）の両方で適用される。
+- **note_tags シート**: `tag | category | block_users` の3列。note のハッシュタグ経路の収集対象（feeds シートは RSS 専用のまま分けている）。
+  - `tag`: ハッシュタグ（`#` は付けても付けなくてもよい）。
+  - `category` / `block_users`: feeds シートと同じ意味。source 名 `note #<tag>` をキーに `config_loader._merge_note_tags` が feeds の category・ブロック設定へ合流させるので、通知時の分類・ブロックも同じ仕組みで効く（feeds 側に同名 source があれば feeds 優先）。`block_users` には note の urlname を書く（照合位置は `path1` 固定）。
+  - シートが無い・空なら note のタグ経路が無いだけで、RSS の収集は通常どおり動く。
 - **settings シート**: `group | key | value` の3列（namespace 方式）。`group` の出現順が通知順になる。
   - `general / max_summarize`: 1実行で要約する最大件数（繰り越し pending ＋ 新着の合算バジェット）
   - `general / importance_threshold`: summaries に残す importance_score の下限（未設定は 0.65）
   - `general / relevance_threshold`: データ基盤との関連度（Jev の確率）の下限（未設定は 0.2）。対象外は 0.05 前後、対象は 0.9 以上に分かれ、境界の記事だけが中間に来る。緩めたい場合はこの値を下げる（再採点は不要）
   - `general / max_content_retries`: 本文取得の最大リトライ回数（未設定は 3）
   - `general / slide_prefilter_threshold`: Speaker Deck の PDF を取得する前の関連度フィルタ下限（未設定は 0.1）。低いほど通しやすい。title だけの判定は本文ありより低く出るため `relevance_threshold` より下げている（`filtered` は終端で再取得されない）
+  - `general / note_lookback_days`: note のタグ経路で何日前の記事まで遡るか（未設定は 2）。1日1回の実行に1日分の重なりを持たせている（重複は dedup で除く）
+  - `general / note_max_pages`: タグ1つあたりの最大ページ数（未設定は 3、1ページ50件）。止める条件が機能しない場合の上限
+  - `general / note_prefilter_threshold`: note のタグ経路の1次フィルタ下限（未設定は 0.1）
   - `general / personalize_top_tags`: お気に入り記事のタグ頻度上位N個を採点の加点ヒントに使う（未設定は 5、`0` で無効）
   - `general / batch_budget_usd`: 1回のバッチ（/recalculate・/resummarize）で使う API コストの上限（$）。未設定・0 で無制限。超えるとその時点で停止する
   - `general / recalculate_limit`: 1回の /recalculate で再採点する最大件数（未設定は 50）
@@ -232,4 +244,4 @@ news_pipeline/
   - `<category> / max_notify`: そのカテゴリの通知件数上限（未設定は5）
   - `<category> / label`: Slack 通知のヘッダー表示名（未設定はカテゴリ名、`other` は `📰 その他`）
 
-通知は feeds の `category` ごとに独立した Slack メッセージとして送られる。カテゴリの追加・削除・件数変更は feeds/settings シートの編集だけで完結する。
+通知は feeds（と note_tags）の `category` ごとに独立した Slack メッセージとして送られる。カテゴリの追加・削除・件数変更は feeds/settings シートの編集だけで完結する。

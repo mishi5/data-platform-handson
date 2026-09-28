@@ -1,9 +1,16 @@
+import os
+import sys
 from unittest.mock import MagicMock
+
+# config_loader は兄弟モジュール（note_fetcher）を bare import するため collector を path に追加
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "collector"))
 
 from collector.config_loader import (
     _load_feed_blocks,
     _load_feed_categories,
+    _load_note_tags,
     _load_settings,
+    _merge_note_tags,
 )
 
 
@@ -120,6 +127,58 @@ def test_load_feed_blocks_skips_rows_without_users():
         ],
     )
     assert _load_feed_blocks(ss) == {}
+
+
+# --- note_tags シート ----------------------------------------------------------
+
+
+def test_load_note_tags_parses_rows():
+    ss = _spreadsheet_with(
+        "note_tags",
+        [
+            ["tag", "category", "block_users"],
+            ["#データ基盤", "note", "spam1, spam2"],
+            [" dbt ", "", ""],
+            ["", "note", "x"],  # tag 空欄は読み飛ばす
+            ["BigQuery"],  # 列不足
+        ],
+    )
+    assert _load_note_tags(ss) == [
+        {"tag": "データ基盤", "category": "note", "block_users": {"spam1", "spam2"}},
+        {"tag": "dbt", "category": "", "block_users": set()},
+        {"tag": "BigQuery", "category": "", "block_users": set()},
+    ]
+
+
+def test_load_note_tags_missing_sheet_is_empty():
+    ss = _spreadsheet_with("feeds", [])  # note_tags シートが無い
+    assert _load_note_tags(ss) == []
+
+
+def test_merge_note_tags_registers_category_and_blocks_by_source_name():
+    categories = {"Zenn": "other"}
+    blocks: dict = {}
+    _merge_note_tags(
+        [
+            {"tag": "データ基盤", "category": "note", "block_users": {"spam1"}},
+            {"tag": "dbt", "category": "", "block_users": set()},
+        ],
+        categories,
+        blocks,
+    )
+    assert categories == {"Zenn": "other", "note #データ基盤": "note", "note #dbt": ""}
+    # note の URL は note.com/<urlname>/n/<key> なので照合位置は path1 固定
+    assert blocks == {"note #データ基盤": {"users": {"spam1"}, "location": "path1"}}
+
+
+def test_merge_note_tags_keeps_feeds_entry_on_name_clash():
+    categories = {"note #dbt": "official"}
+    blocks = {"note #dbt": {"users": {"a"}, "location": "path1"}}
+    _merge_note_tags(
+        [{"tag": "dbt", "category": "note", "block_users": {"b"}}], categories, blocks
+    )
+    assert categories == {"note #dbt": "official"}
+    assert blocks == {"note #dbt": {"users": {"a"}, "location": "path1"}}
 
 
 # --- 一時障害へのリトライ ----------------------------------------------------

@@ -34,6 +34,8 @@ from deepdiver import deepdive_article
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fetch_retry import next_fetch_state
+from note_fetcher import ORIGIN as NOTE_TAG_ORIGIN
+from note_fetcher import fetch_articles as fetch_note_articles
 from notifier import (
     format_favorites_blocks,
     send_error_notification,
@@ -89,6 +91,15 @@ _DEFAULT_RESUMMARIZE_DAYS = 7
 # より下げる（filtered は終端で再取得されない）。title だけの判定では 0.1 で関連あり
 # のスライドを落としたのは 68件中1件だった。
 _DEFAULT_SLIDE_PREFILTER_THRESHOLD = 0.1
+# note のハッシュタグ経路（note_fetcher）の設定。
+# note_lookback_days: 1日1回の実行に1日分の重なりを持たせる（重複は dedup で除く）。
+# note_max_pages: 対象タグは通常1ページで止まる。止める条件が機能しない場合の上限。
+# note_prefilter_threshold: 本文取得前に title+冒頭240字で Jev 判定する下限。
+#   タグ経路は著者を選んでいない流入なので、要約の前に対象外を除く。対象の記事は
+#   冒頭だけでも 0.5 以上、競艇予想などの対象外は 0.01〜0.10 に分かれた。
+_DEFAULT_NOTE_LOOKBACK_DAYS = 2
+_DEFAULT_NOTE_MAX_PAGES = 3
+_DEFAULT_NOTE_PREFILTER_THRESHOLD = 0.1
 # personalize_top_tags: お気に入り記事のタグ頻度上位N個を採点の加点ヒントに使う。
 # 0 で無効（BigQuery クエリ自体をスキップ）。
 _DEFAULT_PERSONALIZE_TOP_TAGS = 5
@@ -245,6 +256,7 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
 
     config = load_config()
     feeds: dict[str, str] = config.get("feeds", {})
+    note_tags: list[str] = config.get("note_tags", [])
     keywords: list[str] = config.get("keywords", [])
     feed_blocks: dict = config.get("feed_blocks", {})
     settings: dict = config.get("settings", {})
@@ -262,6 +274,13 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
     slide_prefilter_threshold: float = float(
         general.get("slide_prefilter_threshold", _DEFAULT_SLIDE_PREFILTER_THRESHOLD)
     )
+    note_lookback_days: int = int(
+        general.get("note_lookback_days", _DEFAULT_NOTE_LOOKBACK_DAYS)
+    )
+    note_max_pages: int = int(general.get("note_max_pages", _DEFAULT_NOTE_MAX_PAGES))
+    note_prefilter_threshold: float = float(
+        general.get("note_prefilter_threshold", _DEFAULT_NOTE_PREFILTER_THRESHOLD)
+    )
     log["keywords"] = keywords
 
     bq = BQClient(project=PROJECT_ID)
@@ -277,10 +296,19 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
         # 0.5. お気に入り由来の関心タグ（採点のパーソナライズ用。失敗しても続行）
         favorite_tags = _load_favorite_tags(bq, general)
 
-        # 1. RSS 取得
-        articles = fetch_articles(feeds)
+        # 1. RSS 取得 ＋ note のハッシュタグ経路（note_tags シート）
+        rss_articles = fetch_articles(feeds)
+        note_articles = fetch_note_articles(
+            note_tags, note_lookback_days, note_max_pages
+        )
+        articles = rss_articles + note_articles
         log["articles_fetched"] = len(articles)
-        logger.info("[collect] fetched %d articles from RSS", len(articles))
+        logger.info(
+            "[collect] fetched %d articles (RSS %d, note tags %d)",
+            len(articles),
+            len(rss_articles),
+            len(note_articles),
+        )
 
         # 1.5. ブロックユーザーの記事を除外
         before_block = len(articles)
@@ -304,29 +332,40 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
         log["new_articles"] = len(new_articles)
         logger.info("[collect] %d new articles", len(new_articles))
 
-        # 2.5. Speaker Deck の1次フィルタ（PDF取得前に title+description で関連度判定）。
-        #      高コストな PDF ビジョン書き起こしの前に明らかな無関係を除外する。
+        # 2.5. 1次フィルタ（本文取得前に title+description で関連度判定）。
+        #      - Speaker Deck: 高コストな PDF ビジョン書き起こしの前に無関係を除外する
+        #      - note のタグ経路: 著者を選んでいない流入なので、要約の前に対象外を除く
+        #        （description は本文冒頭240字）。RSS 経由の note 記事は対象外
         #      判定不能（None）や閾値以上は通す（取りこぼし防止）。弾いた記事は
         #      raw_articles に content_status='filtered' で記録し再取得しない。
         survivors: list[dict] = []
-        prefiltered = 0
+        prefiltered = {"slide": 0, "note": 0}
         for a in new_articles:
             if is_speakerdeck_url(a["url"]):
-                score = judge_relevance(
-                    a["title"], a.get("description", ""), TYPESAFE_API_KEY
-                )
-                if score is not None and score < slide_prefilter_threshold:
-                    a["content"] = None
-                    a["content_status"] = "filtered"
-                    a["retry_count"] = 0
-                    prefiltered += 1
-                    continue
+                kind, threshold = "slide", slide_prefilter_threshold
+            elif a.get("origin") == NOTE_TAG_ORIGIN:
+                kind, threshold = "note", note_prefilter_threshold
+            else:
+                survivors.append(a)
+                continue
+            score = judge_relevance(
+                a["title"], a.get("description", ""), TYPESAFE_API_KEY
+            )
+            if score is not None and score < threshold:
+                a["content"] = None
+                a["content_status"] = "filtered"
+                a["retry_count"] = 0
+                prefiltered[kind] += 1
+                continue
             survivors.append(a)
-        if prefiltered:
+        if any(prefiltered.values()):
             logger.info(
-                "[collect] slide prefilter skipped %d slides (threshold=%.2f)",
-                prefiltered,
+                "[collect] prefilter skipped %d slides (threshold=%.2f), "
+                "%d note tag articles (threshold=%.2f)",
+                prefiltered["slide"],
                 slide_prefilter_threshold,
+                prefiltered["note"],
+                note_prefilter_threshold,
             )
 
         # to_summarize: この実行で本文取得に成功した記事（繰り越し + 新着）
@@ -453,9 +492,10 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
 
         # 7. raw_articles 保存（全新着＝取りこぼしゼロ。filtered も記録し再取得を防ぐ）
         if new_articles:
-            # description は1次フィルタ用の一時情報。スキーマ外なので保存前に除去。
+            # description・origin は1次フィルタ用の一時情報。スキーマ外なので保存前に除去。
             for a in new_articles:
                 a.pop("description", None)
+                a.pop("origin", None)
             bq.insert_raw_articles(new_articles)
             logger.info("[collect] saved %d to raw_articles", len(new_articles))
 

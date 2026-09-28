@@ -284,6 +284,203 @@ def test_prefilter_not_applied_to_non_speakerdeck(
     assert mock_summarize.call_count == 2
 
 
+def _note_tag_article(i: int, desc: str = "冒頭") -> dict:
+    return {
+        "article_id": f"nt{i}",
+        "title": f"Note {i}",
+        "url": f"https://note.com/writer/n/n{i}",
+        "source": "note #dbt",
+        "published_at": "2026-09-28T00:00:00+09:00",
+        "collected_at": "2026-09-28T01:00:00Z",
+        "description": desc,
+        "origin": "note_tag",
+    }
+
+
+def _config_with_note_tags(general_extra: dict | None = None) -> dict:
+    config = _config(max_summarize="10")
+    config["note_tags"] = ["dbt"]
+    config["settings"]["general"].update(general_extra or {})
+    return config
+
+
+def _empty_bq(mock_bqclass) -> MagicMock:
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_existing_urls.return_value = set()
+    bq.get_pending_articles.return_value = []
+    bq.get_existing_summary_ids.return_value = set()
+    return bq
+
+
+@patch("collector.main.fetch_note_articles")
+@patch("collector.main.summarize_article")
+@patch("collector.main.fetch_content")
+@patch("collector.main.fetch_articles")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_note_tag_prefilter_skips_low_relevance(
+    mock_bqclass,
+    mock_load_config,
+    mock_fetch_articles,
+    mock_fetch_content,
+    mock_summarize,
+    mock_fetch_notes,
+    mock_relevance,
+):
+    """タグ経路の note 記事は本文取得前に title+冒頭で判定し、閾値未満は filtered で保存する。"""
+    mock_load_config.return_value = _config_with_note_tags()
+    bq = _empty_bq(mock_bqclass)
+    mock_fetch_articles.return_value = []
+    mock_fetch_notes.return_value = [
+        _note_tag_article(0, "競艇予想"),
+        _note_tag_article(1),
+    ]
+    # 1件目=低スコア(弾く), 2件目=高スコア(通す), 3回目は2件目の要約後の本文判定
+    mock_relevance.side_effect = [0.05, 0.9, 0.9]
+    mock_fetch_content.return_value = ("body", True)
+    mock_summarize.return_value = {"summary": "s", "tags": [], "importance_score": 0.9}
+
+    main_mod._run_collect()
+
+    saved = bq.insert_raw_articles.call_args[0][0]
+    statuses = {a["url"]: a["content_status"] for a in saved}
+    assert statuses["https://note.com/writer/n/n0"] == "filtered"
+    assert statuses["https://note.com/writer/n/n1"] == "ok"
+    # origin・description は一時情報なので保存前に除去される
+    assert all("origin" not in a and "description" not in a for a in saved)
+    assert mock_relevance.call_args_list[0].args[:2] == ("Note 0", "競艇予想")
+    assert mock_fetch_content.call_count == 1
+    assert mock_summarize.call_count == 1
+
+
+@patch("collector.main.fetch_note_articles")
+@patch("collector.main.summarize_article")
+@patch("collector.main.fetch_content")
+@patch("collector.main.fetch_articles")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_note_prefilter_threshold_from_settings(
+    mock_bqclass,
+    mock_load_config,
+    mock_fetch_articles,
+    mock_fetch_content,
+    mock_summarize,
+    mock_fetch_notes,
+    mock_relevance,
+):
+    """note_prefilter_threshold は settings で変えられる（既定 0.1 より上げると 0.3 も弾く）。"""
+    mock_load_config.return_value = _config_with_note_tags(
+        {"note_prefilter_threshold": "0.5"}
+    )
+    bq = _empty_bq(mock_bqclass)
+    mock_fetch_articles.return_value = []
+    mock_fetch_notes.return_value = [_note_tag_article(0)]
+    mock_relevance.return_value = 0.3
+
+    main_mod._run_collect()
+
+    saved = bq.insert_raw_articles.call_args[0][0]
+    assert saved[0]["content_status"] == "filtered"
+    mock_fetch_content.assert_not_called()
+
+
+@patch("collector.main.fetch_note_articles")
+@patch("collector.main.summarize_article")
+@patch("collector.main.fetch_content")
+@patch("collector.main.fetch_articles")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_note_article_from_rss_is_not_prefiltered(
+    mock_bqclass,
+    mock_load_config,
+    mock_fetch_articles,
+    mock_fetch_content,
+    mock_summarize,
+    mock_fetch_notes,
+    mock_relevance,
+):
+    """feeds に登録した note の著者 RSS の記事（origin なし）は1次フィルタの対象外。"""
+    mock_load_config.return_value = _config_with_note_tags()
+    _empty_bq(mock_bqclass)
+    rss_note = _note_tag_article(0)
+    del rss_note["origin"]
+    mock_fetch_articles.return_value = [rss_note]
+    mock_fetch_notes.return_value = []
+    mock_fetch_content.return_value = ("body", True)
+    mock_summarize.return_value = {"summary": "s", "tags": [], "importance_score": 0.9}
+
+    main_mod._run_collect()
+
+    # 関連度は要約後に本文で1回だけ判定する
+    assert [c.args[1] for c in mock_relevance.call_args_list] == ["body"]
+
+
+@patch("collector.main.fetch_note_articles")
+@patch("collector.main.fetch_articles")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_note_fetch_uses_note_tags_and_defaults(
+    mock_bqclass, mock_load_config, mock_fetch_articles, mock_fetch_notes
+):
+    """note_tags と settings の既定値（lookback 2日・3ページ）で note を取得する。"""
+    mock_load_config.return_value = _config_with_note_tags()
+    _empty_bq(mock_bqclass)
+    mock_fetch_articles.return_value = []
+    mock_fetch_notes.return_value = []
+
+    main_mod._run_collect()
+
+    mock_fetch_notes.assert_called_once_with(["dbt"], 2, 3)
+
+
+@patch("collector.main.fetch_note_articles")
+@patch("collector.main.fetch_articles")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_note_fetch_settings_override(
+    mock_bqclass, mock_load_config, mock_fetch_articles, mock_fetch_notes
+):
+    mock_load_config.return_value = _config_with_note_tags(
+        {"note_lookback_days": 5, "note_max_pages": 1}
+    )
+    _empty_bq(mock_bqclass)
+    mock_fetch_articles.return_value = []
+    mock_fetch_notes.return_value = []
+
+    main_mod._run_collect()
+
+    mock_fetch_notes.assert_called_once_with(["dbt"], 5, 1)
+
+
+@patch("collector.main.fetch_note_articles")
+@patch("collector.main.summarize_article")
+@patch("collector.main.fetch_content")
+@patch("collector.main.fetch_articles")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_note_tag_raw_payload_fits_bigquery_schema(
+    mock_bqclass,
+    mock_load_config,
+    mock_fetch_articles,
+    mock_fetch_content,
+    mock_summarize,
+    mock_fetch_notes,
+):
+    """タグ経路の記事（origin 付き）も raw_articles のスキーマに収まる形で保存される。"""
+    mock_load_config.return_value = _config_with_note_tags()
+    bq = _empty_bq(mock_bqclass)
+    mock_fetch_articles.return_value = []
+    mock_fetch_notes.return_value = [_note_tag_article(0)]
+    mock_fetch_content.return_value = ("body", True)
+    mock_summarize.return_value = {"summary": "s", "tags": [], "importance_score": 0.9}
+
+    main_mod._run_collect()
+
+    payload_keys = set(bq.insert_raw_articles.call_args[0][0][0].keys())
+    assert payload_keys <= _terraform_schema_fields("raw_articles")
+
+
 @patch("collector.main.summarize_article")
 @patch("collector.main.fetch_content")
 @patch("collector.main.fetch_articles")

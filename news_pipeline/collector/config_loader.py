@@ -12,6 +12,7 @@ import time
 import google.auth
 import gspread
 from google.auth.transport.requests import Request
+from note_fetcher import source_name as note_source_name
 
 logger = logging.getLogger(__name__)
 
@@ -78,14 +79,19 @@ def _load_config_once() -> dict:
     feed_categories = _load_feed_categories(spreadsheet)
     feed_blocks = _load_feed_blocks(spreadsheet)
     settings = _load_settings(spreadsheet)
+    note_tags = _load_note_tags(spreadsheet)
+    _merge_note_tags(note_tags, feed_categories, feed_blocks)
     logger.info(
-        "[config_loader] loaded %d feeds, %d keywords, %d setting groups from Sheets",
+        "[config_loader] loaded %d feeds, %d note tags, %d keywords, "
+        "%d setting groups from Sheets",
         len(feeds),
+        len(note_tags),
         len(keywords),
         len(settings),
     )
     return {
         "feeds": feeds,
+        "note_tags": [t["tag"] for t in note_tags],
         "keywords": keywords,
         "feed_categories": feed_categories,
         "feed_blocks": feed_blocks,
@@ -144,6 +150,46 @@ def _load_feed_blocks(spreadsheet) -> dict[str, dict]:
     except Exception as e:
         logger.warning("[config_loader] failed to load feed blocks: %s", e)
         return {}
+
+
+def _load_note_tags(spreadsheet) -> list[dict]:
+    """note_tags シート（tag | category | block_users）を行ごとの dict のリストで返す。
+
+    tag は先頭の # を除去する（書き方の揺れを吸収）。tag が空の行は読み飛ばす。
+    シートが無い・読めない場合は空リスト（note のタグ経路が無いだけで RSS は続行する）。
+    """
+    try:
+        ws = spreadsheet.worksheet("note_tags")
+        rows = ws.get_all_values()[1:]  # 1行目はヘッダー
+        result: list[dict] = []
+        for row in rows:
+            tag = row[0].strip().lstrip("#").strip() if row else ""
+            if not tag:
+                continue
+            category = row[1].strip() if len(row) >= 2 else ""
+            users_cell = row[2] if len(row) >= 3 else ""
+            users = {u.strip() for u in users_cell.split(",") if u.strip()}
+            result.append({"tag": tag, "category": category, "block_users": users})
+        return result
+    except Exception as e:
+        logger.warning("[config_loader] failed to load note_tags sheet: %s", e)
+        return []
+
+
+def _merge_note_tags(
+    note_tags: list[dict], feed_categories: dict[str, str], feed_blocks: dict[str, dict]
+) -> None:
+    """note のタグ経路の source 名で category・ブロックを登録する（破壊的に更新）。
+
+    category とブロックは source 名で収集時・通知時の両方から引かれるため、
+    feeds シートと同じ辞書に合流させる。feeds 側に同名 source があれば feeds を優先する。
+    note の URL は note.com/<urlname>/n/<key> なので照合位置は path1 固定。
+    """
+    for t in note_tags:
+        source = note_source_name(t["tag"])
+        feed_categories.setdefault(source, t["category"])
+        if t["block_users"] and source not in feed_blocks:
+            feed_blocks[source] = {"users": t["block_users"], "location": "path1"}
 
 
 def _load_keywords(spreadsheet) -> list[str]:
