@@ -88,7 +88,7 @@
 </div>
 </div>
 
-<h2>1. この資料で決めること</h2>
+<h2>1. このケーススタディでの論点と判断事例</h2>
 
 <p>列指向 DWH でスタースキーマを保つ理由は<strong>性能ではなく意味</strong>である。BigQuery では <strong>1枚の大きな非正規化テーブル（OBT: One Big Table）</strong>、つまりファクト 1 行にディメンションの属性を全て結合して並べた表の方が実測で速いことが分かっており、性能を根拠にした star の擁護はもう成立しない。それでも star を残すのは、<code>dim_company</code> の属性がどの時点の値かを 1 箇所で決められること、<code>fct_scout</code> と <code>fct_placement</code> を同じ <code>company_key</code> で横断できること、この 2 点のためである。</p>
 
@@ -96,7 +96,7 @@
 
 <div class="table-wrap">
 <table>
-<tr><th>論点</th><th>決定</th></tr>
+<tr><th>論点</th><th>判断</th></tr>
 <tr><td>正本はどれか</td><td><strong>star が正本</strong>。<code>fct_scout_funnel</code> + <code>dim_member</code> / <code>dim_scout_sender</code> / <code>dim_job_posting</code> をマートの中心に置く</td></tr>
 <tr><td>OBT の位置づけ</td><td><strong>配布物</strong>。star の下流に <code>materialized='table'</code> の <code>obt_scout_funnel</code> を置き、BI と逆 ETL はこの表だけを見る</td></tr>
 <tr><td>OBT を正本にする条件</td><td>§6 の判断基準表の 1 行目に当たるときだけ（単発の分析・PoC・star をまだ持っていない・1000 万行未満）。閾値の定義は 6 節に一本化する</td></tr>

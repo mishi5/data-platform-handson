@@ -91,7 +91,7 @@
 </ul>
 </div>
 
-<h2>1. この資料で決めること</h2>
+<h2>1. このケーススタディでの論点と判断事例</h2>
 
 <p>クチコミ・スカウト・応募という別々のビジネスプロセスの数字を、同じ企業・同じ月で横に並べる方法を決める。並べるための技法がドリルアクロス（複数のファクトを同じディメンションで並べる横断集計）で、その前提がコンフォームドディメンション（複数のファクトで共有する同一定義のディメンション）である。あわせて「集約テーブルを何本持つか」と「エンティティ表 <code>agg_company_entity</code> に指標を入れてよい条件」を決める。</p>
 
@@ -100,7 +100,7 @@
 <div class="table-wrap">
 <table>
 <caption style="text-align:left;color:var(--muted);font-size:.85rem;padding-bottom:6px;">この資料で確定する判断</caption>
-<thead><tr><th>論点</th><th>決定</th><th>根拠</th><th>節</th></tr></thead>
+<thead><tr><th>論点</th><th>判断</th><th>根拠</th><th>節</th></tr></thead>
 <tbody>
 <tr><td>複数ファクトを横に並べる方法</td><td>ファクトごとに同じ行ヘッダへ集約してから <code>FULL OUTER JOIN</code>。ファクト同士を FK で直接 JOIN しない</td><td>結合によって行が増幅し、件数が二重に数えられる（Soul 2）</td><td>2, 3, 5</td></tr>
 <tr><td>企業の行ヘッダ</td><td><code>dim_company</code> の <code>is_current</code> 版へ <code>company_id</code> 経由で統一した <code>company_key</code>。当時の属性で切りたいときは行ヘッダに属性を足す</td><td>SCD2 版がファクトごとに違うと同じ企業が割れる</td><td>2, 5</td></tr>

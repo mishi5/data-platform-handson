@@ -81,7 +81,7 @@
 </ul>
 </div>
 
-<h2>1. この資料で決めること</h2>
+<h2>1. このケーススタディでの論点と判断事例</h2>
 
 <p>同じソースイベントから、どの型のファクトを作るか。<strong>型は問いで決まる。ソースの形では決まらない。</strong></p>
 
@@ -89,7 +89,7 @@
 
 <div class="table-wrap">
 <table>
-<thead><tr><th>決めること</th><th>この資料の結論</th></tr></thead>
+<thead><tr><th>論点</th><th>判断</th></tr></thead>
 <tbody>
 <tr><td>型の選び方</td><td>問いの時制で決める。「いつ何件」＝トランザクション／「その日いくつ」＝定期／「どこまで進んだ・何日かかった」＝累積。ただし数えたい事象のトランザクションファクトが無い場合は例外（応募数は §6 の2行目）</td></tr>
 <tr><td>型は排他か</td><td>排他ではない。1プロセスに3型が同居してよい（選考は <code>fct_selection_event</code> と <code>fct_application_pipeline</code> の両方）</td></tr>

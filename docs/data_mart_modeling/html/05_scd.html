@@ -88,7 +88,7 @@
 <p>用語の確認。<strong>ディメンション</strong>（<code>dim_*</code>）は集計の切り口となる属性の表、<strong>ファクト</strong>（<code>fct_*</code>）は出来事と数値の表、<strong>サロゲートキー</strong>（<code>*_key</code>）はソースの ID とは別に DWH 側で振る代理キーを指す。<strong>SCD</strong>（Slowly Changing Dimension）はディメンションの属性が時間とともに変わったときの持ち方で、Type 0〜7 の番号で呼び分ける。<strong>縮約ディメンション</strong>は、あるディメンションの属性の一部だけを持つ粗い版（担当者に対するエージェンシーなど）である。</p>
 </div>
 
-<h2>1. この資料で決めること</h2>
+<h2>1. このケーススタディでの論点と判断事例</h2>
 
 <p>ディメンションの属性が変わったとき、古い値をどう残すか。残し方は Type 0〜7 の 8 通りあり、それぞれ「行が増えるか」「ファクトから見えるのは版か現在値か」が違う。この資料はその選択と、選んだ結果として必ず必要になる <strong>時点結合（as-of join。イベント時点の版でファクトのキーを解決する結合）</strong> の実装を決める。</p>
 
@@ -96,7 +96,7 @@
 <table>
 <caption style="text-align:left;color:var(--muted);font-size:.85rem;padding-bottom:6px;">この資料で確定させる判断</caption>
 <thead>
-<tr><th>決めること</th><th>決定</th><th>根拠</th></tr>
+<tr><th>論点</th><th>判断</th><th>根拠</th></tr>
 </thead>
 <tbody>
 <tr><td>企業の履歴</td><td><code>dim_company</code> は SCD2。<code>name</code> だけ Type1 上書き（＝ Type 6 相当）</td><td>数万行 × 年単位の変化。行の増え方が問題にならない。社名は集計軸ではない</td></tr>

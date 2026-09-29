@@ -90,13 +90,13 @@
 </div>
 </div>
 
-<h2>1. この資料で決めること</h2>
+<h2>1. このケーススタディでの論点と判断事例</h2>
 
 <p>ディメンションとファクトの関係は普通は多対一で、ファクト 1 行に対してディメンション値は 1 つに定まる。CareerVoice にはこの多対一が成り立たない箇所が 3 種類ある。会員の希望職種は 1 人に複数（<code>M002</code> は <code>ENG-BE</code> と <code>ENG-DATA</code> の 2 件）、企業グループと職種は深さが揃わない階層（<code>ENG-DATA</code> は level2 で終端）、スカウトの送信主体は企業とエージェントという別種のエンティティである。この資料はこの 3 つを、ブリッジテーブル（ファクトとディメンションの間に挟んで多対多を表す表）・平坦化・異種ディメンション（supertype。種別の違う対象を共通属性で 1 本にまとめたディメンション）のどれで持つかを決める。</p>
 
 <div class="table-wrap">
 <table>
-<thead><tr><th>問題</th><th>題材の具体</th><th>手段 A</th><th>手段 B</th><th>この資料の決定</th></tr></thead>
+<thead><tr><th>論点</th><th>題材の具体</th><th>手段 A</th><th>手段 B</th><th>判断</th></tr></thead>
 <tbody>
 <tr><td>多値</td><td>会員の希望職種。<code>member_desired_job_categories</code>、<code>M002</code> は 2 件</td><td><code>br_member_desired_job_category</code> + <code>weighting_factor</code></td><td><code>dim_member</code> に <code>desired_job_categories ARRAY&lt;STRUCT&lt;…&gt;&gt;</code> を内包</td><td><strong>ブリッジ</strong>。ARRAY は §4・§6 の条件下での対案</td></tr>
 <tr><td>不揃い階層（企業グループ）</td><td><code>companies.parent_company_id</code>。<code>C003</code>（ヒノデ物流）→ <code>C001</code>（アオゾラ商事）</td><td><code>br_company_hierarchy</code>（祖先-子孫 + <code>depth</code>）</td><td>固定深さの位置属性に平坦化</td><td><strong>階層ブリッジ</strong>。深さが不定で、買収で伸びる</td></tr>
