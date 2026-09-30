@@ -46,14 +46,14 @@
 <p class="meta">データマート設計 02 ／ 参照: DWT ch.4, Fact Tables, Design Tip #43 #50 #77 #95 ／ 再解釈: Functional Data Engineering（snapshotting）, dbt BigQuery configs</p>
 
 <div class="aside">
-<p><strong>この資料で使う題材</strong></p>
-<p>CareerVoice は、社員・元社員の企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントのスカウト・応募から入社までの選考を1つのプラットフォームで扱う架空のサービスである。分析側が答えたいのは「その日いくつの求人が掲載中だったか」「スカウトの送信から入社までどこで人数が減るか」「契約したスカウト枠をどれだけ使ったか」といった問いで、この資料はそれらに答えるためのファクト表の型を決める。</p>
+<p><strong>この章で使う題材</strong></p>
+<p>このシリーズは、架空サービス CareerVoice を題材にしたデータマート設計のケーススタディで、全11章（DM00〜DM10）からなる。CareerVoice は、社員・元社員の企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントのスカウト・応募から入社までの選考を1つのプラットフォームで扱う架空のサービスである。分析側が答えたいのは「その日いくつの求人が掲載中だったか」「スカウトの送信から入社までどこで人数が減るか」「契約したスカウト枠をどれだけ使ったか」といった問いで、この章はそれらに答えるためのファクト表の型を決める。</p>
 
-<p><strong>この資料に出るサンプル ID</strong>（日付は全て 2026 年、時刻は JST）</p>
+<p><strong>この章に出るサンプル ID</strong>（日付は全て 2026 年、時刻は JST）</p>
 <p>サンプルの日付はすべて 2026 年で、<strong>基準日 2026-09-01</strong> より前に起きた事実。会員・企業の行は「登録時点の値 → その後の変化」の順で書いている。</p>
 <div class="table-wrap">
 <table class="sample-ids">
-<thead><tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr></thead>
+<thead><tr><th>ID</th><th>何か</th><th>この章で使う事実</th></tr></thead>
 <tbody>
 <tr><td><code>C001</code></td><td>企業</td><td>アオゾラ商事（商社、従業員 1000 人以上、上場）。求人 <code>J001</code> の掲載元であり、契約 <code>K001</code> の契約企業</td></tr>
 <tr><td><code>C002</code></td><td>企業</td><td>ネクスト技研（IT、従業員 50〜299 人、非上場）。求人 <code>J002</code> の掲載元</td></tr>
@@ -72,16 +72,16 @@
 </table>
 </div>
 
-<p><strong>この資料で使う主なテーブル</strong></p>
+<p><strong>この章で使う主なテーブル</strong></p>
 <ul>
 <li><strong>ソース（<code>src_careervoice</code>）</strong>: 業務システムの表を BigQuery に複製したもの。<code>job_postings</code>（1行 = 1求人の現在の状態。掲載日・終了日・掲載元）、<code>applications</code>（1行 = 1応募のヘッダ。誰がどの求人にどのチャネルで応募したか）、<code>selection_events</code>（1行 = 1ステージ遷移。書類・一次面接・内定・辞退など）、<code>scouts</code>（1行 = 1スカウト。送信・開封・返信の時刻）、<code>contracts</code>（企業の契約プランと月次スカウト枠）、<code>page_views</code>（1行 = 1ページ表示）、<code>reviews</code> と <code>review_moderation_events</code>（クチコミと、その審査の遷移履歴）。<code>stg_careervoice__*</code> は各ソース表の列名と型だけを整えた中間層で、ファクトはこちらを参照する</li>
-<li><strong>ファクト（<code>fct_*</code>）</strong>: 業務で起きた事象を測る表。この資料に出るのは <code>fct_scout</code>・<code>fct_selection_event</code>・<code>fct_review</code>・<code>fct_placement</code>（入社1件 = 1行の成果報酬）・<code>fct_job_posting_daily</code>・<code>fct_contract_monthly</code>・<code>fct_application_pipeline</code>・<code>fct_scout_funnel</code>・<code>fct_review_moderation</code>・<code>fct_page_view</code> の10本で、§1 の表で型ごとに分類する</li>
+<li><strong>ファクト（<code>fct_*</code>）</strong>: 業務で起きた事象を測る表。この章に出るのは <code>fct_scout</code>・<code>fct_selection_event</code>・<code>fct_review</code>・<code>fct_placement</code>（入社1件 = 1行の成果報酬）・<code>fct_job_posting_daily</code>・<code>fct_contract_monthly</code>・<code>fct_application_pipeline</code>・<code>fct_scout_funnel</code>・<code>fct_review_moderation</code>・<code>fct_page_view</code> の10本で、§1 の表で型ごとに分類する</li>
 <li><strong>ディメンション（<code>dim_*</code>）</strong>: 集計の切り口になる表。<code>dim_date</code>（日付）、<code>dim_member</code>（会員）、<code>dim_company</code>（企業）、<code>dim_job_posting</code>（求人）、<code>dim_job_category</code>（職種）、<code>dim_channel</code>（応募チャネル）、<code>dim_agency</code>（エージェンシー）、<code>dim_agent</code>（エージェント担当者）、<code>dim_page_context</code>（ページ表示の文脈）、<code>dim_member_profile_mini</code>（年収帯 × 転職意欲）、<code>dim_scout_sender</code>（スカウト送信主体）、<code>dim_audit</code>（そのモデル実行の監査情報）</li>
 <li><strong>キーの約束</strong>: ディメンションの代理キーは <code>&lt;entity&gt;_key</code>、日付キーは <code>date_key</code>（<code>YYYYMMDD</code> の整数）。未知・未到達はどのキーでも <code>-1</code> を使い、NULL の外部キーは作らない。ファクトは主要な日付キーと並べて DATE 型の列を1本持ち、パーティションはその DATE 列に張る</li>
 </ul>
 </div>
 
-<h2>1. このケーススタディでの論点と判断事例</h2>
+<h2>1. この章で扱う原則と、CareerVoice での適用</h2>
 
 <p>同じソースイベントから、どの型のファクトを作るか。<strong>型は問いで決まる。ソースの形では決まらない。</strong></p>
 
@@ -89,15 +89,15 @@
 
 <div class="table-wrap">
 <table>
-<thead><tr><th>論点</th><th>判断</th></tr></thead>
+<thead><tr><th>論点</th><th>原則</th><th>CareerVoice での適用</th></tr></thead>
 <tbody>
-<tr><td>型の選び方</td><td>問いの時制で決める。「いつ何件」＝トランザクション／「その日いくつ」＝定期／「どこまで進んだ・何日かかった」＝累積。ただし数えたい事象のトランザクションファクトが無い場合は例外（応募数は §6 の2行目）</td></tr>
-<tr><td>型は排他か</td><td>排他ではない。1プロセスに3型が同居してよい（選考は <code>fct_selection_event</code> と <code>fct_application_pipeline</code> の両方）</td></tr>
-<tr><td>累積スナップショットの裏</td><td>必ず原子トランザクションファクトを置く。サマリーだけ持たない（DT#77）</td></tr>
-<tr><td>未達マイルストーン</td><td>日付キーは <code>-1</code>（<code>dim_date</code> に <code>-1</code> 行）。NULL の外部キーを作らない（DT#43）</td></tr>
-<tr><td>未達のラグ</td><td>メジャー側は NULL のままにする。<code>0</code> で埋めない（0日で到達した、と区別できなくなる）</td></tr>
-<tr><td>ヘッダ／明細</td><td><code>applications</code>（ヘッダ）の次元は <code>selection_events</code>（明細）に降ろす。<code>application_id</code> は退化ディメンション（DT#95）</td></tr>
-<tr><td>ファクトレス</td><td>イベント型 = <code>fct_page_view</code>、カバレッジ型 = 契約企業 × 月 × スカウト枠（DT#50）</td></tr>
+<tr><td>型の選び方</td><td>問いの時制で決める。「いつ何件」＝トランザクション／「その日いくつ」＝定期スナップショット／「どこまで進んだ・何日かかった」＝累積スナップショット</td><td>日別のスカウト送信数は <code>fct_scout</code>、4/15 に掲載中だった求人は <code>fct_job_posting_daily</code>、応募から内定までの日数は <code>fct_application_pipeline</code>。応募数だけは例外（§6 の2行目）</td></tr>
+<tr><td>型は排他か</td><td>排他ではない。1つのプロセスに複数の型が同居してよい</td><td>選考は <code>fct_selection_event</code> と <code>fct_application_pipeline</code> の両方を持つ</td></tr>
+<tr><td>累積スナップショットの裏に何を置くか</td><td>原子のトランザクションファクトを必ず置く。サマリーだけを持たない（DT#77）</td><td><code>fct_application_pipeline</code> の裏に <code>fct_selection_event</code> を置く</td></tr>
+<tr><td>未達マイルストーンの日付キー</td><td><code>-1</code> にし、NULL の外部キーを作らない（DT#43）</td><td><code>dim_date</code> に <code>-1</code> の行（表示名「未到達」）を置く</td></tr>
+<tr><td>未達のラグ（日数などのメジャー）</td><td>NULL のままにし、<code>0</code> で埋めない。<code>0</code> だと「0日で到達した」と区別できない</td><td><code>fct_application_pipeline</code> の <code>days_applied_to_offer</code> は、内定前なら NULL</td></tr>
+<tr><td>ヘッダと明細</td><td>ヘッダの属性は明細に降ろし、ヘッダの ID は退化ディメンションにする（DT#95）</td><td><code>applications</code>（ヘッダ）の属性を <code>selection_events</code>（明細）側のファクトに持たせ、<code>application_id</code> は退化ディメンションにする</td></tr>
+<tr><td>ファクトレス</td><td>起きた事象の記録（イベント型）と、起きなかったことを数えるための土台（カバレッジ型）を分けて考える（DT#50）</td><td>イベント型は <code>fct_page_view</code>。カバレッジ型は契約企業 × 月 × スカウト枠で、<code>fct_contract_monthly</code> の <code>scout_quota</code> として持つ</td></tr>
 </tbody>
 </table>
 </div>
@@ -174,7 +174,7 @@ WHERE DATE(posted_at, 'Asia/Tokyo') &lt;= '2026-04-15'
 <li><strong>冪等（同じ入力で何度実行しても同じ結果）にならない。</strong>同じイベントを二度取り込んだときに何が起きるかが、UPDATE 文の書き方次第で変わる。</li>
 </ul>
 
-<p>この資料での決定は「行を更新しない実装で累積スナップショットを作る」である。<code>selection_events</code> から毎回 <code>GROUP BY application_id</code> で全マイルストーンをまとめ直せば、出力は入力だけで決まり、何度実行しても同じ表になる（§5）。差分だけを取り込む形（<code>merge</code> / <code>insert_overwrite</code>）と、そのときのルックバック幅は <strong>DM09『増分・遅延到着・冪等性』</strong>で扱う。</p>
+<p>この章での決定は「行を更新しない実装で累積スナップショットを作る」である。<code>selection_events</code> から毎回 <code>GROUP BY application_id</code> で全マイルストーンをまとめ直せば、出力は入力だけで決まり、何度実行しても同じ表になる（§5）。差分だけを取り込む形（<code>merge</code> / <code>insert_overwrite</code>）と、そのときのルックバック幅は <strong>DM09『増分・遅延到着・冪等性』</strong>で扱う。</p>
 
 <h3>(c) <code>rejected</code> と <code>withdrawn</code> を「終了」の一語にまとめる</h3>
 
@@ -263,7 +263,7 @@ WHERE DATE(posted_at, 'Asia/Tokyo') &lt;= '2026-04-15'
 
 <p><code>fct_application_pipeline</code> は8本の日付キーで応募のライフサイクルを1行にまとめている。ここで失われるのは「同じステージを2回通った」情報である。<code>first_interview</code> が2回記録されている応募（面接をやり直した）は、<code>MIN()</code> でまとめた時点で1回に見える。</p>
 
-<p>だからこの設計では、資料をまたいで守る固定の判断として <strong><code>fct_application_pipeline</code> の裏に <code>fct_selection_event</code> を必ず置く</strong>ことにしている。累積スナップショットは「速く答えるための表」であり、真実は原子ファクトの側にある。<code>fct_review_moderation.moderation_rounds</code> のように「何周したか」をメジャーとして持ち上げるのは、この損失に対する部分的な埋め合わせでしかない。</p>
+<p>だからこの設計では、章をまたいで守る固定の判断として <strong><code>fct_application_pipeline</code> の裏に <code>fct_selection_event</code> を必ず置く</strong>ことにしている。累積スナップショットは「速く答えるための表」であり、真実は原子ファクトの側にある。<code>fct_review_moderation.moderation_rounds</code> のように「何周したか」をメジャーとして持ち上げるのは、この損失に対する部分的な埋め合わせでしかない。</p>
 
 <h2>4. 現代の再解釈</h2>
 
@@ -948,7 +948,7 @@ GROUP BY pc.page_type
 <li><code>dbt_logs_analysis</code> の <code>mart_url_performance</code> は 1行 = URL × 日の粒度を持つ。型としてはトランザクション（アクセスログ）を日でまとめた<strong>集約</strong>であって定期スナップショットではない。アクセスが0件の URL には行が立たないので、「その日 1度もアクセスされなかった URL」は答えられない（DT#50 のカバレッジ型が要る問い）。</li>
 <li><code>mart_url_performance_incremental</code> は <code>unique_key=['url_path','date']</code> で MERGE するので、行を上書きするという意味では累積スナップショットと同じ挙動をする。ただし上書きしているのは過去日の再計算であってマイルストーンではないので、型は集約のままである。</li>
 <li><code>news_pipeline</code> の <code>raw_articles.content_status</code> は <code>pending → ok → summarized / failed / filtered</code> と1行を上書きしていく。粒度（1行 = 1記事のライフサイクル）は累積スナップショットそのものだが、<strong>各遷移の時刻を持たないので「収集から要約までのラグ」が測れない</strong>。残っているのは <code>retry_count</code> だけである。</li>
-<li>この資料の基準で言えば、<code>raw_articles</code> は「日付キー1本 + 状態列」の形なので累積スナップショットとしては未完成である。遷移ごとの時刻列（または遷移イベント表）を足せば <code>fct_review_moderation</code> と同じ構造になる。</li>
+<li>この章の基準で言えば、<code>raw_articles</code> は「日付キー1本 + 状態列」の形なので累積スナップショットとしては未完成である。遷移ごとの時刻列（または遷移イベント表）を足せば <code>fct_review_moderation</code> と同じ構造になる。</li>
 <li><strong>試せる種:</strong> <code>summaries</code> のスコア上書き（Type 1）を、上書きせず <code>scoring_version</code> ごとに行を積む形に変えると、採点ロジック変更の影響が「同じ記事の版違い」として測れるようになる。</li>
 </ul>
 </div>

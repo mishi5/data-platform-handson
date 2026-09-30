@@ -46,13 +46,13 @@
 <p class="meta">データマート設計 05 ／ 参照: DWT ch.5, Slowly Changing Dimensions Part 1–2, Design Tip #15 #152 ／ 再解釈: Functional Data Engineering（ディメンションの日次スナップショット）, SCD-2 considered harmful, dbt snapshots</p>
 
 <div class="aside">
-<p><strong>この資料で使う題材</strong></p>
-<p>CareerVoice は、社員・元社員による企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントからのスカウト・応募から入社までを1つのプラットフォームで扱う架空のサービスである。ソースは OLTP のテーブル群で、BigQuery の <code>src_careervoice</code> データセットに Datastream（CDC）で複製されている前提とする。</p>
+<p><strong>この章で使う題材</strong></p>
+<p>このシリーズは、架空サービス CareerVoice を題材にしたデータマート設計のケーススタディで、全11章（DM00〜DM10）からなる。CareerVoice は、社員・元社員による企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントからのスカウト・応募から入社までを1つのプラットフォームで扱う架空のサービスである。ソースは OLTP のテーブル群で、BigQuery の <code>src_careervoice</code> データセットに Datastream（CDC）で複製されている前提とする。</p>
 <p>本文に出るサンプル ID は次がすべて。日付は全て 2026 年、時刻は JST。</p>
 <p>サンプルの日付はすべて 2026 年で、<strong>基準日 2026-09-01</strong> より前に起きた事実。会員・企業の行は「登録時点の値 → その後の変化」の順で書いている。</p>
 <div class="table-wrap">
 <table class="sample-ids">
-<thead><tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr></thead>
+<thead><tr><th>ID</th><th>何か</th><th>この章で使う事実</th></tr></thead>
 <tbody>
 <tr><td><code>C001</code></td><td>企業</td><td>アオゾラ商事（商社、従業員規模 <code>ge1000</code>、上場、親会社なし）。スカウト <code>S001</code> の送信元で、<code>M001</code> が 08-01 に入社した先</td></tr>
 <tr><td><code>C002</code></td><td>企業</td><td>ネクスト技研（IT、非上場）。従業員規模が <strong>05-01 に <code>50_299</code> から <code>300_999</code> へ変化</strong>。クチコミ <code>R001</code> の対象企業で、<code>M001</code> の 08-01 までの現職</td></tr>
@@ -88,13 +88,13 @@
 <p>用語の確認。<strong>ディメンション</strong>（<code>dim_*</code>）は集計の切り口となる属性の表、<strong>ファクト</strong>（<code>fct_*</code>）は出来事と数値の表、<strong>サロゲートキー</strong>（<code>*_key</code>）はソースの ID とは別に DWH 側で振る代理キーを指す。<strong>SCD</strong>（Slowly Changing Dimension）はディメンションの属性が時間とともに変わったときの持ち方で、Type 0〜7 の番号で呼び分ける。<strong>縮約ディメンション</strong>は、あるディメンションの属性の一部だけを持つ粗い版（担当者に対するエージェンシーなど）である。</p>
 </div>
 
-<h2>1. このケーススタディでの論点と判断事例</h2>
+<h2>1. この章で扱う論点と判断のまとめ</h2>
 
-<p>ディメンションの属性が変わったとき、古い値をどう残すか。残し方は Type 0〜7 の 8 通りあり、それぞれ「行が増えるか」「ファクトから見えるのは版か現在値か」が違う。この資料はその選択と、選んだ結果として必ず必要になる <strong>時点結合（as-of join。イベント時点の版でファクトのキーを解決する結合）</strong> の実装を決める。</p>
+<p>ディメンションの属性が変わったとき、古い値をどう残すか。残し方は Type 0〜7 の 8 通りあり、それぞれ「行が増えるか」「ファクトから見えるのは版か現在値か」が違う。この章はその選択と、選んだ結果として必ず必要になる <strong>時点結合（as-of join。イベント時点の版でファクトのキーを解決する結合）</strong> の実装を決める。</p>
 
 <div class="table-wrap">
 <table>
-<caption style="text-align:left;color:var(--muted);font-size:.85rem;padding-bottom:6px;">この資料で確定させる判断</caption>
+<caption style="text-align:left;color:var(--muted);font-size:.85rem;padding-bottom:6px;">この章で確定させる判断</caption>
 <thead>
 <tr><th>論点</th><th>判断</th><th>根拠</th></tr>
 </thead>
@@ -168,7 +168,7 @@
 </table>
 </div>
 
-<p>6/15 の変化は <code>dim_member</code> の版を切らない。切り出し先が <code>dim_member_profile_mini</code>（Type 4）だからである。<strong><code>dim_member</code> に「6/15 始まりの版」は存在しない</strong>——この点がこの資料で最も間違えやすく、§7-b で改めて問う。</p>
+<p>6/15 の変化は <code>dim_member</code> の版を切らない。切り出し先が <code>dim_member_profile_mini</code>（Type 4）だからである。<strong><code>dim_member</code> に「6/15 始まりの版」は存在しない</strong>——この点がこの章で最も間違えやすく、§7-b で改めて問う。</p>
 
 <h3>(c) <code>valid_to</code> を NULL にする — 8 月以降のイベントだけが気づかれずに除外される</h3>
 
@@ -397,7 +397,7 @@ snapshots:
 
 <p><strong>スナップショットは、実行を始めた日より前の履歴を作れない。</strong> dbt snapshot が見るのは実行時点のソースの現在値だけである。<code>snap_members</code> の初回実行が 2026-07 なら、<code>M001</code> の第 1 版の <code>dbt_valid_from</code> は 2026-01-05 ではなく 7 月の値になり、6/15 の変化は永久に取れない。</p>
 
-<p>この資料の結果表はすべて「2026-01-05 以前からスナップショットが毎日実行されている」ことを前提にしている。前提が崩れるなら、ソース側に履歴があるうち（Datastream の CDC ログ）に初期版を投入するか、「この日から履歴がある」を下流へ明示する。実行間隔より短い変化を取りこぼすのも同じ理由で、<code>timestamp</code> と <code>check</code> のどちらでも起きる。</p>
+<p>この章の結果表はすべて「2026-01-05 以前からスナップショットが毎日実行されている」ことを前提にしている。前提が崩れるなら、ソース側に履歴があるうち（Datastream の CDC ログ）に初期版を投入するか、「この日から履歴がある」を下流へ明示する。実行間隔より短い変化を取りこぼすのも同じ理由で、<code>timestamp</code> と <code>check</code> のどちらでも起きる。</p>
 
 <p>ここで §4 の主張の範囲を確認しておく。日次スナップショット方式が有利なのは<strong>捕捉済みの期間を作り直せる</strong>点で、各日のパーティションを独立に・並列に再計算できる。SCD2 のテーブルは MERGE の結果として状態を持つため、同じ日を流し直しても元に戻らない。</p>
 
@@ -455,7 +455,7 @@ left join {{ ref('stg_careervoice__industries') }}   as i on i.industry_code = v
 left join {{ ref('stg_careervoice__prefectures') }}  as p on p.prefecture_code = v.hq_prefecture_code
 </code></pre>
 
-<p>キーの生成方式は DM03『ディメンションの設計』で決めたものを使う。SCD2 のディメンションでは「自然キー + <code>'|'</code> + <code>valid_from</code>」を <code>FARM_FINGERPRINT</code> にかけた INT64 をサロゲートキーにする。この資料に必要なのは「1 つの版に 1 つの <code>company_key</code> がある」ことだけだが、型は下流のセンチネル（<code>-1</code>）と揃っている必要がある（§5-b）。</p>
+<p>キーの生成方式は DM03『ディメンションの設計』で決めたものを使う。SCD2 のディメンションでは「自然キー + <code>'|'</code> + <code>valid_from</code>」を <code>FARM_FINGERPRINT</code> にかけた INT64 をサロゲートキーにする。この章に必要なのは「1 つの版に 1 つの <code>company_key</code> がある」ことだけだが、型は下流のセンチネル（<code>-1</code>）と揃っている必要がある（§5-b）。</p>
 
 <pre><code># models/marts/schema.yml（抜粋）
 models:
@@ -476,7 +476,7 @@ models:
           - not_null
 </code></pre>
 
-<p><code>expression_is_true</code> は 1 行の区間が空でないことしか見ない。<strong>重なりも隙間も検出しない。</strong> この資料で最も検証したい 2 つがそれなので、singular test（SQL を 1 本書き、行が返らないことを確かめる形式の dbt のテスト）を 1 本立てる。</p>
+<p><code>expression_is_true</code> は 1 行の区間が空でないことしか見ない。<strong>重なりも隙間も検出しない。</strong> この章で最も検証したい 2 つがそれなので、singular test（SQL を 1 本書き、行が返らないことを確かめる形式の dbt のテスト）を 1 本立てる。</p>
 
 <pre><code>-- tests/assert_dim_company_no_gap_or_overlap.sql
 -- 隣り合う版が「前の valid_to = 次の valid_from」で連続していない行を返す
@@ -503,12 +503,12 @@ group by company_id
 having count(distinct corporate_number) &gt; 1
 </code></pre>
 
-<p>1 つのディメンションに複数の Type が同居するのはこの資料の主題そのもので、<code>dim_company</code> は <code>corporate_number</code>=0 / <code>name</code>=1 / それ以外=2 の 3 種類を 1 テーブルに載せている。</p>
+<p>1 つのディメンションに複数の Type が同居するのはこの章の主題そのもので、<code>dim_company</code> は <code>corporate_number</code>=0 / <code>name</code>=1 / それ以外=2 の 3 種類を 1 テーブルに載せている。</p>
 
 <p>上の <code>expression_is_true</code> のテストは §2-c で引いた Kimball の規約（旧行の <code>valid_to</code> = 新行の <code>valid_from</code>）をそのままテストにした形である。隙間があるとキーが解決できずに <code>-1</code> になり、重なりがあるとファクトの行が増える。<code>relationships</code> テストはどちらも検出しない（NULL 行を無視し、行数の増加も見ない）。</p>
 
 <div class="aside kimball">
-<p>この資料の <code>dim_company</code> は <code>name</code> を Type1 のみで持つ。Design Tip #15 の完全な Type 6 は「当時の社名」と「現在の社名」を<strong>両方</strong>列として持つ形だが、CareerVoice では社名を集計軸にしないので現在値だけにした。企業の同一性は <code>company_id</code> と <code>corporate_number</code>（法人番号）が担保する。監査で「当時のレポートの社名」を再現する要求が出たら Type 6 に格上げする（§7-c）。</p>
+<p>この章の <code>dim_company</code> は <code>name</code> を Type1 のみで持つ。Design Tip #15 の完全な Type 6 は「当時の社名」と「現在の社名」を<strong>両方</strong>列として持つ形だが、CareerVoice では社名を集計軸にしないので現在値だけにした。企業の同一性は <code>company_id</code> と <code>corporate_number</code>（法人番号）が担保する。監査で「当時のレポートの社名」を再現する要求が出たら Type 6 に格上げする（§7-c）。</p>
 </div>
 
 <h3>(b) 時点結合で <code>fct_scout</code> の <code>member_key</code> を解決する</h3>
@@ -944,8 +944,8 @@ order by 1, 2
 <div class="aside">
 <ul>
 <li><code>news_pipeline</code> の <code>summaries</code> は <code>/recalculate</code> でスコアを<strong>上書き</strong>する。この上書きは Type 1 である。<code>scoring_version</code> で「どの採点ロジック版か」は分かるが、「ある記事が 0.72 から 0.61 に下がったのはいつか」は残らない。プロンプトを変えた前後で通知ランキングがどう動いたかを検証できない。</li>
-<li>この資料の基準を当てると、行数は数千、変化頻度は再採点のたび、必要な時間精度は日 —「数百万以上」に当たらないので Type 2 も現実的だが、<code>summaries</code> には <code>updated_at</code> 相当の列が無い（日時列は <code>raw_articles</code> 側にしかない）。<code>strategy: timestamp</code> が使えず <code>strategy: check</code> + <code>check_cols</code> になる、という制約がそのまま設計を決める。</li>
-<li><code>dbt_logs_analysis</code> には SCD の対象になるディメンションが 1 つも無い。<code>mart_url_performance</code> も <code>mart_error_analysis</code> もファクトの集約で、<code>url_path</code> や HTTP ステータスは Type 0 の世界である。属性を持つマスタが無い基盤では、この資料の論点そのものが発生しない。</li>
+<li>この章の基準を当てると、行数は数千、変化頻度は再採点のたび、必要な時間精度は日 —「数百万以上」に当たらないので Type 2 も現実的だが、<code>summaries</code> には <code>updated_at</code> 相当の列が無い（日時列は <code>raw_articles</code> 側にしかない）。<code>strategy: timestamp</code> が使えず <code>strategy: check</code> + <code>check_cols</code> になる、という制約がそのまま設計を決める。</li>
+<li><code>dbt_logs_analysis</code> には SCD の対象になるディメンションが 1 つも無い。<code>mart_url_performance</code> も <code>mart_error_analysis</code> もファクトの集約で、<code>url_path</code> や HTTP ステータスは Type 0 の世界である。属性を持つマスタが無い基盤では、この章の論点そのものが発生しない。</li>
 <li><strong>試せる種:</strong> <code>snapshots/snap_summaries.yml</code> を <code>strategy: check</code>, <code>check_cols: ['importance_score', 'relevance_score']</code> で置き、<code>/recalculate</code> の前後で <code>dbt_valid_from</code> がどう切れるかを見る。スナップショットが「実行間隔より短い変化を取りこぼす」ことも同時に確認できる（これは <code>check</code> 固有ではなく、<code>timestamp</code> でも同じ）。</li>
 </ul>
 </div>

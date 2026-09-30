@@ -46,13 +46,13 @@
 <p class="meta">データマート設計 10 ／ 参照: DWT ch.19, Subsystems of ETL Revisited, An Architecture for Data Quality, Design Tip #108 #164 ／ 再解釈: dbt structure, dbt Kimball, dbt model contracts</p>
 
 <div class="aside">
-<p><strong>この資料で使う題材</strong></p>
-<p>CareerVoice は、社員・元社員による企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントからのスカウト・応募と選考を 1 つのプラットフォームで扱う架空のサービスである。分析側は OLTP の複製（BigQuery の <code>src_careervoice</code> データセット）を dbt で変換し、ディメンショナルモデル（数値を持つファクトと、文脈を与えるディメンションで組む分析用のデータモデル）として配布する。</p>
+<p><strong>この章で使う題材</strong></p>
+<p>このシリーズは、架空サービス CareerVoice を題材にしたデータマート設計のケーススタディで、全11章（DM00〜DM10）からなる。CareerVoice は、社員・元社員による企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントからのスカウト・応募と選考を 1 つのプラットフォームで扱う架空のサービスである。分析側は OLTP の複製（BigQuery の <code>src_careervoice</code> データセット）を dbt で変換し、ディメンショナルモデル（数値を持つファクトと、文脈を与えるディメンションで組む分析用のデータモデル）として配布する。</p>
 
 <p>サンプルの日付はすべて 2026 年で、<strong>基準日 2026-09-01</strong> より前に起きた事実。会員・企業の行は「登録時点の値 → その後の変化」の順で書いている。</p>
 <div class="table-wrap">
 <table class="sample-ids">
-<thead><tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr></thead>
+<thead><tr><th>ID</th><th>何か</th><th>この章で使う事実</th></tr></thead>
 <tbody>
 <tr><td><code>M001</code></td><td>会員</td><td>1991 年生・東京・登録時の現職は <code>C002</code>。2026-06-15 に転職意欲と年収帯が変わる。この属性変化の前後どちらの版に結ぶかが §5(b) の時点結合の題材になる</td></tr>
 <tr><td><code>C002</code></td><td>企業</td><td>ネクスト技研（IT、従業員 50〜299 人、非上場）。§2(c) ではこの企業のクチコミ件数を数える</td></tr>
@@ -63,9 +63,9 @@
 </table>
 </div>
 
-<p><strong>この資料に出るテーブル</strong>（marts 層。<code>_key</code> はサロゲートキー＝ソースの ID とは別に採番する分析用のキー）</p>
+<p><strong>この章に出るテーブル</strong>（marts 層。<code>_key</code> はサロゲートキー＝ソースの ID とは別に採番する分析用のキー）</p>
 <ul>
-<li><code>fct_scout</code> … スカウト送信のファクト。1 行 = 送信された 1 スカウト。この資料の実装例の中心</li>
+<li><code>fct_scout</code> … スカウト送信のファクト。1 行 = 送信された 1 スカウト。この章の実装例の中心</li>
 <li><code>fct_review</code> … クチコミ投稿のファクト。1 行 = 投稿された 1 クチコミ。匿名性のため会員のキーを持たない</li>
 <li><code>fct_application_pipeline</code> … 応募から入社までの累積スナップショット。1 行 = 1 応募</li>
 <li><code>fct_selection_event</code> … 選考イベントのファクト。1 行 = 1 ステージ遷移。上の累積スナップショットの裏付け</li>
@@ -87,22 +87,21 @@
 </ul>
 </div>
 
-<h2>1. このケーススタディでの論点と判断事例</h2>
+<h2>1. この章で扱う原則と、CareerVoice での適用</h2>
 
-<p>ここまでの 9 本のドキュメントで決めたのは「何を作るか」だった。このケーススタディの論点は「作ったものをどこに置き、どう名付け、何を保証し、どう変えるか」という運用規約である。中心の判断は 1 つで、<strong>テストは粒度・参照整合性・加法性の 3 種を層ごとに置き分ける</strong>。</p>
+<p>ここまでの 9 章で決めたのは「何を作るか」だった。この章で扱うのは「作ったものをどこに置き、どう名付け、何を保証し、どう変えるか」という運用規約である。中心の原則は 1 つで、<strong>テストは粒度・参照整合性・加法性の 3 種を層ごとに置き分ける</strong>。</p>
 
 <div class="table-wrap">
 <table>
-<caption class="meta">この資料の決定</caption>
-<thead><tr><th>論点</th><th>判断</th><th>根拠</th></tr></thead>
+<thead><tr><th>論点</th><th>原則</th><th>CareerVoice での適用</th></tr></thead>
 <tbody>
-<tr><td>モデルの置き場</td><td>staging / intermediate / marts / snapshots の 4 層。<code>stg_</code> は 1 ソース 1 モデルで結合も集約も置かない</td><td>dbt structure</td></tr>
-<tr><td>命名</td><td>モデル名・キー名・接頭辞の規約を下表に定め、これを正本にする</td><td>シリーズ共通の命名規約</td></tr>
-<tr><td>テストの種類</td><td>層ごとに固定。staging = 列、intermediate = 粒度、marts = 粒度・参照整合性・加法性・契約</td><td>Data Quality の 3 スクリーン</td></tr>
-<tr><td>公開面の保証</td><td>BI・逆 ETL から参照される marts のモデルに <code>contract: enforced: true</code> を置き、列名と型を凍結する</td><td>dbt contracts</td></tr>
-<tr><td>改版</td><td>破壊的変更は <code>versions:</code> ＋ <code>latest_version</code> ＋ <code>deprecation_date</code>。<strong>モデル名にバージョンを埋め込まない</strong></td><td>dbt model versions</td></tr>
-<tr><td>監査</td><td>全ファクトに <code>audit_key</code>。<code>dim_audit</code> は <code>invocation_id</code> と <code>run_started_at</code> から 1 実行 × 品質フラグごとに 1 行</td><td>DT#164 / Data Quality</td></tr>
-<tr><td>設計完了の条件</td><td>バスマトリクスのレビューから始め、3 種類の聴衆のレビューを通ったら設計完了とする</td><td>DT#108</td></tr>
+<tr><td>モデルの置き場</td><td>staging / intermediate / marts / snapshots の 4 層に分ける。staging は 1 ソース 1 モデルで、結合も集約も置かない（dbt structure）</td><td><code>src_careervoice</code> の各テーブルを <code>stg_careervoice__&lt;table&gt;</code> にし、結合は intermediate 以降で行う</td></tr>
+<tr><td>命名</td><td>接頭辞で役割が分かる規約を決め、1箇所を正本にする</td><td>下の命名規約表（<code>dim_*</code> / <code>fct_*</code> / <code>agg_*</code> / <code>br_*</code> / <code>obt_*</code>、<code>&lt;entity&gt;_key</code> など）を正本にする</td></tr>
+<tr><td>テストの種類</td><td>層ごとに置くテストを固定する（Data Quality の 3 スクリーン）</td><td>staging = 列、intermediate = 粒度、marts = 粒度・参照整合性・加法性・契約</td></tr>
+<tr><td>公開面の保証</td><td>外部から参照されるモデルは、列名と型を契約で固定する（dbt contracts）</td><td>BI・逆 ETL から参照される marts のモデルに <code>contract: enforced: true</code> を置く</td></tr>
+<tr><td>改版</td><td>破壊的変更は版を切る。<strong>モデル名にバージョンを埋め込まない</strong>（dbt model versions）</td><td><code>versions:</code> ＋ <code>latest_version</code> ＋ <code>deprecation_date</code> で新旧を並走させる</td></tr>
+<tr><td>監査</td><td>どの実行で入った行かを、全ファクトから辿れるようにする（DT#164 / Data Quality）</td><td>全ファクトに <code>audit_key</code>。<code>dim_audit</code> は <code>invocation_id</code> と <code>run_started_at</code> から 1 実行 × 品質フラグごとに 1 行</td></tr>
+<tr><td>設計完了の条件</td><td>バスマトリクスのレビューから始め、3 種類の聴衆のレビューを通ったら設計完了とする（DT#108）</td><td>DM01『粒度を宣言する』§3 のバスマトリクスを最初のレビュー対象にする</td></tr>
 </tbody>
 </table>
 </div>
@@ -226,7 +225,7 @@ ORDER BY a.loaded_at DESC</code></pre>
 </div>
 
 <div class="aside kimball">
-<p>選ばなかった 27 のうち、11（Hierarchy Manager）・12（Special Dimensions Manager）・14（Surrogate Key Pipeline）・15（Multi-Valued Bridge Table Builder）は、それぞれ <code>dim_job_category</code> の平坦化と <code>br_company_hierarchy</code>、ジャンクディメンションとミニディメンション、時点結合によるキー解決、<code>br_member_desired_job_category</code> として DM03・DM05・DM06『多対多・不揃い階層・異種ディメンション』で既に扱った。この資料で残るのは 22（Job Scheduler）・23（Backup System）・29（Lineage and Dependency）・31（Paralleling and Pipelining）のような、モデルの形ではなく実行環境を規定する群である。dbt を採ると 22 と 29 は道具に置き換わるが、1（Data Profiling）だけは代われない。</p>
+<p>選ばなかった 27 のうち、11（Hierarchy Manager）・12（Special Dimensions Manager）・14（Surrogate Key Pipeline）・15（Multi-Valued Bridge Table Builder）は、それぞれ <code>dim_job_category</code> の平坦化と <code>br_company_hierarchy</code>、ジャンクディメンションとミニディメンション、時点結合によるキー解決、<code>br_member_desired_job_category</code> として DM03・DM05・DM06『多対多・不揃い階層・異種ディメンション』で既に扱った。この章で残るのは 22（Job Scheduler）・23（Backup System）・29（Lineage and Dependency）・31（Paralleling and Pipelining）のような、モデルの形ではなく実行環境を規定する群である。dbt を採ると 22 と 29 は道具に置き換わるが、1（Data Profiling）だけは代われない。</p>
 </div>
 
 <h3>設計はいつ終わるか（DT#108）</h3>
@@ -287,7 +286,7 @@ ORDER BY a.loaded_at DESC</code></pre>
 </div>
 
 <div class="aside kimball">
-<p>DT#164 の指示は「単純に始めよ、最初から理想主義になるな、優雅さで賞を狙うな」である。この資料の <code>dim_audit</code> が 5 列しか持たないのはこの指示に従っている。Data Quality 白書の完全版（completeness / validation / out-of-bounds / screens failed / record modified / 3 つの時刻）は、エラー事象スキーマを別に運用して初めて埋まる列なので、先に置いても NULL が並ぶだけになる。</p>
+<p>DT#164 の指示は「単純に始めよ、最初から理想主義になるな、優雅さで賞を狙うな」である。この章の <code>dim_audit</code> が 5 列しか持たないのはこの指示に従っている。Data Quality 白書の完全版（completeness / validation / out-of-bounds / screens failed / record modified / 3 つの時刻）は、エラー事象スキーマを別に運用して初めて埋まる列なので、先に置いても NULL が並ぶだけになる。</p>
 </div>
 
 <h2>4. 現代の再解釈</h2>
@@ -318,14 +317,14 @@ ORDER BY a.loaded_at DESC</code></pre>
 
 <div class="aside modern">
 <p>ただし marts の命名では、dbt の 2 つの公式文書が食い違う。structure ガイドは業務エンティティの平易な名前（<code>orders</code>, <code>customers</code>）で名付けよと書き、<code>fct_</code> / <code>dim_</code> の接頭辞に触れない。一方 dbt Developer Blog の Building a Kimball dimensional model with dbt は <code>dim_product</code> / <code>fct_sales</code> をそのまま使う。</p>
-<p>このシリーズは後者を採る（前掲の命名規約）。ファクトとディメンションの区別は物理設計ではなく「加法性を持つか、文脈を与えるか」という意味の区別なので、名前で見えているほうが 11 本のドキュメントを跨ぐときに安い。</p>
+<p>このシリーズは後者を採る（前掲の命名規約）。ファクトとディメンションの区別は物理設計ではなく「加法性を持つか、文脈を与えるか」という意味の区別なので、名前で見えているほうが 11 章をまたぐときに安い。</p>
 </div>
 
 <h3>dbt Kimball 記事のテストと、そこに足りないもの</h3>
 
 <p>Neo の記事は AdventureWorks の受注を題材に、ビジネスプロセスの特定 → ファクトとディメンションの特定 → ディメンションの作成 → ファクトの作成 → 関係の文書化、という順で実装を追う。ディメンションには <code>product_key</code> の <code>not_null</code> ＋ <code>unique</code>、自然キーにも <code>not_null</code> ＋ <code>unique</code>、ファクトには <code>sales_key</code> の <code>not_null</code> ＋ <code>unique</code> と各 FK の <code>not_null</code> を置く。ここまではこのシリーズと同じ結論になる。</p>
 
-<p>足りないのは 3 つで、<strong>参照整合性（<code>relationships</code>）・加法性・契約</strong>が無い。記事のファクトはサロゲートキーを都度ハッシュで作り直しているので、ディメンション側に無いキーが入っても誰も気づかない。この資料で <code>relationships</code> を marts の必須テストに入れるのはそのためである。</p>
+<p>足りないのは 3 つで、<strong>参照整合性（<code>relationships</code>）・加法性・契約</strong>が無い。記事のファクトはサロゲートキーを都度ハッシュで作り直しているので、ディメンション側に無いキーが入っても誰も気づかない。この章で <code>relationships</code> を marts の必須テストに入れるのはそのためである。</p>
 
 <h3>契約と改版</h3>
 
@@ -493,14 +492,14 @@ FROM (SELECT 1)
 WHERE NOT EXISTS (SELECT 1 FROM {{ ref('dim_job_posting') }} WHERE job_posting_key = '-1')</code></pre>
 
 <div class="aside modern">
-<p><code>where</code> による窓（ここでは 90 日）は、<code>require_partition_filter</code> を張る配布物（<code>obt_*</code>）や <code>dim_member_daily</code> でテストを実行するために<strong>必要になる</strong>形である。<code>fct_scout</code> のようなスタースキーマ側の正本ではフィルタ強制が無いので窓は必須ではなく、スキャン量を抑えるための運用上の選択になる。どちらであれ全期間の粒度を保証したいなら、<code>where</code> を外した同じテストを別ジョブ（月次など）で実行する。<code>+where</code> は <code>dbt_project.yml</code> の <code>data_tests:</code> 配下にパス単位で既定値を書けるが（<code>models:</code> 配下に書いても反映されない）、ファクトごとにパーティション列名が違う（<code>sent_date</code> / <code>applied_date</code> / <code>view_date</code>）ので、この資料では各テストの <code>config:</code> に書く。</p>
+<p><code>where</code> による窓（ここでは 90 日）は、<code>require_partition_filter</code> を張る配布物（<code>obt_*</code>）や <code>dim_member_daily</code> でテストを実行するために<strong>必要になる</strong>形である。<code>fct_scout</code> のようなスタースキーマ側の正本ではフィルタ強制が無いので窓は必須ではなく、スキャン量を抑えるための運用上の選択になる。どちらであれ全期間の粒度を保証したいなら、<code>where</code> を外した同じテストを別ジョブ（月次など）で実行する。<code>+where</code> は <code>dbt_project.yml</code> の <code>data_tests:</code> 配下にパス単位で既定値を書けるが（<code>models:</code> 配下に書いても反映されない）、ファクトごとにパーティション列名が違う（<code>sent_date</code> / <code>applied_date</code> / <code>view_date</code>）ので、この章では各テストの <code>config:</code> に書く。</p>
 </div>
 
 <h3>(b) <code>audit_key()</code> マクロと <code>dim_audit</code></h3>
 
 <p><code>dim_audit</code> は 1 実行 × 品質フラグごとに 1 行を作る増分モデルにする。<code>invocation_id</code> は dbt コマンド 1 回ごとに生成される UUID で、<code>run_started_at</code> は実行開始時刻の Python <code>datetime</code>（既定 UTC）である。両方ともコンパイル時に確定するので、同じ実行で作られた全ファクト行が同じ <code>audit_key</code> を指す。</p>
 
-<p>DM03『ディメンションの設計』の §5(e) は呼び出し側の形（ディメンションとファクトが同じ実行を指すこと）だけを示している。<strong>マクロの正本はこの資料で</strong>、ここで初めて足すものが 2 つある。<code>{%- do ref('dim_audit') -%}</code> によるビルド順の依存と、<code>incremental_strategy = 'merge'</code> による実行ごとの積み増しである。引数は値で渡し（<code>{{ audit_key('suspect') }}</code>）、<code>quality_flag</code> は <code>ok</code> / <code>estimated</code> / <code>suspect</code> の 3 値に固定する（Data Quality 白書の「タグを付けて通す」に対応）。<code>loaded_at</code> には <code>run_started_at</code> を入れる（同一実行の全ファクト行が同じ時刻を指すため）。</p>
+<p>DM03『ディメンションの設計』の §5(e) は呼び出し側の形（ディメンションとファクトが同じ実行を指すこと）だけを示している。<strong>マクロの正本はこの章で</strong>、ここで初めて足すものが 2 つある。<code>{%- do ref('dim_audit') -%}</code> によるビルド順の依存と、<code>incremental_strategy = 'merge'</code> による実行ごとの積み増しである。引数は値で渡し（<code>{{ audit_key('suspect') }}</code>）、<code>quality_flag</code> は <code>ok</code> / <code>estimated</code> / <code>suspect</code> の 3 値に固定する（Data Quality 白書の「タグを付けて通す」に対応）。<code>loaded_at</code> には <code>run_started_at</code> を入れる（同一実行の全ファクト行が同じ時刻を指すため）。</p>
 
 <pre><code>-- models/marts/dim_audit.sql
 {{ config(
@@ -815,7 +814,7 @@ models:
 
 <div class="aside">
 <ul>
-<li><code>dbt_logs_analysis</code> には <code>mart_url_performance</code> / <code>mart_url_performance_v2</code> / <code>mart_url_performance_incremental</code> の 3 本が別モデル名で並び、<code>models/marts/exposures.yml</code> の <code>weekly_performance_report</code> が <code>_incremental</code> と <code>_v2</code> の<strong>両方</strong>に依存している。§2(a) の形そのもので、この資料の基準なら <code>versions:</code> ＋ <code>latest_version</code> にまとめ、旧版に <code>deprecation_date</code> を立てる。</li>
+<li><code>dbt_logs_analysis</code> には <code>mart_url_performance</code> / <code>mart_url_performance_v2</code> / <code>mart_url_performance_incremental</code> の 3 本が別モデル名で並び、<code>models/marts/exposures.yml</code> の <code>weekly_performance_report</code> が <code>_incremental</code> と <code>_v2</code> の<strong>両方</strong>に依存している。§2(a) の形そのもので、この章の基準なら <code>versions:</code> ＋ <code>latest_version</code> にまとめ、旧版に <code>deprecation_date</code> を立てる。</li>
 <li><code>mart_url_performance_incremental</code> は <code>unique_key=['url_path', 'date']</code> を config に書きながら、<code>models/marts/schema.yml</code> に項目自体が無く、テストは 0 件。宣言した粒度をテストに翻訳していないので §2(c) が起きても気づけない。<code>dbt_utils</code> を <code>packages.yml</code> に入れて <code>unique_combination_of_columns: [url_path, date]</code> を 1 本足すのが最短。</li>
 <li><code>models/staging/sources.yml</code> に <code>loaded_at_field</code> と <code>freshness</code> が無い。Glue Crawler の出力が止まっても、下流の <code>not_null</code> は「行が無い」を検知しないので全部通る。</li>
 <li>一方 <code>exposures.yml</code> は 3 件（dashboard / application / notebook）が既に登録済みで、§5(e) は実装済みと言える。足りないのは登録ではなく、そこから逆算した改版手順のほう。</li>

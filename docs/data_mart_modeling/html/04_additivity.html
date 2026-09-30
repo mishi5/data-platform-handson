@@ -46,16 +46,16 @@
 <p class="meta">データマート設計 04 ／ 参照: DWT ch.1–2（加法・半加法・非加法）, ch.4（定期スナップショットと半加法残高）, Design Tip #77 ／ 再解釈: MetricFlow（ratio metric）</p>
 
 <div class="aside">
-<p><strong>この資料で使う題材</strong></p>
+<p><strong>この章で使う題材</strong></p>
 
-<p><strong>CareerVoice</strong> は、社員・元社員による企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントからのスカウト・応募から入社までの選考を1つのプラットフォームで扱う架空のサービスである。収益はクチコミの閲覧権限・求人の掲載プラン月額・企業のスカウト枠契約・エージェント経由の入社時成果報酬の4つから生まれ、それぞれが別のビジネスプロセスとしてファクトテーブルになる。</p>
+<p>このシリーズは、架空サービス CareerVoice を題材にしたデータマート設計のケーススタディで、全11章（DM00〜DM10）からなる。<strong>CareerVoice</strong> は、社員・元社員による企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントからのスカウト・応募から入社までの選考を1つのプラットフォームで扱う架空のサービスである。収益はクチコミの閲覧権限・求人の掲載プラン月額・企業のスカウト枠契約・エージェント経由の入社時成果報酬の4つから生まれ、それぞれが別のビジネスプロセスとしてファクトテーブルになる。</p>
 
-<p>この資料の本文に出るサンプル ID は以下の13個で、値は全て 2026 年・JST。</p>
+<p>この章の本文に出るサンプル ID は以下の13個で、値は全て 2026 年・JST。</p>
 
 <p>サンプルの日付はすべて 2026 年で、<strong>基準日 2026-09-01</strong> より前に起きた事実。会員・企業の行は「登録時点の値 → その後の変化」の順で書いている。</p>
 <div class="table-wrap">
 <table class="sample-ids">
-<tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr>
+<tr><th>ID</th><th>何か</th><th>この章で使う事実</th></tr>
 <tr><td><code>C001</code></td><td>企業</td><td>アオゾラ商事（商社、従業員 1000人以上、上場、親会社なし）。企業グループの親であり、契約 <code>K001</code> の契約企業、求人 <code>J001</code> の掲載元、スカウト <code>S001</code> の送信主体</td></tr>
 <tr><td><code>C002</code></td><td>企業</td><td>ネクスト技研（IT、従業員 50〜299人、非上場）。2026-05-01 に従業員規模帯が 300〜999 人へ変わるため、履歴を残すディメンションでは版が2つになる。§2(a) と §5 のクチコミ集計の対象</td></tr>
 <tr><td><code>C003</code></td><td>企業</td><td>ヒノデ物流（物流、従業員 300〜999人、非上場）。親会社が <code>C001</code>。企業グループへ足し上げるときの子会社側</td></tr>
@@ -72,7 +72,7 @@
 </table>
 </div>
 
-<p>この資料で使う主なテーブルは次のとおり。<code>fct_*</code> がファクト（数値を持つ明細）、<code>dim_*</code> がディメンション（切り口となる属性）、<code>agg_*</code> がファクトを事前に集計した集約表、<code>br_*</code> が多対多をつなぐブリッジテーブルを表す。</p>
+<p>この章で使う主なテーブルは次のとおり。<code>fct_*</code> がファクト（数値を持つ明細）、<code>dim_*</code> がディメンション（切り口となる属性）、<code>agg_*</code> がファクトを事前に集計した集約表、<code>br_*</code> が多対多をつなぐブリッジテーブルを表す。</p>
 
 <div class="table-wrap">
 <table>
@@ -95,9 +95,9 @@
 </div>
 </div>
 
-<h2>1. このケーススタディでの論点と判断事例</h2>
+<h2>1. この章で扱う論点と判断のまとめ</h2>
 
-<p>このケーススタディの論点は1つだけである。<strong>そのメジャーは再集約できるか</strong>を判定する。日次の行を月次に、企業の行を企業グループに足し上げたとき、同じ列に同じ意味が残るかどうかで、マートに持つ形が決まる。</p>
+<p>この章の論点は1つだけである。<strong>そのメジャーは再集約できるか</strong>を判定する。日次の行を月次に、企業の行を企業グループに足し上げたとき、同じ列に同じ意味が残るかどうかで、マートに持つ形が決まる。</p>
 
 <p>結論は<strong>率・平均・ユニーク数はマートに持たず、分子・分母・和・件数を持つ</strong>で、この題材の集約テーブル全てに適用する。半加法メジャー（残高・在庫）は「どの軸で足せないか」をモデル側で宣言する。</p>
 
@@ -148,7 +148,7 @@
 </table>
 </div>
 
-<p><code>agg_company_entity.avg_overall_score_90d</code> だけは平均を列で持つ。この列は1企業1行の<strong>終端の表示用</strong>であり、さらに足し上げる前提が無いという別の型にあたる（1企業1行へ集約した終端テーブルの設計は DM08『コンフォームドとドリルアクロス』で扱う）。再集約される集約表には平均を置かない、というこの資料の判断とは矛盾しない。</p>
+<p><code>agg_company_entity.avg_overall_score_90d</code> だけは平均を列で持つ。この列は1企業1行の<strong>終端の表示用</strong>であり、さらに足し上げる前提が無いという別の型にあたる（1企業1行へ集約した終端テーブルの設計は DM08『コンフォームドとドリルアクロス』で扱う）。再集約される集約表には平均を置かない、というこの章の判断とは矛盾しない。</p>
 
 <h2>2. よくある失敗</h2>
 
@@ -351,7 +351,7 @@
 <div class="aside kimball">
 <p><strong>DWT / Kimball Dimensional Modeling Techniques（加法性）</strong></p>
 <p>&ldquo;Semi-additive measures can be summed across some dimensions, but not all; balance amounts are common semi-additive facts because they are additive across all dimensions except time. Finally, some measures are completely non-additive, such as ratios. A good approach for non-additive facts is, where possible, to store the fully additive components of the non-additive measure and sum these components into the final answer set before calculating the final non-additive fact. This final calculation is often done in the BI layer or OLAP cube.&rdquo;</p>
-<p>この資料の判断（<code>avg_*</code> を持たず <code>sum_*</code> + <code>count</code> を持つ）は、この一文をそのままテーブル設計規約にしたものである。</p>
+<p>この章の判断（<code>avg_*</code> を持たず <code>sum_*</code> + <code>count</code> を持つ）は、この一文をそのままテーブル設計規約にしたものである。</p>
 </div>
 
 <div class="aside kimball">
@@ -365,7 +365,7 @@
 
 <h2>4. 現代の再解釈 — MetricFlow の ratio metric</h2>
 
-<p>dbt Semantic Layer（MetricFlow）は、この資料の判断をテーブルの外側で表現する道具である。メトリクスを YAML で宣言すると、クエリのたびに「その粒度で分子と分母を集計してから割る」SQL が生成される。比率メトリクス（ratio metric）は <code>numerator</code>（分子）/ <code>denominator</code>（分母）をメトリクス名で受け取るので、<strong>率そのものを列として持つ場所がどこにも無い</strong>。</p>
+<p>dbt Semantic Layer（MetricFlow）は、この章の判断をテーブルの外側で表現する道具である。メトリクスを YAML で宣言すると、クエリのたびに「その粒度で分子と分母を集計してから割る」SQL が生成される。比率メトリクス（ratio metric）は <code>numerator</code>（分子）/ <code>denominator</code>（分母）をメトリクス名で受け取るので、<strong>率そのものを列として持つ場所がどこにも無い</strong>。</p>
 
 <p>YAML は dbt v1.12 以降の仕様で書く。セマンティックモデルは <code>models:</code> の中に入り、エンティティ（<code>entity</code>）とディメンション（<code>dimension</code>）は <code>columns:</code> で宣言する（旧仕様のトップレベルにあった <code>semantic_models:</code> と <code>measures:</code> は置き換えられた）。</p>
 
@@ -809,8 +809,8 @@ GROUP BY s.sender_type
 <div class="aside">
 <ul>
 <li><code>mart_url_performance</code> は <code>url_path × date</code> 粒度で <code>avg_response_time</code>・<code>error_rate_percent</code>・<code>unique_visitors</code>（<code>COUNT(DISTINCT client_ip)</code>）を持つ。週次に上げると §2 の (a)(b)(c) が3つとも同時に起きる形になっている。</li>
-<li>この資料の基準なら、<code>error_rate_percent</code> は分子（<code>client_error_count + server_error_count</code>）も分母（<code>total_requests</code>）も既に列にあるので、率の列を削っても情報は 1 ビットも失われない。<code>avg_response_time</code> は <code>sum(response_time_sec)</code> を並べて初めて同じ状態になる。</li>
-<li><code>percentile()</code> マクロの <code>APPROX_QUANTILES(x, 100)[OFFSET(p)]</code> を日次テーブルに事前計算して保存すると、その <code>p95</code> は週次へ持ち上げられない。原子（<code>stg_access_logs</code>）から都度計算する経路を残しておくかどうかが、この資料の判断が分かれる点である。</li>
+<li>この章の基準なら、<code>error_rate_percent</code> は分子（<code>client_error_count + server_error_count</code>）も分母（<code>total_requests</code>）も既に列にあるので、率の列を削っても情報は 1 ビットも失われない。<code>avg_response_time</code> は <code>sum(response_time_sec)</code> を並べて初めて同じ状態になる。</li>
+<li><code>percentile()</code> マクロの <code>APPROX_QUANTILES(x, 100)[OFFSET(p)]</code> を日次テーブルに事前計算して保存すると、その <code>p95</code> は週次へ持ち上げられない。原子（<code>stg_access_logs</code>）から都度計算する経路を残しておくかどうかが、この章の判断が分かれる点である。</li>
 <li>種: <code>unique_visitors</code> を <code>HLL_COUNT.INIT(client_ip)</code> のスケッチ列に置き換え、<code>HLL_COUNT.MERGE</code> で週次・月次を出して <code>COUNT(DISTINCT)</code> の実測値と誤差を比べてみる。</li>
 </ul>
 </div>

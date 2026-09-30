@@ -47,9 +47,9 @@
 <p class="meta">データマート設計 00 ／ 参照: DWT ch.1（4ステップ設計）, ch.18（設計プロセス）, 10 Rules, Manifesto, Design Tip #3 ／ 再解釈: Reis（概念/論理/物理）, Hightouch Modelling Part 1</p>
 
 <div class="aside">
-<strong>この資料で使う題材</strong><br>
-<strong>CareerVoice</strong> は、社員・元社員が在籍/退職した企業を8軸で採点するクチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントのスカウト・応募選考までを1つで扱う架空のサービス。収益源は、クチコミの閲覧権限・求人の掲載プラン月額・スカウト枠の契約・入社時の成果報酬の4種類あり、それぞれ別のビジネスプロセスから発生する。
-サンプル ID は接頭辞で種類が分かる（<code>M</code>=会員、<code>C</code>=企業、<code>R</code>=クチコミ、<code>J</code>=求人、<code>S</code>=スカウト、<code>P</code>=応募、<code>K</code>=契約、<code>A</code>／<code>AG</code>=エージェント会社／担当者）。<code>M001</code> や <code>C002</code> が具体的に何を指すかは、§3 末尾の<strong>「サンプルデータ（シリーズ全体で使う ID）」</strong>に全件まとめてある。この定義はシリーズ11本で共通に使う。<br>
+<strong>この章で使う題材</strong><br>
+このシリーズは、架空サービス CareerVoice を題材にしたデータマート設計のケーススタディで、全11章（DM00〜DM10）からなる。<strong>CareerVoice</strong> は、社員・元社員が在籍/退職した企業を8軸で採点するクチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントのスカウト・応募選考までを1つで扱う架空のサービス。収益源は、クチコミの閲覧権限・求人の掲載プラン月額・スカウト枠の契約・入社時の成果報酬の4種類あり、それぞれ別のビジネスプロセスから発生する。
+サンプル ID は接頭辞で種類が分かる（<code>M</code>=会員、<code>C</code>=企業、<code>R</code>=クチコミ、<code>J</code>=求人、<code>S</code>=スカウト、<code>P</code>=応募、<code>K</code>=契約、<code>A</code>／<code>AG</code>=エージェント会社／担当者）。<code>M001</code> や <code>C002</code> が具体的に何を指すかは、§3 末尾の<strong>「サンプルデータ（シリーズ全体で使う ID）」</strong>に全件まとめてある。この定義はシリーズ全11章で共通に使う。<br>
 <strong>主なテーブル</strong>: ソース側（<code>src_careervoice</code>）は 17 表で、<code>members</code>（会員マスタ）/ <code>companies</code>（企業マスタ）/ <code>agencies</code>・<code>agents</code>（エージェント会社と担当者）/ <code>reviews</code>・<code>review_moderation_events</code>（クチコミと審査ログ）/ <code>job_postings</code>（求人）/ <code>scouts</code>（スカウト送信と開封・返信）/ <code>applications</code>・<code>selection_events</code>・<code>placements</code>（応募・選考・入社）/ <code>contracts</code>（企業の契約）/ <code>page_views</code>（閲覧ログ）/ <code>job_categories</code>・<code>industries</code>・<code>prefectures</code>（参照マスタ）/ <code>member_desired_job_categories</code>（会員の希望職種、1会員に最大3件）。列定義は §3 に全て挙げる。分析側で作るテーブルは <code>dim_*</code>（切り口）・<code>fct_*</code>（測定値）・<code>agg_*</code>（集約）・<code>stg_*</code>（ソースを整えた層）の命名で、一覧は §4 のバスマトリクスにある。
 </div>
 
@@ -57,11 +57,11 @@
 
 <h2>1. このシリーズが扱うこと</h2>
 
-<p>この資料を含めて全11本ある。各資料は「中心の判断」を1つ持ち、その判断を題材の具体テーブル・具体 ID で下しきる。原典（Kimball）の主張・現代の列指向 DWH（データウェアハウス）での再解釈・この題材での決定、の3段で書く。</p>
+<p>この章を含めて全11章ある。各章は「中心の判断」を1つ持ち、その判断を題材の具体テーブル・具体 ID で下しきる。原典（Kimball）の主張・現代の列指向 DWH（データウェアハウス）での再解釈・この題材での決定、の3段で書く。</p>
 
 <div class="table-wrap">
 <table>
-<thead><tr><th>資料</th><th>タイトル</th><th>中心の判断</th><th>図</th></tr></thead>
+<thead><tr><th>章</th><th>タイトル</th><th>中心の判断</th><th>図</th></tr></thead>
 <tbody>
 <tr><td>DM00</td><td>題材と簡易データモデル</td><td>シリーズの位置づけ、CareerVoice のソースモデルとビジネスプロセス、概念→論理→物理</td><td>OLTP ER 図</td></tr>
 <tr><td>DM01</td><td>粒度を宣言する</td><td>1行の意味を一文で。バスマトリクス。粒度をテストで固定</td><td>—</td></tr>
@@ -79,7 +79,7 @@
 </div>
 
 <div class="aside kimball">
-<strong>Kimball（10 Rules, Rule #10）</strong>: 設計者は常に「業務側の要求」と「ソースデータの現実」の間に立つ、と書かれている。要求だけを聞けば実装できないモデルになり、ソースだけを見ればレポートが作れないモデルになる。このシリーズのどの資料も「判断基準の表」で終わるのはそのためで、正解を1つ配るのではなく、状況→選択→理由の対応を置く。
+<strong>Kimball（10 Rules, Rule #10）</strong>: 設計者は常に「業務側の要求」と「ソースデータの現実」の間に立つ、と書かれている。要求だけを聞けば実装できないモデルになり、ソースだけを見ればレポートが作れないモデルになる。このシリーズのどの章も「判断基準の表」で終わるのはそのためで、正解を1つ配るのではなく、状況→選択→理由の対応を置く。
 </div>
 
 <h2>2. 題材: CareerVoice</h2>
@@ -114,13 +114,13 @@
 <li>会員属性（年収帯・転職意欲）の<strong>変化前後</strong>での行動差</li>
 </ul>
 
-<p>この5つは全11本の演習の種になる。5つ目だけが他と質的に違い、「今の属性」ではなく「そのイベントが起きた時点の属性」を要求する。この要求に応えるのが DM05『履歴を持つ：SCD とスナップショット』で、属性の版を残す緩やかに変化するディメンション（SCD）と、イベント時点の版に結ぶ時点結合（as-of join）を扱う。サンプル値の <code>M001</code> が 2026-06-15 に <code>job_change_intent</code> を <code>passive</code> → <code>active</code> へ変え、06-20 に <code>S001</code> を受け取り、06-23 に応募する、という並びで検証する。</p>
+<p>この5つは全11章の演習の種になる。5つ目だけが他と質的に違い、「今の属性」ではなく「そのイベントが起きた時点の属性」を要求する。この要求に応えるのが DM05『履歴を持つ：SCD とスナップショット』で、属性の版を残す緩やかに変化するディメンション（SCD）と、イベント時点の版に結ぶ時点結合（as-of join）を扱う。サンプル値の <code>M001</code> が 2026-06-15 に <code>job_change_intent</code> を <code>passive</code> → <code>active</code> へ変え、06-20 に <code>S001</code> を受け取り、06-23 に応募する、という並びで検証する。</p>
 
 <h2>3. ソースシステムの簡易モデル</h2>
 
 <p>業務システム側のデータベース（OLTP）は BigQuery の <code>src_careervoice</code> データセットに Datastream（変更データキャプチャ, CDC）で複製されている前提。行が更新されるテーブル（<code>members</code>, <code>member_desired_job_categories</code>, <code>companies</code>, <code>agencies</code>, <code>agents</code>, <code>reviews</code>, <code>job_postings</code>, <code>contracts</code>）だけが <code>updated_at</code> を持ち、論理削除 <code>deleted_at</code> を持つのは <code>members</code> だけである。残る9表（<code>job_categories</code>, <code>industries</code>, <code>prefectures</code>, <code>review_moderation_events</code>, <code>scouts</code>, <code>applications</code>, <code>selection_events</code>, <code>placements</code>, <code>page_views</code>）は追記型で更新列を持たない。</p>
 
-<p><code>scouts</code> の <code>opened_at</code> / <code>replied_at</code> / <code>reply_type</code> だけが例外で、更新列を持たないまま後から値が埋まる。<strong>列は以下が全てで、この題材を使う他の資料もこれ以外を持ち出さない。</strong></p>
+<p><code>scouts</code> の <code>opened_at</code> / <code>replied_at</code> / <code>reply_type</code> だけが例外で、更新列を持たないまま後から値が埋まる。<strong>列は以下が全てで、この題材を使う他の章もこれ以外を持ち出さない。</strong></p>
 
 <h3>会員・企業（マスタ）</h3>
 <div class="table-wrap">
@@ -346,7 +346,7 @@ Manifesto がディメンショナルモデルの強みとして挙げるのは5
 
 <h3>バスマトリクス（予告）</h3>
 
-<p>行＝ビジネスプロセス、列＝コンフォームドディメンション（複数のファクトで共有する同一定義のディメンション）。この表の読み方と作り方は DM01『粒度を宣言する』で扱う。ここでは「これから11本でこの10行を埋めていく」という地図として置く。</p>
+<p>行＝ビジネスプロセス、列＝コンフォームドディメンション（複数のファクトで共有する同一定義のディメンション）。この表の読み方と作り方は DM01『粒度を宣言する』で扱う。ここでは「これから11章でこの10行を埋めていく」という地図として置く。</p>
 
 <div class="table-wrap">
 <table class="bus-matrix">
@@ -397,11 +397,11 @@ Reis はこの順を飛ばすと、部門ごとに「顧客」の定義が食い
 粒度宣言は設計に対する拘束力のある契約であり、異なる粒度は同じファクトテーブルに混ぜてはならない。
 </div>
 
-<p>各資料がどの段階に属するかを先に置く。物理を扱う DM07・DM09 だけを読んでも設計は決まらない。</p>
+<p>各章がどの段階に属するかを先に置く。物理を扱う DM07・DM09 だけを読んでも設計は決まらない。</p>
 
 <div class="table-wrap">
 <table>
-<thead><tr><th>資料</th><th>概念</th><th>論理</th><th>物理</th><th>主な決定物</th></tr></thead>
+<thead><tr><th>章</th><th>概念</th><th>論理</th><th>物理</th><th>主な決定物</th></tr></thead>
 <tbody>
 <tr><td>DM00 題材と簡易データモデル</td><td>◎</td><td>—</td><td>—</td><td>プロセス一覧、固定判断</td></tr>
 <tr><td>DM01 粒度を宣言する</td><td>○</td><td>◎</td><td>—</td><td>粒度宣言文、バスマトリクス</td></tr>
@@ -420,11 +420,11 @@ Reis はこの順を飛ばすと、部門ごとに「顧客」の定義が食い
 
 <h2>6. 判断基準: このシリーズで固定した設計判断</h2>
 
-<p>以下は11本すべてで守る決定である。以降の資料はこの表を前提にし、覆すときは理由を明示する。</p>
+<p>以下は11章すべてで守る決定である。以降の章はこの表を前提にし、覆すときは理由を明示する。</p>
 
 <div class="table-wrap">
 <table>
-<thead><tr><th>論点</th><th>決定</th><th>理由</th><th>扱う資料</th></tr></thead>
+<thead><tr><th>論点</th><th>決定</th><th>理由</th><th>扱う章</th></tr></thead>
 <tbody>
 <tr><td>クチコミの匿名性</td><td><code>fct_review</code> は <code>member_key</code> を<strong>持たない</strong>。会員属性は投稿時点の <code>dim_member_profile_mini</code> 相当を<strong>ジャンク化した <code>dim_review_attributes</code></strong> へ移す。会員×クチコミの結合が要る分析は <code>int_review_member_link</code>（アクセス制限データセット）に隔離</td><td>公開分析からの個人特定リスク（少人数企業では属性で特定できる）</td><td>DM00, DM01, DM03</td></tr>
 <tr><td>企業属性の時点</td><td>ファクトには<strong>イベント時点</strong>の <code>company_key</code>（SCD2 版）を持つ。現在値で見たい場合は <code>dim_company</code> の <code>is_current</code> 版へ <code>company_id</code> で再結合</td><td>「投稿当時の規模」と「現在の規模」を両方答えられる</td><td>DM05</td></tr>

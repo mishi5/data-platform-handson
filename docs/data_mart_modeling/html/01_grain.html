@@ -46,13 +46,13 @@
 <p class="meta">データマート設計 01 ／ 参照: DWT ch.2–3, Declaring the Grain, The Matrix, Design Tip #3 #77 #179 ／ 再解釈: Reis（概念→論理→物理）</p>
 
 <div class="aside">
-<p><strong>この資料で使う題材</strong></p>
-<p>CareerVoice は、社員・元社員による企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントからのスカウト・応募から入社までを1つのプラットフォームで扱う架空のサービスである。ソースは OLTP のテーブル群で、BigQuery の <code>src_careervoice</code> データセットに CDC で複製されている前提とする。</p>
+<p><strong>この章で使う題材</strong></p>
+<p>このシリーズは、架空サービス CareerVoice を題材にしたデータマート設計のケーススタディで、全11章（DM00〜DM10）からなる。CareerVoice は、社員・元社員による企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントからのスカウト・応募から入社までを1つのプラットフォームで扱う架空のサービスである。ソースは OLTP のテーブル群で、BigQuery の <code>src_careervoice</code> データセットに CDC で複製されている前提とする。</p>
 <p>本文に出るサンプル ID は次がすべて。日付は全て 2026 年、時刻は JST。</p>
 <p>サンプルの日付はすべて 2026 年で、<strong>基準日 2026-09-01</strong> より前に起きた事実。会員・企業の行は「登録時点の値 → その後の変化」の順で書いている。</p>
 <div class="table-wrap">
 <table class="sample-ids">
-<thead><tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr></thead>
+<thead><tr><th>ID</th><th>何か</th><th>この章で使う事実</th></tr></thead>
 <tbody>
 <tr><td><code>C001</code></td><td>企業</td><td>アオゾラ商事（商社、従業員規模 <code>ge1000</code>、上場、親会社なし）。求人 <code>J001</code> の掲載元、スカウト <code>S001</code> の送信元、契約 <code>K001</code> の契約企業</td></tr>
 <tr><td><code>C002</code></td><td>企業</td><td>ネクスト技研（IT、従業員規模 <code>50_299</code>、非上場）。クチコミ <code>R001</code> の対象企業で、<code>M001</code> の現職</td></tr>
@@ -91,22 +91,22 @@
 <p>用語の確認。<strong>粒度</strong>はファクト表の1行が意味するものの水準。<strong>ディメンション</strong>（<code>dim_*</code>）は切り口となる属性の表、<strong>ファクト</strong>（<code>fct_*</code>）は出来事と数値の表。<strong>コンフォームドディメンション（共通ディメンション）</strong>は複数のファクトが同じ定義・同じキーで共有するディメンション、<strong>退化ディメンション</strong>はディメンション表を作らずファクトに残す自然キー（<code>review_id</code> など）、<strong>サロゲートキー</strong>（<code>*_key</code>）はソースの ID とは別に DWH 側で振る代理キーを指す。</p>
 </div>
 
-<h2>1. このケーススタディでの論点と判断事例</h2>
+<h2>1. この章で扱う原則と、CareerVoice での適用</h2>
 
-<p>このケーススタディの中心の論点は、ファクトテーブルを作る前に<strong>「1行が何を表すか」を一文で決める</strong>ことである。例えば <code>fct_scout</code> なら「1行 = 送信された1スカウト」、<code>fct_application_pipeline</code> なら「1行 = 1応募の選考の進み具合」と書く。この一文で表したものを粒度と呼ぶ。一文で書けない表は1行が複数の意味を持っている（投稿の行と審査の行が混ざっている、など）ので、書けるようになるまで表を分ける。</p>
+<p>この章の中心にある原則は、ファクトテーブルを作る前に<strong>「1行が何を表すか」を一文で決める</strong>ことである。例えば <code>fct_scout</code> なら「1行 = 送信された1スカウト」、<code>fct_application_pipeline</code> なら「1行 = 1応募の選考の進み具合」と書く。この一文で表したものを粒度と呼ぶ。一文で書けない表は1行が複数の意味を持っている（投稿の行と審査の行が混ざっている、など）ので、書けるようになるまで表を分ける。</p>
 
 <p>決める順序は「①ソース → ②粒度 → ③ディメンション → ④ファクト」（DWT ch.2 の4ステップ）。ディメンションを先に決めると、「この属性も持たせたい」という都合で1行の意味が後から変わり、粒度の違う行が同じ表に入りやすい。粒度の違う行が混ざった表では、集計のたびに行の種類で絞り込む必要があり、絞り込みを忘れた集計は件数や合計を二重に数える（§2 で具体例を示す）。</p>
 
 <div class="table-wrap">
 <table>
-<thead><tr><th>論点</th><th>選択肢</th><th>判断</th></tr></thead>
+<thead><tr><th>論点</th><th>原則</th><th>CareerVoice での適用</th></tr></thead>
 <tbody>
-<tr><td>1行の意味の水準</td><td>原子（1イベント）／集約（1日・1月にまとめる）</td><td><strong>原子で宣言する。</strong>集約は <code>agg_*</code> として別テーブルに作る（集約テーブルの作り方は DM04『加法性と派生指標』で扱う）。集約だけを持つのは禁止（DT#77）</td></tr>
-<tr><td>何から決めるか</td><td>粒度を先に決める／持たせたい属性（ディメンション）から決める</td><td><strong>粒度を先に決める。</strong>①ソース → ②粒度 → ③ディメンション → ④ファクトの順（DWT ch.2 の4ステップ）。ディメンションとファクトには、決めた粒度に合っている（1行の意味と同じ水準の）属性と数値だけを入れる</td></tr>
-<tr><td>1表に複数の粒度</td><td>混ぜる／分ける</td><td><strong>分ける。</strong>プロセスが違えば表も違う（<code>fct_review</code> と <code>fct_review_moderation</code>、<code>fct_scout</code> と <code>fct_scout_funnel</code>）</td></tr>
-<tr><td>粒度をどこに書くか</td><td>設計書／Wiki／コード</td><td>dbt の <code>description</code> 第1文（「1行 = …」）＋ <code>dbt_utils.unique_combination_of_columns</code> テスト。<strong>文書だけだと実装とずれていく</strong></td></tr>
-<tr><td>行（プロセス）の単位</td><td>部門／ビジネスプロセス</td><td>ビジネスプロセス（DT#3）。「営業部のマート」を作らない</td></tr>
-<tr><td>プロセスとディメンションの対応をいつ決めるか</td><td>ファクトを作るたびに決める／最初に全体の対応表（バスマトリクス）を作る</td><td><strong>最初に全体の対応表を作る。</strong>この資料の §3 に置く表を基準にする。ビジネスプロセス（行）と共有するディメンション（列）の対応をここで一度に決め、個々の列の設計は別の資料で1本ずつ深掘りする</td></tr>
+<tr><td>1行を原子（1イベント）にするか、集約（1日・1月）にするか</td><td><strong>原子で宣言する。</strong>集約は別テーブルとして作り、集約だけを持たない（DT#77）</td><td><code>fct_*</code> は原子の粒度で作り、集約は <code>agg_*</code> として別に作る（作り方は DM04『加法性と派生指標』で扱う）</td></tr>
+<tr><td>何から決めるか（粒度か、持たせたい属性か）</td><td><strong>粒度を先に決める。</strong>①ソース → ②粒度 → ③ディメンション → ④ファクトの順（DWT ch.2 の4ステップ）。ディメンションとファクトには、粒度に合った（1行の意味と同じ水準の）属性と数値だけを入れる</td><td>各 <code>fct_*</code> の定義を「1行 = …」の一文から書き始める（<code>fct_scout</code> なら「1行 = 送信された1スカウト」）</td></tr>
+<tr><td>粒度の違う行を1つの表に入れるか</td><td><strong>分ける。</strong>ビジネスプロセスが違えば表も違う</td><td><code>fct_review</code> と <code>fct_review_moderation</code>、<code>fct_scout</code> と <code>fct_scout_funnel</code> に分ける（§2 で理由を示す）</td></tr>
+<tr><td>粒度をどこに書き残すか</td><td>文書だけに書かず、検証できる形でコードに残す。<strong>文書だけだと実装とずれていく</strong></td><td>dbt の <code>description</code> 第1文に「1行 = …」を書き、<code>dbt_utils.unique_combination_of_columns</code> テストで一意性を確かめる</td></tr>
+<tr><td>表を部門単位で作るか、ビジネスプロセス単位で作るか</td><td>ビジネスプロセス単位で作る（DT#3）</td><td>「営業部のマート」は作らず、スカウト送信・応募から入社までなど、プロセスごとに <code>fct_*</code> を作る</td></tr>
+<tr><td>プロセスとディメンションの対応をいつ決めるか</td><td><strong>最初に全体の対応表（バスマトリクス）を作る。</strong>ファクトを作るたびに決めると、同じディメンションの定義が表ごとにずれる</td><td>§3 の表（ビジネスプロセス × 共有するディメンション）を基準にし、個々の列の設計は以降の章で1つずつ深掘りする</td></tr>
 </tbody>
 </table>
 </div>
@@ -246,7 +246,7 @@ Grain（2003）: <em>“Declaring the grain means saying exactly what a fact tab
 
 <p>行 = ビジネスプロセス、列 = コンフォームドディメンション。1999年の原文は行を <em>“all the first-level data marts that you could possibly build”</em> と呼んでおり、「ビジネスプロセス」は DWT 3rd ed.（2013）と DT#3 での言い直し。単一ソース1つ＝1行という中身は変わっていない。</p>
 
-<p>列については <em>“a column in the matrix is a map of where the dimension is required”</em>（The Matrix, 1999）。同じ列に ✓ が2つ以上あるディメンションは<strong>コンフォームドでなければならない</strong>（完全に同一か、一方が他方の完全な部分集合）。このマトリクスがこの題材の設計の基準表になる。以降の資料では各セル・各列を1本ずつ掘り下げるが、行と列の対応そのものはここで決まる。</p>
+<p>列については <em>“a column in the matrix is a map of where the dimension is required”</em>（The Matrix, 1999）。同じ列に ✓ が2つ以上あるディメンションは<strong>コンフォームドでなければならない</strong>（完全に同一か、一方が他方の完全な部分集合）。このマトリクスがこの題材の設計の基準表になる。以降の章では各セル・各列を1つずつ掘り下げるが、行と列の対応そのものはここで決まる。</p>
 
 <div class="table-wrap">
 <table class="bus-matrix">
@@ -711,7 +711,7 @@ GROUP BY view_date_key, company_key
 
 <div class="aside">
 <ul>
-<li><code>dbt_logs_analysis</code> の <code>mart_url_performance</code> は「1行 = <code>url_path</code> × <code>date</code>」で作られているが、<code>schema.yml</code> に粒度テストが無い。v1 / v2 / incremental の3本が同じ粒度を主張しているのに、それを検証しているものが1つも無い状態。この資料の基準なら <code>dbt_utils.unique_combination_of_columns: [url_path, date]</code> が3本すべての最低条件。増分モデルは <code>unique_key=['url_path','date']</code> を持っているので、<strong>粒度は宣言済みだが「テストされている」のは増分モデルだけ</strong>——full-refresh 版は無防備。</li>
+<li><code>dbt_logs_analysis</code> の <code>mart_url_performance</code> は「1行 = <code>url_path</code> × <code>date</code>」で作られているが、<code>schema.yml</code> に粒度テストが無い。v1 / v2 / incremental の3本が同じ粒度を主張しているのに、それを検証しているものが1つも無い状態。この章の基準なら <code>dbt_utils.unique_combination_of_columns: [url_path, date]</code> が3本すべての最低条件。増分モデルは <code>unique_key=['url_path','date']</code> を持っているので、<strong>粒度は宣言済みだが「テストされている」のは増分モデルだけ</strong>——full-refresh 版は無防備。</li>
 <li>同じ <code>mart_url_performance</code> は生ログ（1行 = 1リクエスト）を日次にまとめた集約で、原子ファクトが marts に残っていない。DT#77 の形そのもの。「特定の遅いリクエストの中身を見たい」に <code>staging</code> のビュー経由でしか答えられないのは、原子ファクトが marts の一級市民になっていないから。</li>
 <li><code>news_pipeline</code> は粒度の分離ができている側の例。<code>summaries</code> は「1行 = 1記事の最新スコア」（<code>/recalculate</code> が同じ行を上書き＝Type 1）、<code>raw_articles</code> は「1行 = 1収集イベント」に近く同一 <code>article_id</code> が複数行になりうる。この2つを1表にしなかったのは正しい。<code>get_unnotified_summaries</code> が両側を <code>article_id</code> ごとに1行へ絞っているのは、<strong>粒度の不一致を後段のクエリで吸収している</strong>証拠で、その吸収を忘れた版では通知が増幅していた。</li>
 <li>種: <code>summaries</code> に「1行 = 1 <code>article_id</code>」のアサーション（dbt を使わないなら BigQuery の <code>ASSERT</code> か、insert 前の <code>COUNT(*) vs COUNT(DISTINCT article_id)</code> 比較）を1本置くと、再採点バッチの二重挿入をデプロイ前に検出できる。<code>fct_review</code> に <code>unique_combination_of_columns</code> を置くのと同じ発想。</li>

@@ -46,13 +46,13 @@
 <p class="meta">データマート設計 08 ／ 参照: DWT ch.4, The Soul of the Data Warehouse Part 1–2, Design Tip #135 ／ 再解釈: ECM, Hightouch Modelling Part 2</p>
 
 <div class="aside">
-<p><strong>この資料で使う題材</strong>／CareerVoice は、社員・元社員による企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントのスカウト・応募から入社までの選考を 1 つのプラットフォームで扱う架空のサービスである。業務データベースは Datastream（CDC）で BigQuery の <code>src_careervoice</code> データセットに複製され、dbt が staging → marts の順に変換して <code>dim_*</code>（ディメンション）・<code>fct_*</code>（ファクト）・<code>agg_*</code>（集約）・<code>br_*</code>（ブリッジ）を作る。</p>
+<p><strong>この章で使う題材</strong>／このシリーズは、架空サービス CareerVoice を題材にしたデータマート設計のケーススタディで、全11章（DM00〜DM10）からなる。CareerVoice は、社員・元社員による企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントのスカウト・応募から入社までの選考を 1 つのプラットフォームで扱う架空のサービスである。業務データベースは Datastream（CDC）で BigQuery の <code>src_careervoice</code> データセットに複製され、dbt が staging → marts の順に変換して <code>dim_*</code>（ディメンション）・<code>fct_*</code>（ファクト）・<code>agg_*</code>（集約）・<code>br_*</code>（ブリッジ）を作る。</p>
 
 <p>サンプルの日付はすべて 2026 年で、<strong>基準日 2026-09-01</strong> より前に起きた事実。会員・企業の行は「登録時点の値 → その後の変化」の順で書いている。</p>
 <div class="table-wrap">
 <table class="sample-ids">
-<caption style="text-align:left;color:var(--muted);font-size:.85rem;padding-bottom:6px;">この資料に出るサンプル ID</caption>
-<thead><tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr></thead>
+<caption style="text-align:left;color:var(--muted);font-size:.85rem;padding-bottom:6px;">この章に出るサンプル ID</caption>
+<thead><tr><th>ID</th><th>何か</th><th>この章で使う事実</th></tr></thead>
 <tbody>
 <tr><td><code>C001</code></td><td>企業「アオゾラ商事」</td><td>商社・従業員規模 <code>ge1000</code>・上場・親会社なし。<code>C003</code> の親会社。§2(b) では 2026-06 にクチコミ 3 件・送信スカウト 5 件があるとする</td></tr>
 <tr><td><code>C002</code></td><td>企業「ネクスト技研」</td><td>IT・従業員規模 <code>50_299</code>・非上場。<strong>2026-05-01 に <code>employee_size_band</code> が <code>300_999</code> へ変化</strong>したため、<code>dim_company</code> に版が 2 行ある</td></tr>
@@ -66,7 +66,7 @@
 </table>
 </div>
 
-<p>この資料で使う主なテーブル:</p>
+<p>この章で使う主なテーブル:</p>
 <ul>
 <li><code>dim_company</code> — 企業。SCD2（属性が変わると版が 1 行増える）。<code>company_key</code>, <code>valid_from</code>, <code>valid_to</code>, <code>is_current</code> を持つ</li>
 <li><code>dim_member</code> — 会員。<code>dim_company</code> と同じく SCD2 で版を持つ。<code>dim_member_profile_mini</code> は年収帯 × 転職意欲の 15 通りを別テーブルに分離したミニディメンション</li>
@@ -86,12 +86,12 @@
 <li><code>fct_contract_monthly</code> — 1 行 = 1 契約 × 1 月。<code>monthly_fee</code> と スカウト枠の消化を持つ</li>
 <li><code>fct_page_view</code> / <code>fct_selection_event</code> / <code>fct_placement</code> / <code>fct_review_moderation</code> — ページ閲覧 / 選考ステージ遷移 / エージェント経由の入社（成果報酬） / クチコミ審査の各ファクト</li>
 <li><code>agg_company_rating_daily</code> — 企業 × 日のクチコミ集約。平均は持たず、和（<code>sum_*</code>）と件数を持つ</li>
-<li><code>agg_company_entity</code> — 企業 1 社 1 行のエンティティ集約。この資料で設計する</li>
+<li><code>agg_company_entity</code> — 企業 1 社 1 行のエンティティ集約。この章で設計する</li>
 <li><code>int_review_member_link</code> — 会員とクチコミを結ぶ中間モデル。投稿者の特定を避けるため、アクセスを制限したデータセットに隔離する</li>
 </ul>
 </div>
 
-<h2>1. このケーススタディでの論点と判断事例</h2>
+<h2>1. この章で扱う論点と判断のまとめ</h2>
 
 <p>クチコミ・スカウト・応募という別々のビジネスプロセスの数字を、同じ企業・同じ月で横に並べる方法を決める。並べるための技法がドリルアクロス（複数のファクトを同じディメンションで並べる横断集計）で、その前提がコンフォームドディメンション（複数のファクトで共有する同一定義のディメンション）である。あわせて「集約テーブルを何本持つか」と「エンティティ表 <code>agg_company_entity</code> に指標を入れてよい条件」を決める。</p>
 
@@ -99,7 +99,7 @@
 
 <div class="table-wrap">
 <table>
-<caption style="text-align:left;color:var(--muted);font-size:.85rem;padding-bottom:6px;">この資料で確定する判断</caption>
+<caption style="text-align:left;color:var(--muted);font-size:.85rem;padding-bottom:6px;">この章で確定する判断</caption>
 <thead><tr><th>論点</th><th>判断</th><th>根拠</th><th>節</th></tr></thead>
 <tbody>
 <tr><td>複数ファクトを横に並べる方法</td><td>ファクトごとに同じ行ヘッダへ集約してから <code>FULL OUTER JOIN</code>。ファクト同士を FK で直接 JOIN しない</td><td>結合によって行が増幅し、件数が二重に数えられる（Soul 2）</td><td>2, 3, 5</td></tr>
@@ -187,7 +187,7 @@
 </table>
 </div>
 
-<p>この資料の決定は、集約を <code>agg_company_rating_daily</code>（日次・単一ファクト・和と件数）と <code>agg_company_entity</code>（企業 1 行・窓付き）の 2 系統に固定し、それ以外の問いはドリルアクロスのクエリで答えることである。</p>
+<p>この章の決定は、集約を <code>agg_company_rating_daily</code>（日次・単一ファクト・和と件数）と <code>agg_company_entity</code>（企業 1 行・窓付き）の 2 系統に固定し、それ以外の問いはドリルアクロスのクエリで答えることである。</p>
 
 <h2>3. Kimball の原則</h2>
 
@@ -245,7 +245,7 @@
 <tr><td>コンフォームドの必要性</td><td>ドリルアクロスの絶対条件</td><td>事前計算でも同じ。むしろ一度きりの計算に固定されるので条件が厳しい</td><td>変わらず必須。§1 の 3 条件で点検する</td></tr>
 <tr><td>指標の正本</td><td>ファクトテーブル</td><td>エンティティ表を触るのは利用者、正本は上流</td><td>正本は各ファクト。<code>agg_company_entity</code> は再計算可能な派生物</td></tr>
 <tr><td>時間軸</td><td>行ヘッダに <code>dim_date</code> の属性を足す（任意の期間）</td><td>固定窓（<code>_30d</code>, <code>_90d</code>）を列にする</td><td>固定窓だけをエンティティ表に。任意期間はドリルアクロスへ</td></tr>
-<tr><td>列数</td><td>ファクトは細く、ディメンションは広く</td><td>広い表を許容。ただし列の増やしすぎを自制</td><td>この資料で列挙した 7 指標に固定。追加は題材の定義の改訂として扱う</td></tr>
+<tr><td>列数</td><td>ファクトは細く、ディメンションは広く</td><td>広い表を許容。ただし列の増やしすぎを自制</td><td>この章で列挙した 7 指標に固定。追加は題材の定義の改訂として扱う</td></tr>
 </tbody>
 </table>
 </div>
@@ -357,7 +357,7 @@ ORDER BY company_name, month_key
 
 <p>ただしチャネルが揃っても、分母は「その月に送信されたスカウト」、分子は「その月に応募された <code>scout_company</code> 応募」でコホートが一致しない。<code>S001</code>（6/20 送信）→ <code>P001</code>（6/23 応募）は同月に収まるが、月末送信では前月分が当月の分子に乗る。月次トレンドの近似としては足りるが、送信を起点に揃えるなら 1 行 = 1 スカウトの送信→応募を持つ <code>fct_scout_funnel</code> を使う。</p>
 
-<p><code>company_map</code> は <code>INNER JOIN</code> なので、<code>dim_company</code> に <code>-1</code>（未知）行が <code>is_current</code> で存在しないと、未知企業のファクト行が黙って消える。この資料の主題がまさに「行が消える」ことなので、<code>-1</code> 行は必ず現行版として置く（DT#43）。</p>
+<p><code>company_map</code> は <code>INNER JOIN</code> なので、<code>dim_company</code> に <code>-1</code>（未知）行が <code>is_current</code> で存在しないと、未知企業のファクト行が黙って消える。この章の主題がまさに「行が消える」ことなので、<code>-1</code> 行は必ず現行版として置く（DT#43）。</p>
 
 <h3>5-2. グループ企業までまとめる</h3>
 
@@ -597,7 +597,7 @@ GROUP BY 1, 2, 3
 
 <div class="table-wrap">
 <table>
-<thead><tr><th>MV の制約</th><th>この資料のモデルへの影響</th></tr></thead>
+<thead><tr><th>MV の制約</th><th>この章のモデルへの影響</th></tr></thead>
 <tbody>
 <tr><td><code>RIGHT</code> / <code>FULL OUTER JOIN</code> と自己結合が不可（<code>LEFT OUTER JOIN</code> と <code>UNION ALL</code> はプレビュー）</td><td>§5-1 のドリルアクロスは MV にできない。<code>company_map</code>（<code>dim_company</code> の自己結合）も不可</td></tr>
 <tr><td>集約は出力そのものでなければならない。集約値をさらに計算・フィルタ・結合できない</td><td><code>SAFE_DIVIDE(sum, count)</code> を MV 内に持てない。DM04『加法性と派生指標』の「和と件数だけ持つ」方針と一致する</td></tr>
@@ -643,7 +643,7 @@ GROUP BY 1, 2, 3
 <tr><td>正本</td><td>元ファクトから毎回作り直せ、この表を消しても復元できる</td><td>この表にしか無い値がある</td></tr>
 <tr><td>非加法指標</td><td><code>sum</code> / <code>count</code> から算出し、0 件は <code>NULL</code> にする</td><td>上流で平均に計算済みの値を持ち込む</td></tr>
 <tr><td>機微</td><td>公開データセットの結合だけで作れる</td><td><code>int_review_member_link</code> のような制限データセットの再結合が要る</td></tr>
-<tr><td>列数</td><td>この資料で列挙した範囲。追加は題材の定義の改訂として審査</td><td>問いのたびに列を足す（ECM の言う "column overload"）</td></tr>
+<tr><td>列数</td><td>この章で列挙した範囲。追加は題材の定義の改訂として審査</td><td>問いのたびに列を足す（ECM の言う "column overload"）</td></tr>
 </tbody>
 </table>
 </div>
@@ -724,7 +724,7 @@ WINDOW w AS (PARTITION BY company_key ORDER BY month_key)
 <div class="aside">
 <p><code>dbt_logs_analysis</code> の <code>mart_url_performance</code> は <code>url_path</code> × <code>date</code>（<code>GROUP BY url_path, date</code>）、<code>mart_error_analysis</code> は <code>date</code> × <code>hour</code> × <code>error_source</code> × <code>error_detail</code> を行ヘッダに持つ。共通する行ヘッダは <code>date</code> だけで、<code>mart_error_analysis</code> は <code>access_errors</code> CTE で読んだ <code>url_path</code> を <code>GROUP BY date, hour, status_code</code> で捨てている。この 2 本は URL でドリルアクロスできない — Soul 2 の「共通の行ヘッダが同じドメインを持つ」以前に、片方に列が無い。</p>
 <p><code>url_path</code> の導出自体は <code>stg_access_logs</code> の <code>split(url, '?')[offset(0)]</code> 1 か所に閉じており、両マートはそれを継承している。つまりコンフォームドの前提は既にできていて、条件は「揃える」ではなく「粒度を粗くしない」側にある。<code>exposures.yml</code> の <code>error_monitoring_alert</code> は <code>mart_error_analysis</code> だけ、<code>url_performance_dashboard</code> は <code>mart_url_performance_incremental</code> だけを参照しており、両者を横断する利用者は今のところいない。</p>
-<p><code>news_pipeline</code> の <code>summaries</code> と <code>raw_articles</code> は <code>article_id</code> で横に並ぶが、日時列が <code>raw_articles</code> 側にしかない。日付を行ヘッダにするには必ず片側結合が要る状態で、<code>dim_date</code> に相当する共通軸が存在しない。この資料の基準で言えば、日付がコンフォームドディメンションになっていない。</p>
+<p><code>news_pipeline</code> の <code>summaries</code> と <code>raw_articles</code> は <code>article_id</code> で横に並ぶが、日時列が <code>raw_articles</code> 側にしかない。日付を行ヘッダにするには必ず片側結合が要る状態で、<code>dim_date</code> に相当する共通軸が存在しない。この章の基準で言えば、日付がコンフォームドディメンションになっていない。</p>
 <p>試せる種: <code>mart_error_analysis</code> の <code>access_error_summary</code> に <code>url_path</code> を残した派生モデルを作り、<code>mart_url_performance</code> と <code>FULL OUTER JOIN USING (url_path, date)</code> で並べる analysis を書く。</p>
 </div>
 

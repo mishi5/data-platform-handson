@@ -46,12 +46,12 @@
 <p class="meta">データマート設計 06 ／ 参照: DWT ch.7, ch.8, ch.10, Design Tip #142, Kimball Dimensional Modeling Techniques ／ 再解釈: BigQuery ネスト・繰り返し列</p>
 
 <div class="aside">
-<p><strong>この資料で使う題材。</strong>CareerVoice は、社員・元社員の企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェント経由のスカウト・応募から入社までの選考を 1 つのプラットフォームで扱う架空のサービスである。業務データベース（OLTP）は CDC で BigQuery に複製され、dbt で staging → marts（<code>dim_*</code> ディメンション / <code>fct_*</code> ファクト / <code>br_*</code> ブリッジ）に変換する前提で書く。</p>
+<p><strong>この章で使う題材。</strong>このシリーズは、架空サービス CareerVoice を題材にしたデータマート設計のケーススタディで、全11章（DM00〜DM10）からなる。CareerVoice は、社員・元社員の企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェント経由のスカウト・応募から入社までの選考を 1 つのプラットフォームで扱う架空のサービスである。業務データベース（OLTP）は CDC で BigQuery に複製され、dbt で staging → marts（<code>dim_*</code> ディメンション / <code>fct_*</code> ファクト / <code>br_*</code> ブリッジ）に変換する前提で書く。</p>
 
 <p>サンプルの日付はすべて 2026 年で、<strong>基準日 2026-09-01</strong> より前に起きた事実。会員・企業の行は「登録時点の値 → その後の変化」の順で書いている。</p>
 <div class="table-wrap">
 <table class="sample-ids">
-<thead><tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr></thead>
+<thead><tr><th>ID</th><th>何か</th><th>この章で使う事実</th></tr></thead>
 <tbody>
 <tr><td><code>M001</code></td><td>会員</td><td>1991年生・東京、登録時の現職は <code>C002</code>。2026-08-01 に <code>C001</code> へ転職したため <code>dim_member</code> に 2 つの版（2 行）を持つ</td></tr>
 <tr><td><code>M002</code></td><td>会員</td><td>1985年生・大阪。<strong>希望職種が <code>ENG-BE</code> と <code>ENG-DATA</code> の 2 件</strong>＝多値ディメンションの題材</td></tr>
@@ -90,9 +90,9 @@
 </div>
 </div>
 
-<h2>1. このケーススタディでの論点と判断事例</h2>
+<h2>1. この章で扱う論点と判断のまとめ</h2>
 
-<p>ディメンションとファクトの関係は普通は多対一で、ファクト 1 行に対してディメンション値は 1 つに定まる。CareerVoice にはこの多対一が成り立たない箇所が 3 種類ある。会員の希望職種は 1 人に複数（<code>M002</code> は <code>ENG-BE</code> と <code>ENG-DATA</code> の 2 件）、企業グループと職種は深さが揃わない階層（<code>ENG-DATA</code> は level2 で終端）、スカウトの送信主体は企業とエージェントという別種のエンティティである。この資料はこの 3 つを、ブリッジテーブル（ファクトとディメンションの間に挟んで多対多を表す表）・平坦化・異種ディメンション（supertype。種別の違う対象を共通属性で 1 本にまとめたディメンション）のどれで持つかを決める。</p>
+<p>ディメンションとファクトの関係は普通は多対一で、ファクト 1 行に対してディメンション値は 1 つに定まる。CareerVoice にはこの多対一が成り立たない箇所が 3 種類ある。会員の希望職種は 1 人に複数（<code>M002</code> は <code>ENG-BE</code> と <code>ENG-DATA</code> の 2 件）、企業グループと職種は深さが揃わない階層（<code>ENG-DATA</code> は level2 で終端）、スカウトの送信主体は企業とエージェントという別種のエンティティである。この章はこの 3 つを、ブリッジテーブル（ファクトとディメンションの間に挟んで多対多を表す表）・平坦化・異種ディメンション（supertype。種別の違う対象を共通属性で 1 本にまとめたディメンション）のどれで持つかを決める。</p>
 
 <div class="table-wrap">
 <table>
@@ -139,7 +139,7 @@
 <li>BI のフィルタが <code>level3_name IN (…)</code> の形になっていると、<code>J001</code>（<code>C001</code> のデータエンジニア求人、<code>ENG-DATA</code>）が集計から丸ごと消える。「消えた」ことは画面に出ない。</li>
 </ul>
 
-<p>DT#43 の「ディメンションに NULL を置かない」がそのまま当てはまる。この資料の決定は <code>level3_name</code> を <code>level2_name</code> の値で埋めることである。埋めた事実は <code>leaf_level</code>（この行が実際に何レベルで終端したか）で残す。</p>
+<p>DT#43 の「ディメンションに NULL を置かない」がそのまま当てはまる。この章の決定は <code>level3_name</code> を <code>level2_name</code> の値で埋めることである。埋めた事実は <code>leaf_level</code>（この行が実際に何レベルで終端したか）で残す。</p>
 
 <h3>(c) 2 本の FK にすると「送信主体別」が UNION になる</h3>
 
@@ -296,7 +296,7 @@
 </table>
 </div>
 
-<p>階層側にも同じ対案がある。<code>br_company_hierarchy</code> の代わりに <code>dim_company</code> へ祖先コードの ARRAY を持たせれば「<code>C001</code> 傘下か」は <code>UNNEST</code> なしの <code>IN UNNEST(…)</code> 一発で判定できる。ただしこの祖先 ARRAY は Kimball の経路文字列（pathstring）と同じ性質で、<code>depth</code> を使ったレベル別の集計や代替階層の差し替えは表現できない。この資料では <code>br_company_hierarchy</code> をブリッジとして持つ。</p>
+<p>階層側にも同じ対案がある。<code>br_company_hierarchy</code> の代わりに <code>dim_company</code> へ祖先コードの ARRAY を持たせれば「<code>C001</code> 傘下か」は <code>UNNEST</code> なしの <code>IN UNNEST(…)</code> 一発で判定できる。ただしこの祖先 ARRAY は Kimball の経路文字列（pathstring）と同じ性質で、<code>depth</code> を使ったレベル別の集計や代替階層の差し替えは表現できない。この章では <code>br_company_hierarchy</code> をブリッジとして持つ。</p>
 
 <h2>5. BigQuery + dbt での実装</h2>
 

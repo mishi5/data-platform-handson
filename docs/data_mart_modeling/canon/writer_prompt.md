@@ -4,7 +4,7 @@
 1. `docs/data_mart_modeling/canon/style.md` — 文体・節構成・HTML 骨格・自己チェック
 2. `docs/data_mart_modeling/canon/domain.md` — 題材の正典（テーブル・列・ID・固定判断）。ここに無い名前は使わない
 3. `docs/data_mart_modeling/canon/references.md` — 文献。自分の回に割り当てられた記事を **WebFetch で実際に読む**
-4. `docs/data_mart_modeling/briefs/NN.md` — この回の要件。**節ごとの必須内容・図・演習はこれが正本**
+4. `docs/data_mart_modeling/briefs/NN.md` — この章の要件。**節ごとの必須内容・図・演習はこれが正本**
 5. 図を描く回だけ: `~/.claude/skills/svg-diagram/SKILL.md`（`references/examples.md` も）
 
 ## やること

@@ -46,13 +46,13 @@
 <p class="meta">データマート設計 07 ／ 参照: DWT ch.1, A Dimensional Modeling Manifesto (1997) ／ 再解釈: Fowler (Coalesce 2020), Fivetran Star Schema vs. OBT, Hightouch Modelling Part 2, BigQuery パーティション分割テーブル</p>
 
 <div class="aside">
-<p><strong>この資料で使う題材。</strong> CareerVoice は、社員・元社員の企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントのスカウト・応募から入社までの選考を 1 つのプラットフォームで扱う架空のサービスである。ソースは OLTP を Datastream（CDC）で BigQuery の <code>src_careervoice</code> に複製したもので、そこから staging → marts（<code>dim_*</code> / <code>fct_*</code> / <code>agg_*</code> / <code>obt_*</code>）を dbt で組み立てる。</p>
+<p><strong>この章で使う題材。</strong> このシリーズは、架空サービス CareerVoice を題材にしたデータマート設計のケーススタディで、全11章（DM00〜DM10）からなる。CareerVoice は、社員・元社員の企業クチコミを軸に、求人掲載・企業からの直接スカウト・転職エージェントのスカウト・応募から入社までの選考を 1 つのプラットフォームで扱う架空のサービスである。ソースは OLTP を Datastream（CDC）で BigQuery の <code>src_careervoice</code> に複製したもので、そこから staging → marts（<code>dim_*</code> / <code>fct_*</code> / <code>agg_*</code> / <code>obt_*</code>）を dbt で組み立てる。</p>
 
 <p>本文に出るサンプル ID は次の 5 つである。</p>
 <p>サンプルの日付はすべて 2026 年で、<strong>基準日 2026-09-01</strong> より前に起きた事実。会員・企業の行は「登録時点の値 → その後の変化」の順で書いている。</p>
 <div class="table-wrap">
 <table class="sample-ids">
-<tr><th>ID</th><th>何か</th><th>この資料で使う事実</th></tr>
+<tr><th>ID</th><th>何か</th><th>この章で使う事実</th></tr>
 <tr><td><code>C001</code></td><td>企業「アオゾラ商事」</td><td>商社、従業員 <code>ge1000</code>、上場、親会社なし。<code>S001</code> の送信主体で、<code>M001</code> の 2026-08-01 の入社先</td></tr>
 <tr><td><code>C002</code></td><td>企業「ネクスト技研」</td><td>IT、従業員 <code>50_299</code>、非上場。2026-05-01 に <code>employee_size_band</code> が <code>300_999</code> に変化したので <code>dim_company</code> に SCD2 の版が 2 行ある。§2(a) では社名変更（Type1 の上書き）の題材にする</td></tr>
 <tr><td><code>M001</code></td><td>会員</td><td>1991 年生・東京・登録時の現職 <code>C002</code>。2026-06-15 に <code>job_change_intent</code> が <code>passive</code>→<code>active</code>、<code>annual_income_band</code> が <code>400_600</code>→<code>600_800</code> に変化。2026-08-01 に <code>C001</code> へ転職（現職が <code>C002</code> → <code>C001</code>。<code>dim_member</code> は 2 行になる）</td></tr>
@@ -65,13 +65,13 @@
 <div class="table-wrap">
 <table>
 <tr><th>テーブル</th><th>1 行の意味・役割</th></tr>
-<tr><td><code>fct_scout_funnel</code></td><td>1 行 = 1 スカウトの送信→開封→返信→応募（累積スナップショット）。この資料の中心に置くファクト</td></tr>
+<tr><td><code>fct_scout_funnel</code></td><td>1 行 = 1 スカウトの送信→開封→返信→応募（累積スナップショット）。この章の中心に置くファクト</td></tr>
 <tr><td><code>fct_scout</code></td><td>1 行 = 送信された 1 スカウト（トランザクションファクト）。想定は日次 10 万件</td></tr>
 <tr><td><code>fct_page_view</code></td><td>1 行 = 1 ページ表示。想定は日次 2,000 万行で、累計は数億行</td></tr>
 <tr><td><code>fct_review</code></td><td>1 行 = 投稿された 1 クチコミ</td></tr>
 <tr><td><code>fct_placement</code></td><td>1 行 = 1 入社（エージェント経由）。成果報酬を持つ</td></tr>
 <tr><td><code>fct_job_posting_daily</code></td><td>1 行 = 1 求人 × 掲載中の 1 日（定期スナップショット）</td></tr>
-<tr><td><code>obt_scout_funnel</code></td><td><code>fct_scout_funnel</code> にディメンションの属性を結合済みで並べた配布用の 1 枚。この資料で設計する</td></tr>
+<tr><td><code>obt_scout_funnel</code></td><td><code>fct_scout_funnel</code> にディメンションの属性を結合済みで並べた配布用の 1 枚。この章で設計する</td></tr>
 <tr><td><code>dim_member</code></td><td>会員。SCD2（<code>valid_from</code> / <code>valid_to</code> / <code>is_current</code> を持ち、属性が変わると行が増える）</td></tr>
 <tr><td><code>dim_member_profile_mini</code></td><td>年収帯 × 転職意欲の 15 通りだけを持つミニディメンション。変化の速い属性を <code>dim_member</code> から分離したもの</td></tr>
 <tr><td><code>dim_company</code></td><td>企業。<code>name</code> だけが Type1（履歴を残さず上書き）で、他の属性は SCD2（Type 6 相当）</td></tr>
@@ -88,11 +88,11 @@
 </div>
 </div>
 
-<h2>1. このケーススタディでの論点と判断事例</h2>
+<h2>1. この章で扱う論点と判断のまとめ</h2>
 
 <p>列指向 DWH でスタースキーマを保つ理由は<strong>性能ではなく意味</strong>である。BigQuery では <strong>1枚の大きな非正規化テーブル（OBT: One Big Table）</strong>、つまりファクト 1 行にディメンションの属性を全て結合して並べた表の方が実測で速いことが分かっており、性能を根拠にした star の擁護はもう成立しない。それでも star を残すのは、<code>dim_company</code> の属性がどの時点の値かを 1 箇所で決められること、<code>fct_scout</code> と <code>fct_placement</code> を同じ <code>company_key</code> で横断できること、この 2 点のためである。</p>
 
-<h3>この資料で固定する判断</h3>
+<h3>この章で固定する判断</h3>
 
 <div class="table-wrap">
 <table>
@@ -185,7 +185,7 @@ GROUP BY b.job_category_key;
 <h2>3. Kimball の原則</h2>
 
 <div class="aside kimball">
-<p>Manifesto（1997）が挙げる強みのうち、この資料で使うのは 3 点である。<strong>理解しやすさ</strong>（"End users cannot understand or remember an ER model. End users cannot navigate an ER model."）、<strong>性能</strong>（star の "predictable, standard framework" が、オプティマイザの推測に頼らず "evaluate arbitrary n-way joins to a fact table in a single pass" を可能にする）、<strong>拡張への耐性</strong>（新しいファクト・新しいディメンション・新しい属性・粒度の変更の 4 種類が、既存のロードやレポートを変更せずに載る）。</p>
+<p>Manifesto（1997）が挙げる強みのうち、この章で使うのは 3 点である。<strong>理解しやすさ</strong>（"End users cannot understand or remember an ER model. End users cannot navigate an ER model."）、<strong>性能</strong>（star の "predictable, standard framework" が、オプティマイザの推測に頼らず "evaluate arbitrary n-way joins to a fact table in a single pass" を可能にする）、<strong>拡張への耐性</strong>（新しいファクト・新しいディメンション・新しい属性・粒度の変更の 4 種類が、既存のロードやレポートを変更せずに載る）。</p>
 <p>同記事はほかに対称性（すべてのディメンションが等しく対等な入口になる）、標準技法（SCD・異種製品・ファクトレスファクト）、集約ナビゲーションも挙げる。<strong>そのどれもが意味の側の主張</strong>で、性能を根拠にしているのは上の 2 番目だけである。</p>
 </div>
 
@@ -211,10 +211,10 @@ GROUP BY b.job_category_key;
 <div class="aside modern">
 <p>Dave Fowler（Chartio）の Coalesce 2020 講演「Kimball in the context of the modern data warehouse: what's worth keeping, and what's not」は、star schema を捨てて<strong>結合可能な列を全て結合した大きな非正規化テーブルを 1 本作り、その上にビューでマートを切って利用者へ出す</strong>ことを提案した。根拠は、Kimball が star schema を採った動機の 1 つがストレージコストであり、クラウド DWH ではそのコストがもう当時ほど高くない、という点にある。</p>
 <p>この提案が有効なのは、star schema の技法のうち<strong>性能とコストを根拠に導入されたもの</strong>に限られる。粒度の宣言・コンフォームドディメンション・SCD のような<strong>意味を根拠に導入された技法</strong>は、ストレージが安くなっても何も変わらない。</p>
-<p>この資料はこの区別を 1 本の軸として使う。<strong>性能を根拠に導入された技法は捨てる。意味を根拠に導入された技法は残す。</strong></p>
+<p>この章はこの区別を 1 本の軸として使う。<strong>性能を根拠に導入された技法は捨てる。意味を根拠に導入された技法は残す。</strong></p>
 </div>
 
-<p>Fowler の提案のうち「ビューでマートを切る」は BigQuery ではそのまま採れない。<strong>ビューは実行のたびに下のテーブルをスキャンする</strong>ので、ワイドテーブルの上にビューを重ねてもスキャン量は減らない。この資料が OBT を <code>materialized='table'</code> で置くのは、ビューを重ねてもスキャン量が減らないためである（マテリアライズド・ビューという選択肢もあるが、外部結合や一部の集計に制約がある）。</p>
+<p>Fowler の提案のうち「ビューでマートを切る」は BigQuery ではそのまま採れない。<strong>ビューは実行のたびに下のテーブルをスキャンする</strong>ので、ワイドテーブルの上にビューを重ねてもスキャン量は減らない。この章が OBT を <code>materialized='table'</code> で置くのは、ビューを重ねてもスキャン量が減らないためである（マテリアライズド・ビューという選択肢もあるが、外部結合や一部の集計に制約がある）。</p>
 
 <div class="aside modern">
 <p><strong>関連議論</strong>: dbt Discourse のスレッド「Is Kimball dimensional modeling still relevant in a modern data warehouse?」（Fowler の講演より前の別議論）にも同じ対立が出ている。Ernesto は失効した前提として "Databases are slow and expensive"、"SQL language is limited"、"You can never join fact tables" の 3 つを挙げる。levelworm は "Columnar database welcomes wide table and hate a lot of joins. Kimball naturally needs a lot of joins for one analysis." と書く。</p>
@@ -357,7 +357,7 @@ GROUP BY b.job_category_key;
 
 <h3>(a) star 側: <code>fct_scout</code> のパーティションとクラスタ</h3>
 
-<p>下の <code>int_scout_keyed</code> は <code>stg_careervoice__scouts</code> に対して、イベント時点でどのディメンション版に結ぶかを決める<strong>時点結合（as-of join）</strong>を済ませた中間（intermediate）モデルである（命名規則は <code>int_&lt;entity&gt;_&lt;verb&gt;</code>。冒頭の題材の表には挙げていない作業用モデルである）。この資料の主題は物理設計なので、時点結合の組み方そのものは DM05『履歴を持つ：SCD とスナップショット』で扱う。</p>
+<p>下の <code>int_scout_keyed</code> は <code>stg_careervoice__scouts</code> に対して、イベント時点でどのディメンション版に結ぶかを決める<strong>時点結合（as-of join）</strong>を済ませた中間（intermediate）モデルである（命名規則は <code>int_&lt;entity&gt;_&lt;verb&gt;</code>。冒頭の題材の表には挙げていない作業用モデルである）。この章の主題は物理設計なので、時点結合の組み方そのものは DM05『履歴を持つ：SCD とスナップショット』で扱う。</p>
 
 <pre><code>-- models/marts/fct_scout.sql
 -- 増分化（materialized='incremental' + insert_overwrite）は 09回・10回で扱う。
