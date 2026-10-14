@@ -911,9 +911,12 @@ def test_passes_thresholds_rejects_offtopic_despite_high_importance():
 
 def test_passes_thresholds_passes_when_relevance_unknown():
     """relevance が判定不能（None／キー欠落）なら通す＝取りこぼし防止。"""
-    assert main_mod.passes_thresholds(
-        {"importance_score": 0.8, "relevance_score": None}, 0.65, 0.55
-    ) is True
+    assert (
+        main_mod.passes_thresholds(
+            {"importance_score": 0.8, "relevance_score": None}, 0.65, 0.55
+        )
+        is True
+    )
     assert main_mod.passes_thresholds({"importance_score": 0.8}, 0.65, 0.55) is True
 
 
@@ -1306,7 +1309,10 @@ def test_pipeline_response_exposes_error_count():
     """レスポンスモデルが error_count を持つ（既定0で後方互換）。"""
     r = main_mod.PipelineResponse(status="ok", notified=5)
     assert r.error_count == 0
-    assert main_mod.PipelineResponse(status="ok", notified=0, error_count=3).error_count == 3
+    assert (
+        main_mod.PipelineResponse(status="ok", notified=0, error_count=3).error_count
+        == 3
+    )
 
 
 @patch("collector.main.summarize_article")
@@ -1385,6 +1391,102 @@ def test_resummarize_aborts_immediately_on_quota_error(
     assert mock_summarize.call_count == 1
 
 
+@patch("collector.main.send_error_notification")
+@patch("collector.main.summarize_article")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_resummarize_alerts_slack_on_quota_error(
+    mock_bqclass, mock_load_config, mock_summarize, mock_alert
+):
+    """上限到達で中断したら Slack にアラートを送る（ログだけでは気づけない）。"""
+    QuotaExceededError = main_mod.QuotaExceededError
+
+    mock_load_config.return_value = _config(max_summarize="10")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_favorite_tag_counts.return_value = []
+    bq.get_unsummarized_articles.return_value = [
+        {"article_id": f"a{i}", "title": "T", "url": "u", "source": "s", "content": "c"}
+        for i in range(3)
+    ]
+    mock_summarize.side_effect = QuotaExceededError("credit balance is too low")
+
+    main_mod._run_resummarize()
+
+    mock_alert.assert_called_once()
+    assert mock_alert.call_args[0][1] == "resummarize"
+    assert "credit balance is too low" in mock_alert.call_args[0][2]
+
+
+@patch("collector.main.send_error_notification")
+@patch("collector.main.summarize_article")
+@patch("collector.main.fetch_content")
+@patch("collector.main.fetch_articles")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_collect_aborts_and_alerts_on_quota_error(
+    mock_bqclass,
+    mock_load_config,
+    mock_fetch_articles,
+    mock_fetch_content,
+    mock_summarize,
+    mock_alert,
+):
+    """/collect も上限到達で要約を中断して Slack に知らせる。
+
+    以前は記事ごとの例外として握りつぶし、毎朝「成功・0件」で終わっていたため
+    クレジット枯渇に7日間気づけなかった。新着の raw_articles 保存は続行し、
+    要約できなかった記事は本文ありで残す（/resummarize で復旧できる）。
+    """
+    QuotaExceededError = main_mod.QuotaExceededError
+
+    mock_load_config.return_value = _config(max_summarize="10")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_existing_urls.return_value = set()
+    bq.get_pending_articles.return_value = []
+    bq.get_existing_summary_ids.return_value = set()
+    bq.get_favorite_tag_counts.return_value = []
+
+    mock_fetch_articles.return_value = [_make_article(i) for i in range(5)]
+    mock_fetch_content.return_value = ("body", True)
+    mock_summarize.side_effect = QuotaExceededError("credit balance is too low")
+
+    main_mod._run_collect()
+
+    assert mock_summarize.call_count == 1
+    saved = bq.insert_raw_articles.call_args[0][0]
+    assert len(saved) == 5
+    assert all(a["content_status"] == "ok" for a in saved)
+    mock_alert.assert_called_once()
+    assert mock_alert.call_args[0][1] == "collect"
+    assert "credit balance is too low" in mock_alert.call_args[0][2]
+
+
+@patch("collector.main.send_error_notification")
+@patch("collector.main.score_article")
+@patch("collector.main.load_config")
+@patch("collector.main.BQClient")
+def test_recalculate_alerts_slack_on_quota_error(
+    mock_bqclass, mock_load_config, mock_score, mock_alert
+):
+    QuotaExceededError = main_mod.QuotaExceededError
+
+    mock_load_config.return_value = _config(max_summarize="10")
+    bq = MagicMock()
+    mock_bqclass.return_value = bq
+    bq.get_favorite_tag_counts.return_value = []
+    bq.get_outdated_summaries.return_value = [
+        {"article_id": f"a{i}", "title": "T", "content": "c"} for i in range(3)
+    ]
+    mock_score.side_effect = QuotaExceededError("usage limits")
+
+    main_mod._run_recalculate()
+
+    mock_alert.assert_called_once()
+    assert mock_alert.call_args[0][1] == "recalculate"
+
+
 @patch("collector.main.score_article")
 @patch("collector.main.load_config")
 @patch("collector.main.BQClient")
@@ -1429,8 +1531,12 @@ def test_resummarize_stops_when_budget_exceeded(
     def _spend(*args, **kwargs):
         # 1件で予算を超える量を積む
         kwargs["tracker"].add(input_tokens=1_000_000, output_tokens=0)
-        return {"summary": "s", "tags": [], "importance_score": 0.9,
-                "relevance_score": 0.9}
+        return {
+            "summary": "s",
+            "tags": [],
+            "importance_score": 0.9,
+            "relevance_score": 0.9,
+        }
 
     mock_summarize.side_effect = _spend
 

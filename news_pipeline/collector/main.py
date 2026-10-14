@@ -232,6 +232,21 @@ def _filter_blocked(items: list[dict], feed_blocks: dict) -> list[dict]:
     return kept
 
 
+def _alert_quota_exceeded(source: str, error: Exception, remaining: int) -> None:
+    """API の上限到達（クレジット枯渇・支出上限）を Slack に知らせる。
+
+    上限到達は処理を中断するだけでパイプライン例外にはならないため、ここで明示的に
+    送らないと「成功・0件」に見えて気づけない（2026-10-09〜15 に7日間見逃した）。
+    """
+    send_error_notification(
+        SLACK_WEBHOOK_URL,
+        source,
+        f"Anthropic API の上限に達したため中断しました（未処理 {remaining} 件）。"
+        "クレジットを補充してから再実行してください。"
+        f"/collect で要約できなかった記事は /resummarize で復旧できます。\n{error}",
+    )
+
+
 def _run_collect(triggered_by: str = "scheduler") -> int:
     """収集パイプライン。RSS取得〜要約〜summaries保存。新着要約件数を返す。"""
     import uuid
@@ -423,7 +438,7 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
 
         # 5. 要約生成（本文取得に成功した記事のみ）
         summaries = []
-        for article in to_summarize:
+        for i, article in enumerate(to_summarize):
             try:
                 result = summarize_article(
                     title=article["title"],
@@ -432,6 +447,16 @@ def _run_collect(triggered_by: str = "scheduler") -> int:
                     keywords=keywords,
                     favorite_tags=favorite_tags,
                 )
+            except QuotaExceededError as e:
+                # 後続も必ず失敗するので残りは呼ばずに中断する。要約できなかった記事は
+                # 本文ありの ok で保存され、/resummarize の対象（orphan）として残る。
+                # raw_articles の保存は続けたいので例外にはせず、ここで Slack に知らせる。
+                logger.error("[collect] quota exceeded, aborting summarize: %s", e)
+                log["status"] = "error"
+                log["error_message"] = f"quota exceeded: {e}"
+                log["error_count"] += 1
+                _alert_quota_exceeded("collect", e, len(to_summarize) - i)
+                break
             except Exception as e:
                 logger.warning(
                     "[collect] summarize failed for %s: %s", article["url"], e
@@ -701,7 +726,7 @@ def _run_recalculate(triggered_by: str = "manual") -> tuple[int, int]:
         )
 
         recalculated = 0
-        for row in rows:
+        for i, row in enumerate(rows):
             if tracker.exceeded():
                 logger.warning(
                     "[recalculate] batch budget $%.2f reached (spent $%.2f), stopping",
@@ -724,13 +749,12 @@ def _run_recalculate(triggered_by: str = "manual") -> tuple[int, int]:
                 log["status"] = "error"
                 log["error_message"] = f"quota exceeded: {e}"
                 log["error_count"] += 1
+                _alert_quota_exceeded("recalculate", e, len(rows) - i)
                 break
             if scores is None:
                 log["error_count"] += 1
                 continue
-            scores = _with_jev_relevance(
-                scores, row["title"], row.get("content") or ""
-            )
+            scores = _with_jev_relevance(scores, row["title"], row.get("content") or "")
             try:
                 bq.update_summary_score(
                     row["article_id"],
@@ -839,7 +863,7 @@ def _run_resummarize(
         )
 
         recovered = 0
-        for a in orphans:
+        for i, a in enumerate(orphans):
             if tracker.exceeded():
                 logger.warning(
                     "[resummarize] batch budget $%.2f reached (spent $%.2f), stopping",
@@ -861,6 +885,7 @@ def _run_resummarize(
                 log["status"] = "error"
                 log["error_message"] = f"quota exceeded: {e}"
                 log["error_count"] += 1
+                _alert_quota_exceeded("resummarize", e, len(orphans) - i)
                 break
             except Exception as e:
                 logger.warning("[resummarize] summarize failed for %s: %s", a["url"], e)
