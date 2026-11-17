@@ -240,7 +240,68 @@ EOF
 
 「壊れる」→「誤った結果になる」のように、何が起きるかを具体的に書き換える。
 
-### 9. 公開して通知する
+### 9. yomiyasu で本文を推敲する
+
+**`yomiyasu` スキルを読み込み、その手順（Step 1〜5）に従って本文を推敲する。**
+この SKILL.md の指示が、yomiyasu の「カスタム指示で使うよう求められている」に当たる。
+手順8は内容（事実・数字・出どころ）の確認、この手順は日本語の確認で、見る対象が違う。
+2026-11-16 の回では、手順8の後でも次の3種類がここで見つかった。
+
+- 記事より強い断定（「失敗することがある」を「失敗する」と書いていた）
+- 記事に無い因果や目的の付け足し（「製品化が進んだのは〜のため」）
+- 全項目が「太字の結論＋説明」で始まる型（太字 75 か所）
+
+yomiyasu はユーザー用のスキル（`~/.claude/skills/yomiyasu`、出典 https://github.com/nanaism/yomiyasu ）。
+入っていない環境では、この手順を飛ばしたことを最終報告に書く（黙って省かない）。
+
+推敲の対象は自分で書いた本文だけ。図・目次・コードと、機械生成の一覧（「その他の記事」）は除く。
+yomiyasu のスクリプトは**作業フォルダの外のファイルを読まない**ので、`$W/yomi` に移ってから実行する
+（`cd` は単体の Bash 呼び出しにする）。
+
+```bash
+W=<スクラッチパッド>
+mkdir -p "$W/yomi"
+uv run --directory news_pipeline python scripts/digest/html2md.py --src "$W/digest_src.html" --out "$W/yomi/original.md"
+```
+
+```bash
+cd <スクラッチパッド>/yomi
+```
+
+```bash
+python3 ~/.claude/skills/yomiyasu/scripts/yomiyasu_lint.py --doc-type article original.md
+```
+
+ダイジェストに当てるときの取り決め:
+
+| yomiyasu の指定・指摘 | ダイジェストでの扱い |
+|---|---|
+| 種類・読み手・立場 | `--doc-type article --reader expert --stance=説明` |
+| `bold_not_rendered`（太字が表示されない） | Markdown として描画した場合の指摘で、HTML の `<strong>` では起きない。無視する |
+| `excess_bold`（太字が多い） | 直す。「太字の結論＋説明」の型をやめ、太字は誤った結果につながる警告だけにする（1本あたり0〜2か所） |
+| `excess_list`（箇条書きが多い） | 要点・示唆を項目で並べるのがこの資料の形式なので残す |
+| `dash_decoration` | 記事の原題の「──」は残す。表の空欄の「—」は「記載なし」にする |
+| `pause_comma`（「〜は、」の読点） | 直す。書き直しで増えやすい |
+
+直すのは **`$W/digest_src.html`（原稿 HTML）を Edit で1か所ずつ**。sed などでまとめて置換しない
+（yomiyasu の決まり）。直したら本文を書き出し直して検査する:
+
+```bash
+W=<スクラッチパッド>
+uv run --directory news_pipeline python scripts/digest/html2md.py --src "$W/digest_src.html" --out "$W/yomi/final.md"
+```
+
+```bash
+python3 ~/.claude/skills/yomiyasu/scripts/yomiyasu_check.py run --source original.md --final final.md --stance=説明 --doc-type article --reader expert --fact-gaps
+```
+
+- 出力は 100KB を超えることがある。「■ 意味が変わる恐れ」の節を必ず全件読み、
+  記事の原文に照らして意図どおりか確かめる（記事に合わせて強さを直したものは意図どおり）
+- yomiyasu の決まりで、検査のあとに直すのは1回まで。直したら同じ `run` をもう一度実行し、本文を変えずに
+  `python3 ~/.claude/skills/yomiyasu/scripts/yomiyasu_check.py verify --final final.md` を実行する
+- 推敲のあとは手順6（組み立て）と手順7（検査）をやり直し、禁止語の検査（手順8）も再実行する
+
+### 10. 公開して通知する
 
 **まず `--dry-run`。**
 
@@ -259,13 +320,15 @@ uv run --directory news_pipeline python scripts/digest/publish.py --html "$W/dig
 送る Slack ペイロードをそのまま表示する。**違いは POST しないことだけ**なので、`rc=0` かつ表示が
 意図どおりなら、`--dry-run` を外して実行する。成功すると URL・`content_id`・次回の更新コマンドが出る。
 
-### 10. 報告する
+### 11. 報告する
 
 最終報告に含めるもの:
 
 - URL と `content_id`、付けたタグ、Slack 通知の有無
 - 構成（この期間の動き・深掘り N 本・一覧 K 件のテーマ別）
 - セルフレビューで直した点
+- yomiyasu の推敲で直した主な点（最大5点）と、残した指摘とその理由。yomiyasu の出力形式の
+  「確認の記録」（見直し候補の件数と verify の2行目）も付ける
 - 記事の外の知識で補った箇所（未検証のもの）と、検査の結果（`check_svg.py` の残り warning とその理由）
 
 ## 公開済みの回を直すとき
