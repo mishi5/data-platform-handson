@@ -1,7 +1,8 @@
 """ダイジェスト HTML を family-share に上げて Slack に通知する。
 
   uv run python scripts/digest/publish.py --html digest.html \
-      --title "週次ダイジェスト 2026-08-30" [--content-id ID] [--slack] [--dry-run]
+      --title "週次ダイジェスト 2026-08-30" [--content-id ID] [--slack] [--dry-run] \
+      [--tag DataNews ...]
 
 family-share は IAP 配下なので、gcloud でサービスアカウントを impersonate して
 IDトークンを取る。--content-id を渡すと上書き（URL は変わらず、直近10世代を保持）。
@@ -15,6 +16,10 @@ IDトークンを取る。--content-id を渡すと上書き（URL は変わら�
     必ず失敗する条件」はアップロード前に判定する
   * Slack 通知はアップロード成功後にのみ行う（存在しない URL を通知しないため）
   * --dry-run は本番と同じ判定を通す。違いは POST しないことだけ
+
+タグは新規アップロードでは既定で DataNews を付ける（--tag を渡すとそれで置き換える）。
+上書きでは --tag を渡したときだけ送る。family-share は上書き時に tags が空なら
+現在のタグを引き継ぐので、何も送らなければ公開済みのタグはそのまま残る。
 """
 
 import argparse
@@ -36,6 +41,12 @@ _TIMEOUT = 60
 MAX_UPLOAD_BYTES = 30 * 1024 * 1024
 # Slack の section ブロックの mrkdwn 上限。超えると invalid_blocks で 400 になる
 SLACK_SECTION_LIMIT = 3000
+# 新規アップロードに付けるタグ。family-share の一覧でダイジェストを絞り込むため
+DEFAULT_TAGS = ["DataNews"]
+# family-share のタグ制約（超えると 400 になり、アップロード全体が失敗する）
+MAX_TAGS = 20
+MAX_TAG_LENGTH = 100
+MAX_TAG_DEPTH = 5
 
 
 def get_id_token() -> str:
@@ -90,20 +101,47 @@ def find_content_by_title(token: str, title: str) -> dict | None:
     return None
 
 
-def upload_html(token: str, html_path: str, title: str, content_id: str | None) -> dict:
-    """HTML をアップロードする。content_id があれば上書き、なければ新規。"""
+def check_tags(tags: list[str]) -> str | None:
+    """family-share が受け付けるタグか調べる。問題があれば理由を返す。"""
+    if len(tags) > MAX_TAGS:
+        return f"タグは {MAX_TAGS} 個までです（{len(tags)} 個）"
+    for tag in tags:
+        if not tag.strip():
+            return "空のタグがあります"
+        if "," in tag or any(ord(c) < 0x20 for c in tag):
+            return f"タグに使えない文字（カンマ・制御文字）があります: {tag!r}"
+        if len(tag) > MAX_TAG_LENGTH:
+            return f"タグは {MAX_TAG_LENGTH} 文字までです: {tag[:20]}…"
+        if tag.count("/") + 1 > MAX_TAG_DEPTH:
+            return f"タグの階層は {MAX_TAG_DEPTH} までです: {tag}"
+    return None
+
+
+def upload_html(
+    token: str,
+    html_path: str,
+    title: str,
+    content_id: str | None,
+    tags: list[str] | None = None,
+) -> dict:
+    """HTML をアップロードする。content_id があれば上書き、なければ新規。
+
+    tags が空なら tags フィールドを送らない（上書きでは現在のタグが引き継がれる）。
+    """
     headers = _auth_headers(token)
     if content_id:
         url = f"{SERVICE_URL}/api/content/{content_id}/upload"
-        data = None
+        data = {}
     else:
         url = f"{SERVICE_URL}/api/upload"
         data = {"title": title}
+    if tags:
+        data["tags"] = ", ".join(tags)
 
     with open(html_path, "rb") as f:
         files = {"file": (os.path.basename(html_path), f, "text/html")}
         resp = requests.post(
-            url, headers=headers, files=files, data=data, timeout=_TIMEOUT
+            url, headers=headers, files=files, data=data or None, timeout=_TIMEOUT
         )
 
     if resp.status_code not in (200, 201):
@@ -183,8 +221,17 @@ def run(
     webhook_url: str | None,
     headlines: list[str] | None = None,
     force_new: bool = False,
+    tags: list[str] | None = None,
 ) -> int:
     problem = _check_source_file(html_path)
+    if problem:
+        print(problem, file=sys.stderr)
+        return 1
+
+    # 新規は既定タグを付ける。上書きは明示されたときだけ送る（既存タグを消さないため）
+    if tags is None:
+        tags = [] if content_id else list(DEFAULT_TAGS)
+    problem = check_tags(tags)
     if problem:
         print(problem, file=sys.stderr)
         return 1
@@ -219,6 +266,7 @@ def run(
         )
         size = os.path.getsize(html_path)
         print(f"[dry-run] {action}: {html_path} ({size} bytes, title={title!r})")
+        print(f"[dry-run] タグ: {', '.join(tags) if tags else '送らない（既存を維持）'}")
         if slack:
             payload = build_slack_payload(
                 title, f"{SERVICE_URL}/view/(新規ID)", headlines or []
@@ -233,7 +281,7 @@ def run(
         # 重複チェックで取得済みなら使い回す（gcloud の呼び出しは遅い）
         if token is None:
             token = get_id_token()
-        result = upload_html(token, html_path, title, content_id)
+        result = upload_html(token, html_path, title, content_id, tags)
     except Exception as e:
         print(f"アップロードに失敗しました: {e}", file=sys.stderr)
         return 1
@@ -242,6 +290,8 @@ def run(
     new_id = result.get("id", "")
     print(f"アップロード成功: {url}")
     print(f"content_id: {new_id}")
+    if tags:
+        print(f"タグ: {', '.join(tags)}")
     print(f"更新するときは --content-id {new_id} を付ける")
 
     if not slack:
@@ -275,6 +325,12 @@ def main() -> int:
         default=None,
         help="Slack に載せる見出し（複数指定可）",
     )
+    parser.add_argument(
+        "--tag",
+        action="append",
+        default=None,
+        help=f"family-share のタグ（複数指定可）。新規の既定は {', '.join(DEFAULT_TAGS)}",
+    )
     args = parser.parse_args()
 
     return run(
@@ -286,6 +342,7 @@ def main() -> int:
         webhook_url=os.environ.get("SLACK_WEBHOOK_URL"),
         headlines=args.headline or [],
         force_new=args.force_new,
+        tags=args.tag,
     )
 
 

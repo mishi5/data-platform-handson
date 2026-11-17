@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{TITLE}</title>
+<style>
+  :root {
+    --bg:#ffffff; --fg:#1a1a1a; --muted:#666; --border:#e0e0e0;
+    --accent:#0b6bcb; --card:#f7f8fa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#14171a; --fg:#e8e8e8; --muted:#9aa0a6; --border:#2c3136;
+      --accent:#6aa9ff; --card:#1b1f23;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+    line-height:1.8; max-width:900px; margin:0 auto; padding:24px 20px 64px; }
+  h1 { font-size:1.6rem; margin:0 0 4px; }
+  h2.section { font-size:1.1rem; letter-spacing:.06em; color:var(--muted);
+    border-bottom:1px solid var(--border); padding-bottom:8px; margin:48px 0 24px; }
+  article { border:1px solid var(--border); border-radius:10px; padding:20px 22px;
+    margin-bottom:28px; background:var(--card); }
+  article h2 { font-size:1.2rem; margin:0 0 8px; line-height:1.5; }
+  article h3 { font-size:.95rem; margin:24px 0 6px; padding-left:8px; border-left:3px solid var(--accent); }
+  h3.theme { font-size:1rem; margin:32px 0 4px; }
+  .cnt { color:var(--muted); font-weight:400; font-size:.8rem; }
+  a { color:var(--accent); }
+  .meta { color:var(--muted); font-size:.85rem; margin-top:0; }
+  .src { color:var(--muted); font-size:.8rem; }
+  .tag { display:inline-block; border:1px solid var(--border); border-radius:4px;
+    padding:1px 7px; margin-right:4px; font-size:.72rem; color:var(--muted);
+    vertical-align:middle; }
+  code { background:var(--bg); border:1px solid var(--border); border-radius:4px;
+    padding:1px 5px; font-size:.85em; }
+  pre { background:var(--bg); border:1px solid var(--border); border-radius:6px;
+    padding:12px 14px; overflow-x:auto; font-size:.8rem; line-height:1.6; }
+  pre code { border:none; padding:0; background:none; }
+  svg { max-width:100%; height:auto; display:block; margin:20px 0; }
+  ul { padding-left:1.2em; }
+  li { margin-bottom:4px; }
+  table { border-collapse:collapse; width:100%; font-size:.85rem; margin:12px 0; display:block; overflow-x:auto; }
+  th, td { border:1px solid var(--border); padding:6px 10px; text-align:left; vertical-align:top; }
+  th { background:var(--bg); font-weight:600; white-space:nowrap; }
+  .note { border-left:3px solid var(--muted); padding:4px 12px; color:var(--muted); font-size:.88rem; margin:16px 0; }
+  .caption { color:var(--muted); font-size:.8rem; margin-top:-12px; }
+  ul.brief { list-style:none; padding-left:0; }
+  ul.brief li { border-bottom:1px solid var(--border); padding:12px 0; font-size:.9rem; margin:0; }
+  ul.brief li:last-child { border-bottom:none; }
+  ul.brief .pt { display:block; color:var(--fg); font-size:.86rem; }
+  ul.brief .pt + .pt { color:var(--muted); }
+  nav.toc ol { padding-left:1.4em; font-size:.92rem; }
+</style>
+</head>
+<body>
+  <h1>{見出し: 週次ダイジェスト / 2週間ダイジェスト / 月次ダイジェスト}</h1>
+  <p class="meta">対象期間 YYYY-MM-DD 〜 YYYY-MM-DD（JST・N日間）　／　ゲート通過 N 件（深掘り M 件・一覧 K 件）</p>
+
+  <nav class="toc">
+    <ol>
+      <li><a href="#overview">この期間の動き</a></li>
+      <li><a href="#a1">深掘り1の短い見出し</a></li>
+      <!-- 深掘りの数だけ -->
+      <li><a href="#others">その他の記事（テーマ別）</a></li>
+    </ol>
+  </nav>
+
+  <h2 class="section" id="overview">この期間の動き</h2>
+  <p><strong>一番大きい動きを1文で。</strong>根拠になる記事・数字を続ける。</p>
+  <p><strong>BigQuery のリリースノート。</strong>主な項目:</p>
+  <table>
+    <tr><th>日付</th><th>内容</th><th>状態</th></tr>
+    <tr><td>MM/DD</td><td>…</td><td>GA / Preview / —</td></tr>
+  </table>
+
+  <h2 class="section">深掘り</h2>
+
+  <article id="a1">
+    <h2>1. 記事タイトル（原題のまま）</h2>
+    <p class="meta"><a href="https://...">出典名</a>
+      ／ <span class="tag">tag</span><span class="tag">tag</span></p>
+
+    <p>背景: 何が問題で、記事は何をしたか（3〜4文）。</p>
+
+    <h3>要点</h3>
+    <ul>
+      <li><strong>結論を太字で。</strong>根拠・数字・条件を続ける。識別子は <code>…</code>。</li>
+    </ul>
+
+    <svg id="dg-a1" viewBox="0 0 800 320" width="100%" style="max-width:800px;height:auto;display:block"
+         xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="dg-a1-t dg-a1-d">
+      <title id="dg-a1-t">図のタイトル</title>
+      <desc id="dg-a1-d">図が示す内容を1文で。</desc>
+      <!--SVG-HEAD:dg-a1-->
+      <rect class="bg" x="0" y="0" width="800" height="320"/>
+      <!-- ゾーン → 線 → ラベル → ノード の順 -->
+    </svg>
+    <p class="caption">線種・強調の意味を1〜2文で。</p>
+
+    <h3>補足: （表・コード・手順のいずれか）</h3>
+
+    <h3>実務への示唆</h3>
+    <ul>
+      <li><strong>BigQuery / Dataform でどうなるか。</strong>…</li>
+    </ul>
+
+    <p class="note">留保: 数字の出どころ・ベンダー測定・確認できなかった点。</p>
+  </article>
+
+  <h2 class="section" id="others">その他の記事（テーマ別・K 件）</h2>
+  <p class="meta">テーマはタグと出典から機械的に振り分けたもの。各テーマ内はスコア（importance × relevance）の高い順。</p>
+<!--LIST-->
+</body>
+</html>

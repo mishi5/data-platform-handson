@@ -394,3 +394,83 @@ def test_find_content_by_title_matches_exactly(mock_get):
 
     assert hit["id"] == "01B"
     assert publish.find_content_by_title(token="t", title="無い") is None
+
+
+# --- タグ ---------------------------------------------------------------
+
+
+@patch("publish.requests.post")
+def test_upload_sends_tags_as_comma_separated_field(mock_post):
+    mock_post.return_value = MagicMock(
+        status_code=201, json=lambda: {"id": "01X", "url": "https://fs/view/01X"}
+    )
+
+    publish.upload_html(
+        token="t", html_path=__file__, title="t", content_id=None,
+        tags=["DataNews", "digest/2026"],
+    )
+
+    assert mock_post.call_args.kwargs["data"]["tags"] == "DataNews, digest/2026"
+
+
+@patch("publish.requests.post")
+def test_overwrite_without_tags_sends_no_tags_field(mock_post):
+    """上書きで tags を送らなければ family-share は現在のタグを引き継ぐ。"""
+    mock_post.return_value = MagicMock(
+        status_code=200, json=lambda: {"id": "01X", "url": "https://fs/view/01X"}
+    )
+
+    publish.upload_html(token="t", html_path=__file__, title="t", content_id="01X")
+
+    assert not mock_post.call_args.kwargs["data"]
+
+
+@patch("publish.upload_html")
+@patch("publish.find_content_by_title")
+@patch("publish.get_id_token")
+def test_new_upload_gets_default_tag(mock_token, mock_find, mock_upload):
+    mock_token.return_value = "t"
+    mock_find.return_value = None
+    mock_upload.return_value = {"id": "01X", "url": "https://fs/view/01X"}
+
+    rc = publish.run(
+        html_path=__file__, title="t", content_id=None, slack=False,
+        dry_run=False, webhook_url=None,
+    )
+
+    assert rc == 0
+    assert mock_upload.call_args[0][4] == publish.DEFAULT_TAGS
+
+
+@patch("publish.upload_html")
+@patch("publish.get_id_token")
+def test_overwrite_keeps_existing_tags_unless_given(mock_token, mock_upload):
+    """上書きで既定タグを送ると、手で足したタグが消える。"""
+    mock_token.return_value = "t"
+    mock_upload.return_value = {"id": "01X", "url": "https://fs/view/01X"}
+
+    publish.run(
+        html_path=__file__, title="t", content_id="01X", slack=False,
+        dry_run=False, webhook_url=None,
+    )
+
+    assert mock_upload.call_args[0][4] == []
+
+
+@patch("publish.upload_html")
+@patch("publish.find_content_by_title")
+@patch("publish.get_id_token")
+def test_invalid_tag_aborts_before_upload(mock_token, mock_find, mock_upload, capsys):
+    rc = publish.run(
+        html_path=__file__, title="t", content_id=None, slack=False,
+        dry_run=False, webhook_url=None, tags=["a,b"],
+    )
+
+    assert rc == 1
+    mock_upload.assert_not_called()
+    assert "カンマ" in capsys.readouterr().err
+
+
+def test_check_tags_rejects_too_deep_hierarchy():
+    assert publish.check_tags(["a/b/c/d/e/f"]) is not None
+    assert publish.check_tags(["a/b/c/d/e"]) is None

@@ -7,8 +7,11 @@
   本文モード（深掘り用）:
       uv run python scripts/digest/fetch_articles.py --ids a1,a2,a3
 
-ゲート条件は本番の通知経路（bq_client.get_unnotified_summaries）と同じ規則にする。
-relevance_score が NULL の旧データは落とさない。
+閾値は本番の通知ゲート（settings シートの importance_threshold / relevance_threshold、
+既定 0.65 / 0.2）より厳しい relevance 0.55 を既定にしている。ダイジェストは2週間で
+100 件を超えるため、データ基盤との関連が確かな記事に絞る。--min-importance /
+--min-relevance で変えられる。
+relevance_score が NULL の旧データ（Jev 導入前）は、本番と同じく除外しない。
 
 対象期間は「昨日まで」の N 日間（JST）。当日を含めると翌週の窓と1日重なり、
 同じ記事が2回のダイジェストに載る。
@@ -29,6 +32,7 @@ DATASET = "tech_news"
 TIMEZONE = "Asia/Tokyo"
 _JST = timezone(timedelta(hours=9))
 _PERIOD_DAYS = {"week": 7, "month": 30}
+# importance は本番の既定と同じ。relevance は本番（0.2）より意図的に厳しくしている
 _DEFAULT_MIN_IMPORTANCE = 0.65
 _DEFAULT_MIN_RELEVANCE = 0.55
 
